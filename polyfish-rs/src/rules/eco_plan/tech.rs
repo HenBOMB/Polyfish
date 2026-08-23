@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::settings::technology::{get_tech_cost, get_technology_setting};
-use crate::types::StructureType;
+use crate::types::{AbilityType, StructureType};
 use std::collections::HashSet;
 
 /// Techs a lane needs, in dependency order. Returned regardless of endowment;
@@ -18,8 +18,10 @@ pub fn lane_chain(lane: Lane, convert: bool) -> Vec<TechnologyType> {
     if convert {
         match lane {
             // GrowForest: Field -> Forest. Its prerequisite is pulled in by
-            // `tech_bill`, so only the ability tech is named.
-            Lane::Forest => v.push(TechnologyType::Spiritualism),
+            // `tech_bill`, so only the ability tech is named -- read via
+            // the same SSOT lookup `tile_options`'s grow+LumberHut Buy now
+            // uses, so the two can't drift apart again.
+            Lane::Forest => v.extend(ability_techs(AbilityType::GrowForest)),
             // BurnForest rides along with Construction, already in the chain.
             Lane::Farm | Lane::Mine => {}
         }
@@ -87,6 +89,17 @@ pub fn tech_bill_itemised(
 /// reverse lookup so this cannot drift from it.
 pub fn structure_techs(s: StructureType) -> Vec<TechnologyType> {
     crate::settings::technology::get_tech_unlocking_structure(s)
+        .into_iter()
+        .collect()
+}
+
+/// Sibling of `structure_techs` for ability-gated moves (e.g. `GrowForest`,
+/// needed by the forest lane's convert scenario). A `Buy` that bundles an
+/// ability move with a structure build must union both -- see the SSOT
+/// note on `crate::settings::technology::Unlockable` for why this needed
+/// its own function instead of being folded into `structure_techs`.
+pub fn ability_techs(a: AbilityType) -> Vec<TechnologyType> {
+    crate::settings::technology::get_tech_unlocking_ability(a)
         .into_iter()
         .collect()
 }

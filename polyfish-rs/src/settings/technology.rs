@@ -633,6 +633,63 @@ pub fn get_tech_unlocking_unit(unit_type: UnitType) -> Option<TechnologyType> {
     None
 }
 
+/// Helper to find which technology unlocks a specific ability. Sibling of
+/// `get_tech_unlocking_structure`/`get_tech_unlocking_unit` -- this one was
+/// missing (Aug 2026), which is exactly how `eco_plan`'s grow-forest cost
+/// estimate silently dropped `Spiritualism` (the tech gating `GrowForest`):
+/// the only reverse lookup available was the structure one, so nobody
+/// thought to check for an ability-gated prerequisite too.
+pub fn get_tech_unlocking_ability(ability_type: AbilityType) -> Option<TechnologyType> {
+    use strum::IntoEnumIterator;
+    for tech in TechnologyType::iter() {
+        if get_technology_setting(tech).unlocks_ability == Some(ability_type) {
+            return Some(tech);
+        }
+    }
+    None
+}
+
+/// A thing that requires researching some technology before it's available.
+/// The single source of truth for "what tech(s), in what order, does the
+/// tribe need before X" should always go through this enum rather than
+/// picking a specific reverse-lookup helper by hand -- that per-call-site
+/// choice is what let the `GrowForest`/`Spiritualism` gap hide.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unlockable {
+    Structure(StructureType),
+    Ability(AbilityType),
+    Unit(UnitType),
+}
+
+/// The full ordered prerequisite chain for `tech`, root-first, ending with
+/// `tech` itself. The vanilla tree is under 20 nodes with a single-parent
+/// `requires` edge each, so a plain walk is cheap enough to call directly
+/// -- no precomputed table needed, and no risk of the table drifting from
+/// the tech settings it would otherwise duplicate.
+pub fn tech_prerequisite_chain(tech: TechnologyType) -> Vec<TechnologyType> {
+    let mut chain = Vec::new();
+    let mut cur = Some(tech);
+    while let Some(t) = cur {
+        chain.push(t);
+        cur = get_technology_setting(t).requires;
+    }
+    chain.reverse();
+    chain
+}
+
+/// The full ordered prerequisite chain (root-first) the tribe needs before
+/// `target` is available -- covers structures, abilities, and units
+/// uniformly. Empty if nothing in the tech tree unlocks `target` (e.g. a
+/// structure every tribe starts with).
+pub fn tech_chain_for(target: Unlockable) -> Vec<TechnologyType> {
+    let direct = match target {
+        Unlockable::Structure(s) => get_tech_unlocking_structure(s),
+        Unlockable::Ability(a) => get_tech_unlocking_ability(a),
+        Unlockable::Unit(u) => get_tech_unlocking_unit(u),
+    };
+    direct.map(tech_prerequisite_chain).unwrap_or_default()
+}
+
 /// Resolve technology replacement for a specific tribe
 pub fn resolve_tech_for_tribe(tech: TechnologyType, tribe: TribeType) -> TechnologyType {
     use strum::IntoEnumIterator;
@@ -845,5 +902,86 @@ mod effects_tests {
         // Amphibious / ice-walking tribe units are land-capable.
         assert!(!is_water_tech(T::Spearing), "Tridention is amphibious");
         assert!(!is_water_tech(T::Frostwork), "Mooni skates on land");
+    }
+}
+
+#[cfg(test)]
+mod tech_chain_tests {
+    use super::*;
+
+    /// Regression for the bug this module was built to close: GrowForest
+    /// (the ability, not the LumberHut structure) is gated by Spiritualism,
+    /// and there was no reverse lookup to find that before now.
+    #[test]
+    fn get_tech_unlocking_ability_finds_spiritualism_for_grow_forest() {
+        assert_eq!(
+            get_tech_unlocking_ability(AbilityType::GrowForest),
+            Some(TechnologyType::Spiritualism)
+        );
+        assert_eq!(
+            get_tech_unlocking_ability(AbilityType::ClearForest),
+            Some(TechnologyType::Forestry)
+        );
+    }
+
+    #[test]
+    fn tech_prerequisite_chain_is_root_first_and_ends_with_the_target() {
+        let chain = tech_prerequisite_chain(TechnologyType::Spiritualism);
+        assert_eq!(
+            chain,
+            vec![TechnologyType::Hunting, TechnologyType::Archery, TechnologyType::Spiritualism]
+        );
+
+        // A root tech's chain is just itself.
+        assert_eq!(
+            tech_prerequisite_chain(TechnologyType::Climbing),
+            vec![TechnologyType::Climbing]
+        );
+    }
+
+    #[test]
+    fn tech_chain_for_covers_structures_abilities_and_units_uniformly() {
+        assert_eq!(
+            tech_chain_for(Unlockable::Ability(AbilityType::GrowForest)),
+            vec![TechnologyType::Hunting, TechnologyType::Archery, TechnologyType::Spiritualism]
+        );
+        assert_eq!(
+            tech_chain_for(Unlockable::Structure(StructureType::LumberHut)),
+            vec![TechnologyType::Hunting, TechnologyType::Forestry]
+        );
+        // Riding is a root tech that unlocks Rider directly.
+        assert_eq!(
+            tech_chain_for(Unlockable::Unit(UnitType::Rider)),
+            vec![TechnologyType::Riding]
+        );
+    }
+
+    /// Every tech in the chain must actually own-check as unlocked once the
+    /// whole chain is in `tech_vanilla` -- otherwise the "order" half of the
+    /// SSOT promise (buy these in this sequence) would be a lie.
+    #[test]
+    fn tech_prerequisite_chain_is_a_valid_buy_order() {
+        for tech in [
+            TechnologyType::Spiritualism,
+            TechnologyType::Smithery,
+            TechnologyType::Mathematics,
+            TechnologyType::Navigation,
+        ] {
+            let chain = tech_prerequisite_chain(tech);
+            let mut owned: Vec<crate::states::TechnologyState> = Vec::new();
+            for t in &chain {
+                if let Some(req) = get_technology_setting(*t).requires {
+                    assert!(
+                        is_tech_unlocked(&owned, req),
+                        "{tech:?}'s chain reaches {t:?} before its prerequisite {req:?}: {chain:?}"
+                    );
+                }
+                owned.push(crate::states::TechnologyState {
+                    tech_type: *t,
+                    discovered: true,
+                    ..Default::default()
+                });
+            }
+        }
     }
 }

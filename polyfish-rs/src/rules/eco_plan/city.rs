@@ -68,6 +68,14 @@ pub fn tile_options(
                 }
                 if sc.lane == Lane::Forest && sc.convert {
                     convert_cost.insert(idx, GROW_FOREST_COST);
+                    let mut techs = structure_techs(StructureType::LumberHut);
+                    // GrowForest (Field -> Forest) is its own ability-gated
+                    // tech (Spiritualism), separate from the tech that
+                    // unlocks the LumberHut structure itself -- missing
+                    // this silently undercharged every convert scenario by
+                    // Spiritualism's full price. Same SSOT lookup lane_chain
+                    // uses, so this can't drift from it again.
+                    techs.extend(ability_techs(AbilityType::GrowForest));
                     buys.push(Buy {
                         idx,
                         // Named for the structure it ends up placing: the hub's
@@ -77,7 +85,7 @@ pub fn tile_options(
                         cost: GROW_FOREST_COST + 3,
                         pop: 1,
                         occupies: true,
-                        techs: structure_techs(StructureType::LumberHut),
+                        techs,
                     });
                 }
             }
@@ -851,5 +859,59 @@ pub fn engine_territory(state: &GameState, cities: &[i32]) -> Option<Vec<Vec<i32
 /// your Sawmill would count as a partner (Aug 2026).
 pub fn pov_of(state: &GameState) -> crate::states::PlayerId {
     state.settings.current_player_turn_id
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression for the tech-cost undercounting bug: the grow+LumberHut
+    /// Buy (Field -> Forest via GrowForest, then build) must price
+    /// Spiritualism, not just Forestry -- GrowForestMove is illegal without
+    /// it (`moves/abilities/forest.rs`'s `has_grow` check), so a plan that
+    /// didn't charge for it looked cheaper than it could ever actually be.
+    #[test]
+    fn grow_lumber_hut_buy_prices_spiritualism_not_just_forestry() {
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        let idx = 5 * 11 + 5;
+        let mut tile = crate::states::TileState::default();
+        tile.terrain_type = TerrainType::Field;
+        tile.owner = 1;
+        state.tiles.insert(idx, tile);
+
+        // SCENARIOS[2] = "sawmill max greed": Lane::Forest, convert: true --
+        // the scenario that offers the grow+LumberHut conversion at all.
+        let sc = super::super::SCENARIOS[2];
+        assert!(sc.lane == Lane::Forest);
+        assert!(sc.convert);
+
+        let (buys, _hub_sites, _convert_cost) = tile_options(&state, &[idx], sc);
+        let grow = buys
+            .iter()
+            .find(|b| b.what == "grow+LumberHut")
+            .expect("grow+LumberHut option must be offered on a bare Field tile");
+
+        assert!(
+            grow.techs.contains(&TechnologyType::Spiritualism),
+            "grow+LumberHut must price Spiritualism (gates GrowForestMove itself), got {:?}",
+            grow.techs
+        );
+        assert!(
+            grow.techs.contains(&TechnologyType::Forestry),
+            "grow+LumberHut must still price Forestry (unlocks the LumberHut structure), got {:?}",
+            grow.techs
+        );
+    }
+
+    /// Same fact, the other call site: `lane_chain`'s forest-convert case
+    /// must price Spiritualism through the same SSOT lookup, not a
+    /// hand-written literal that could silently drift from it.
+    #[test]
+    fn lane_chain_forest_convert_prices_spiritualism() {
+        let chain = lane_chain(Lane::Forest, true);
+        assert!(chain.contains(&TechnologyType::Spiritualism));
+        assert!(!lane_chain(Lane::Forest, false).contains(&TechnologyType::Spiritualism));
+    }
 }
 
