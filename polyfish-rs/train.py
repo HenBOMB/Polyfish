@@ -575,6 +575,14 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
     if chunk_size is None:
         chunk_size = int(os.environ.get("TRAIN_CHUNK_FILES", "10"))
 
+    # The sidecar is this invocation's output and nothing else's. Every path
+    # that exits without writing one -- no data (exit 0), a crash -- would
+    # otherwise leave the previous iteration's losses for the loop to read back
+    # and log as this iteration's (#37). Benchmarks never write it, so they
+    # must not clear a production one either.
+    if not benchmark_mode and os.path.exists(METRICS_PATH):
+        os.remove(METRICS_PATH)
+
     # 1. Load Data
     # `games_*` also matches the two non-self-play writers, which must NOT be
     # trained on as self-play: games_human_* (recorder.rs hardcodes win = 0.0,

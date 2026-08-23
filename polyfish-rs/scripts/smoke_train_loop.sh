@@ -95,12 +95,34 @@ compgen -G "$SMOKE_DIR/archive/games_*.safetensors" > /dev/null \
     || compgen -G "$SMOKE_DIR/games_*.safetensors" > /dev/null \
     || fail "self_play produced no games_*.safetensors"
 [ "$(wc -l < "$SMOKE_DIR/training_log.csv")" -ge 2 ] || fail "training_log.csv has no data row"
-# self_play and train.py hand their metrics to training_log.py through these
-# sidecars; a METRICS: stdout line is the older path.
-[ -s "$SMOKE_DIR/.last_self_play_metrics.json" ] \
-    || grep -q "METRICS:" "$SMOKE_DIR/session.log" \
-    || fail "self_play recorded no metrics"
-[ -s "$SMOKE_DIR/.last_train_metrics.json" ] || fail "train.py recorded no metrics"
+# self_play and train.py hand their metrics to training_log.py through
+# .last_*_metrics.json sidecars, which the parse now consumes (#37) -- so assert
+# what their presence was standing in for: the numbers reached the canonical
+# record. A sidecar surviving the run means a parse did not consume it, and a
+# later iteration would log it again as its own.
+"$SMOKE_VENV/bin/python3" - "$SMOKE_DIR/training_log.csv" <<'CSV_ASSERTS' \
+    || fail "self_play/train.py metrics did not reach training_log.csv"
+import csv
+import sys
+
+rows = list(csv.DictReader(open(sys.argv[1])))
+problems = []
+if not rows:
+    problems.append("no data row")
+else:
+    row = rows[-1]
+    for col in ("num_games", "avg_score", "loss", "policy_loss", "value_loss"):
+        if not (row.get(col) or "").strip():
+            problems.append(f"{col} is empty")
+if problems:
+    print("; ".join(problems), file=sys.stderr)
+    sys.exit(1)
+CSV_ASSERTS
+for sidecar in .last_self_play_metrics.json .last_train_metrics.json; do
+    if [ -e "$SMOKE_DIR/$sidecar" ]; then
+        fail "$sidecar outlived the parse that read it"
+    fi
+done
 if [ "$LEAGUE" -gt 0 ]; then
     [ -s "$SMOKE_DIR/ladder.json" ] || fail "the strength gauge recorded no ladder reading"
     # #34: the reading's metadata must describe the match arena actually played.
