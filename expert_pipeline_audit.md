@@ -1181,10 +1181,63 @@ earlier order check passed while the search still diverged.
 snapshot, and when neither exists it **exits 1** naming the newest untagged
 checkpoint rather than adopting it. Nothing left to do here.
 
+**Second pass (#37): seven silent seams beside the ones fixed above.** The T3
+wave hardened `model.safetensors` and `ladder.json`; their neighbours in the
+same loop were not. None of these prints an error when it fires — each one
+corrupts the campaign's data or the record of it and looks like ordinary output.
+
+- **The metrics sidecar is single-use now.** `train.py`'s no-data path exits 0
+  without writing `.last_train_metrics.json`, and nothing ever deleted it — so
+  `training_log.py parse-train` re-read the *previous* iteration's numbers and
+  the CSV logged them again under a new iteration. `train()` clears the sidecar
+  before doing any work (`train.py:578-584`) and the parse consumes it
+  (`training_log.py:_consume_json_file`), so only the invocation that wrote one
+  can read it.
+- **The dashboard stores can no longer be erased by a bad read.**
+  `moves_by_turn.json` and `value_distribution.json` were read-modify-written in
+  place with `store = {}` on `JSONDecodeError`, so a crash mid-dump silently
+  discarded every run's history — in gitignored files that
+  `backup_experiment_record.sh` does not cover. Both now go through
+  `_load_store`/`_save_store`: an unreadable file is kept as `.corrupt` rather
+  than replaced, and writes are `.tmp` + `os.replace`.
+- **`games_*.safetensors` is written atomically** (`src/bin/self_play.rs`). A
+  ctrl-C or full disk mid-save left a truncated file that `train.py` skips for
+  the whole replay window while the CSV records it as trained on.
+- **Consumed games are archived before the gauge, not after**
+  (`run_training_loop.sh`, section 5). A failed reading is fatal, and it exited
+  with the already-trained file still in root, where the next launch took it for
+  fresh data.
+- **A forgotten `--resume` no longer starts silently.** A bare launch is a *new
+  run* that keeps the weights but rewinds every iteration-keyed mechanism to
+  iteration 1 — 10-turn Tiny curriculum, heuristic prior 0.5, value-trust ~0,
+  anchor-frac 0.25 — feeding ~30 iterations of degenerate data into the buffer
+  and short-cap readings into the ladder series, all looking like a fresh
+  experiment in the CSV. With a model *and* CSV history both present the loop
+  refuses to start and names the three ways to say what was meant.
+- **macOS keeps its milestone checkpoints.** The retention filter parsed the
+  iteration number with GNU-only `\+`; BSD sed never matched, `ITER_VAL` came
+  back empty, and everything past the newest 50 checkpoints was deleted —
+  milestones and the iteration-1 baseline included — on the box this file names
+  as the primary training machine. Every other `sed` in the script already used
+  the portable `[0-9][0-9]*` idiom.
+- **The opening sampler is seeded.** It was the last unseeded RNG on the hot
+  path, and it overrides the agent for the first 8 plies, so a run with
+  `POLYFISH_SEARCH_SEED` pinned still diverged from ply 1. Its stream mixes
+  `game_idx` as well as the seed: a mirror pair *shares* a seed, and on a
+  symmetric map with one model on both seats a seed-only stream would draw the
+  pair an identical opening.
+
+```
+# Verify
+cd polyfish-rs && cargo test --no-default-features --bin self_play opening_sampler
+cd polyfish-rs && ./scripts/run_python_tests.sh   # tests/test_training_log.py
+```
+
 STILL OPEN: nothing in this item. The remaining T3-adjacent gap is that
-determinism now holds for the search and for movegen order, but a full run is
-still not reproducible end to end — mapgen seeds, actor scheduling and the
-eval-server batching order are all outside what these tests pin.
+determinism now holds for the search, for movegen order and for the opening
+sampler, but a full run is still not reproducible end to end — mapgen seeds,
+actor scheduling and the eval-server batching order are all outside what these
+tests pin.
 
 - `train.py`, the primary trainer, has no test infrastructure at all.
 - The decomposed mapper has no tests; its ability block has zero headroom — a
