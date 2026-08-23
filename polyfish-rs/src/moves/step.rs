@@ -45,12 +45,9 @@ impl Move for StepMove {
             }
             match found {
                 Some(f) => f,
-                None => {
-                    return Ok(MoveResult {
-                        undo: Box::new(|_| {}),
-                        rewards: None,
-                    });
-                }
+                // A silent Ok here would record a training sample for a move that
+                // changed nothing; Err routes it into self_play's aborted_games.
+                None => return Err(format!("No unit at source tile {}", self.src_index)),
             }
         };
 
