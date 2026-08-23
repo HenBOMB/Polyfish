@@ -44,7 +44,7 @@ report the opposite of what their trailing comment predicts.
 | M5 misc measurement | PARTLY FIXED | E1 metal GN keys | FIXED; compiles in CI, runtime unverified |
 | A1 `DETACH_VALUE_TRUNK` | REGISTERED, arm not run | E2 engine correctness | VERIFIED; 6 of 7 fixed |
 | A2 two reward conventions | FIXED | E3 hot-path allocation | OPEN (unchanged) |
-| A2b label vs win condition | OPEN (measured, not acted on) | T1 forward parity | FIXED (found a live candle bug) |
+| A2b label vs win condition | OPEN (terminal sign fixed, #39; reweight not acted on) | T1 forward parity | FIXED (found a live candle bug) |
 | | | T2 CI coverage | FIXED |
 | | | T3 misc testing/ops | MOSTLY FIXED |
 
@@ -699,6 +699,27 @@ works (P1/P2/M1) to confirm the label change moves strength, not just the proxy.
 Note this cuts against A2's framing: making the label zero-sum in `score` does
 not help if `score` is the wrong quantity. Resolve A2b before spending effort on
 A2's constant.
+
+#### Aug 23 · the in-tree terminal, one site A2b did not cite (#39)
+
+The reweight is still open, but a separable sign bug in the same family has
+landed. `mcts_common::compute_terminal_outcome` graded **every** terminal by raw
+`score` across all tribes, dead ones included — so a search line that eliminated
+an opponent still ahead on points backed up −1.0 for the win. Since most score
+outlives its owner (tech, monuments, parks, exploration are never zeroed on
+death), that inverted exactly the position class Domination training must value:
+going for the kill while behind. It also disagreed with `self_play`'s own final
+label, which already resolved the winner as sole survivor.
+
+Terminals now check survival first (sole survivor ⇒ ±1 from the mover's
+perspective) and fall back to score only for turn-limit terminals, over living
+tribes only — the same rule `self_play.rs` uses, so tree and label agree. Both
+live agents route through this one function; `original_mcts_zero.rs` still
+returns 0.0 at terminals and is unaffected. Unit tests in `mcts_common.rs` cover
+the elimination, turn-limit, dead-tribe and mutual-elimination cases.
+
+This does not resolve A2b: the *TD* label still reads raw `score` throughout the
+game. It removes the sign inversion at the endpoints only.
 
 ### A3 · Optimizer and LR schedule reset every iteration
 **Status:** FIXED (`73dafb9`) · **CONFIRMED** · Effort: days
