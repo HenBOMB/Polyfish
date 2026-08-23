@@ -6,7 +6,7 @@
 
 use crate::ai::oracle_macro::TIER3_CAP_PER_GAME;
 use crate::moves::Move;
-use crate::states::{GameState, PlayerId};
+use crate::states::{GameState, PlayerId, TribeState};
 use crate::types::{MoveType, TechnologyType};
 
 /// The economy batch a SAVE stance is banking for, with the lane it belongs
@@ -350,6 +350,50 @@ pub fn advances_save_plan(m: &dyn Move, lane: &SaveTarget, tribe: &crate::states
 /// scoring this function used before EXP_ELO_055); switch to the
 /// territory-scoped ROI signal once there's a second city's worth of ground
 /// to score it against.
+/// Line index -> the `eco_plan::Lane` it maps to, where eco_plan models it.
+/// Water isn't modeled (no `Lane` variant for it), so `lane_confirmed_placeable`
+/// is never consulted for it and it keeps its pre-fix behavior unchanged.
+fn eco_plan_lane_for_line(line_idx: usize) -> Option<crate::rules::eco_plan::Lane> {
+    use crate::rules::eco_plan::Lane;
+    match line_idx {
+        0 => Some(Lane::Forest),
+        1 => Some(Lane::Mine),
+        2 => Some(Lane::Farm),
+        _ => None, // water_line
+    }
+}
+
+/// Discount applied to a tech line's recommendation score when `eco_plan`
+/// can't confirm a hub is placeable anywhere within reach yet -- Verdi's
+/// critique (Aug 23, 2026): a raw terrain census scores tile density the
+/// same whether or not a real Windmill/Sawmill/Forge site actually exists,
+/// so a line whose payoff is still speculative (buy the tech, THEN find out
+/// if a hub fits) can out-rank one whose payoff is already verifiable from
+/// the current map. Halved, not zeroed -- an unconfirmed line still has
+/// standalone value (a bare Farm still pays population with no Windmill).
+const UNVERIFIED_LANE_DISCOUNT: f32 = 0.5;
+
+fn lane_confirmed_placeable(
+    state: &GameState,
+    tribe: &TribeState,
+    lane: crate::rules::eco_plan::Lane,
+) -> bool {
+    use crate::rules::eco_plan::city::{city_square, lane_can_place_hub};
+    tribe
+        .cities
+        .iter()
+        .any(|c| lane_can_place_hub(state, &city_square(state, c.idx), lane))
+}
+
+/// Line score after the eco_plan feasibility discount, keyed by line index
+/// so both branches below (census and utility-scored) apply it identically.
+fn discount_unverified(state: &GameState, tribe: &TribeState, line_idx: usize, score: f32) -> f32 {
+    match eco_plan_lane_for_line(line_idx) {
+        Some(lane) if !lane_confirmed_placeable(state, tribe, lane) => score * UNVERIFIED_LANE_DISCOUNT,
+        _ => score,
+    }
+}
+
 pub fn recommended_techs(state: &GameState, player: PlayerId) -> Vec<TechnologyType> {
     let Some(tribe) = state.tribes.get(&player) else {
         return Vec::new();
@@ -398,22 +442,27 @@ pub fn recommended_techs(state: &GameState, player: PlayerId) -> Vec<TechnologyT
             field / 2 + 2 * (fruit + crop),
             water / 2 + 2 * fish,
         ];
-        let mut ranked: Vec<(i32, usize)> = census.into_iter().zip(0..4).collect();
-        ranked.sort_by_key(|(score, _)| -*score);
+        let mut ranked: Vec<(f32, usize)> = census
+            .into_iter()
+            .zip(0..4)
+            .map(|(score, i)| (discount_unverified(state, tribe, i, score as f32), i))
+            .collect();
+        ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
         return ranked
             .into_iter()
             .take(2)
-            .filter(|(score, _)| *score > 0)
+            .filter(|(score, _)| *score > 0.0)
             .filter_map(|(_, i)| next_unowned(lines[i]))
             .collect();
     }
 
     let mut scored: Vec<(f32, Tech)> = lines
         .iter()
-        .filter_map(|line| {
+        .enumerate()
+        .filter_map(|(i, line)| {
             let next = next_unowned(line)?;
             let score = crate::ai::evaluator::research::evaluate_tech_utility(state, player, next);
-            Some((score, next))
+            Some((discount_unverified(state, tribe, i, score), next))
         })
         .collect();
     scored.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -423,4 +472,118 @@ pub fn recommended_techs(state: &GameState, player: PlayerId) -> Vec<TechnologyT
         .filter(|(score, _)| *score >= 0.0)
         .map(|(_, t)| t)
         .collect()
+}
+
+#[cfg(test)]
+mod recommended_techs_eco_plan_tests {
+    use super::*;
+    use crate::coords::Coords;
+    use crate::rules::eco_plan::Lane;
+    use crate::states::{CityState, ResourceState, TileState};
+    use crate::types::{ResourceType, TerrainType};
+
+    fn base_state() -> GameState {
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        let mut tribe = TribeState::default();
+        tribe.cities.push(CityState { idx: 5 * 11 + 5, owner: 1, ..Default::default() });
+        state.tribes.insert(1, tribe);
+        state
+    }
+
+    fn field_tile(player: i32) -> TileState {
+        let mut t = TileState::default();
+        t.terrain_type = TerrainType::Field;
+        t.explorers.insert(player);
+        t
+    }
+
+    /// Unit-level check on the new helper directly: two adjacent Metal
+    /// tiles confirm Mine; two isolated Crop tiles (no shared neighbor)
+    /// do not confirm Farm.
+    #[test]
+    fn lane_confirmed_placeable_matches_lane_can_place_hub() {
+        let mut state = base_state();
+        // Metal cluster within city_square (radius 2 of idx 60).
+        for idx in [4 * 11 + 4, 4 * 11 + 5, 4 * 11 + 6] {
+            state.tiles.insert(idx, field_tile(1));
+        }
+        state.resources.insert(4 * 11 + 4, Some(ResourceState { resource_type: ResourceType::Metal }));
+        state.resources.insert(4 * 11 + 6, Some(ResourceState { resource_type: ResourceType::Metal }));
+        // Two isolated Crop tiles, far enough apart to share no neighbor.
+        for idx in [3 * 11 + 3, 7 * 11 + 7] {
+            state.tiles.insert(idx, field_tile(1));
+        }
+        state.resources.insert(3 * 11 + 3, Some(ResourceState { resource_type: ResourceType::Crop }));
+        state.resources.insert(7 * 11 + 7, Some(ResourceState { resource_type: ResourceType::Crop }));
+
+        let tribe = state.tribes.get(&1).unwrap();
+        assert!(lane_confirmed_placeable(&state, tribe, Lane::Mine));
+        assert!(!lane_confirmed_placeable(&state, tribe, Lane::Farm));
+    }
+
+    /// Integration-level check: a speculative line that out-scores TWO
+    /// verified ones on raw census must not silently monopolize a
+    /// recommendation slot -- this is the exact shape of the
+    /// Organization-vs-Smithery incident (turn 7-8, seed 1787434721) that
+    /// motivated the fix. `recommended_techs`'s only consumers
+    /// (`goal_potential`'s tech-fit term, `passes_stance_tech_mask`) both
+    /// test *set membership*, never order, so a fixture with only two
+    /// nonzero lines can't actually exercise a behavior change (whichever
+    /// order they come back in, both still make the top-2 cut). Three
+    /// lines here, engineered so Farm's raw census beats Mountain AND
+    /// Forest, but only Mountain and Forest have a confirmed hub site --
+    /// the discount must swap Farm out of the top 2 for Forest entirely,
+    /// not just reorder it.
+    #[test]
+    fn unverified_line_can_be_displaced_out_of_the_top_two() {
+        let mut state = base_state();
+
+        // Mountain: 2 metal tiles adjacent to a shared tile -- confirmed.
+        // Census: 3 terrain + 2*2 metal = 7.
+        for idx in [4 * 11 + 4, 4 * 11 + 5, 4 * 11 + 6] {
+            let mut t = TileState::default();
+            t.terrain_type = TerrainType::Mountain;
+            t.explorers.insert(1);
+            state.tiles.insert(idx, t);
+        }
+        state.resources.insert(4 * 11 + 4, Some(ResourceState { resource_type: ResourceType::Metal }));
+        state.resources.insert(4 * 11 + 6, Some(ResourceState { resource_type: ResourceType::Metal }));
+
+        // Forest: 2 forest tiles adjacent to a shared tile -- confirmed.
+        // Census: 3 terrain + 2*1 game = 5.
+        for idx in [7 * 11 + 4, 7 * 11 + 5, 7 * 11 + 6] {
+            let mut t = TileState::default();
+            t.terrain_type = TerrainType::Forest;
+            t.explorers.insert(1);
+            state.tiles.insert(idx, t);
+        }
+        state.resources.insert(7 * 11 + 4, Some(ResourceState { resource_type: ResourceType::Game }));
+
+        // Farm: three ISOLATED crop tiles -- the three far corners of the
+        // radius-2 city_square, each a Chebyshev distance of 4 from the
+        // other two, so no single tile (set or not) is adjacent to more
+        // than one of them -- plus a bare field tile. Highest raw census
+        // (8), but no hub site anywhere.
+        for idx in [3 * 11 + 3, 3 * 11 + 7, 7 * 11 + 3, 5 * 11 + 3] {
+            state.tiles.insert(idx, field_tile(1));
+        }
+        for idx in [3 * 11 + 3, 3 * 11 + 7, 7 * 11 + 3] {
+            state.resources.insert(idx, Some(ResourceState { resource_type: ResourceType::Crop }));
+        }
+
+        let tribe = state.tribes.get(&1).unwrap();
+        assert!(lane_confirmed_placeable(&state, tribe, Lane::Mine));
+        assert!(lane_confirmed_placeable(&state, tribe, Lane::Forest));
+        assert!(!lane_confirmed_placeable(&state, tribe, Lane::Farm));
+
+        let recs = recommended_techs(&state, 1);
+        assert_eq!(
+            recs,
+            vec![TechnologyType::Climbing, TechnologyType::Hunting],
+            "undiscounted census ranks Farm(8) > Mountain(7) > Forest(5) -- Farm would win \
+             a slot outright without the fix. Discounted: Mountain(7) > Forest(5) > \
+             Farm(4), so Farm must be fully displaced by Forest, not just reordered: {recs:?}"
+        );
+    }
 }
