@@ -16,7 +16,9 @@ use polyfish::moves::{
     },
 };
 use polyfish::replay::{Replay, ReplayExecutor, ReplayPlayback, load_replay};
-use polyfish::types::{AbilityType, MapSize, TribeType};
+use polyfish::types::{
+    AbilityType, CityRewardType, MapSize, StructureType, TechnologyType, TribeType, UnitType,
+};
 use polyfish::{MapType, game::Game};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
@@ -486,8 +488,8 @@ async fn manual_step(
                 .as_i64()
                 .or(payload["target"].as_i64())
                 .unwrap_or(0) as i32;
-            let ability = payload["type"].as_i64().unwrap_or(0) as i8;
-            match unsafe { std::mem::transmute(ability) } {
+            let ability = payload["type"].as_i64().unwrap_or(0) as i32;
+            match AbilityType::from(ability) {
                 AbilityType::Recover => Box::new(RecoverMove::new(src)),
                 AbilityType::Promote => Box::new(PromoteMove::new(src)),
                 AbilityType::Disband => Box::new(DisbandMove::new(src)),
@@ -521,19 +523,15 @@ async fn manual_step(
         4 => {
             // Summon or Upgrade
             let tile_index = payload["src"].as_i64().unwrap() as i32;
-            let type_val = payload["type"].as_i64().unwrap() as i8;
+            let unit_type = UnitType::from(payload["type"].as_i64().unwrap() as i32);
             if payload
                 .get("upgrade")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false)
             {
-                Box::new(UpgradeMove::new(tile_index, unsafe {
-                    std::mem::transmute(type_val)
-                }))
+                Box::new(UpgradeMove::new(tile_index, unit_type))
             } else {
-                Box::new(SummonMove::new(tile_index, unsafe {
-                    std::mem::transmute(type_val)
-                }))
+                Box::new(SummonMove::new(tile_index, unit_type))
             }
         }
         5 => {
@@ -544,15 +542,13 @@ async fn manual_step(
         6 => {
             // Build
             let idx = payload["target"].as_i64().unwrap() as i32;
-            let construct = payload["type"].as_i64().unwrap() as i8;
-            Box::new(BuildMove::new(idx, unsafe {
-                std::mem::transmute(construct)
-            }))
+            let construct = payload["type"].as_i64().unwrap() as i32;
+            Box::new(BuildMove::new(idx, StructureType::from(construct)))
         }
         7 => {
             // Research
-            let tech = payload["type"].as_i64().unwrap() as i8;
-            Box::new(ResearchMove::new(unsafe { std::mem::transmute(tech) }))
+            let tech = payload["type"].as_i64().unwrap() as i32;
+            Box::new(ResearchMove::new(TechnologyType::from(tech)))
         }
         8 => {
             // Capture
@@ -562,10 +558,8 @@ async fn manual_step(
         9 => {
             // Reward
             let idx = payload["target"].as_i64().unwrap() as i32;
-            let reward_type = payload["type"].as_i64().unwrap() as i8;
-            Box::new(RewardMove::new(idx, unsafe {
-                std::mem::transmute(reward_type)
-            }))
+            let reward_type = payload["type"].as_i64().unwrap() as i32;
+            Box::new(RewardMove::new(idx, CityRewardType::from(reward_type)))
         }
         10 => Box::new(EndTurnMove),
         11 => Box::new(ResignMove),
