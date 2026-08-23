@@ -373,6 +373,48 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                     if s_type == StructureType::Road {
                         score += score_road(state, target as i32);
                     }
+
+                    // Monuments (`reward_score > 0` is the settings-table
+                    // marker unique to that group) have no adjacency logic
+                    // of their own -- no prereqs, not a hub partner -- so
+                    // every legal placement tile used to score identically
+                    // and the winner was pure enumeration-order tie-break.
+                    // That could silently spend a tile that would have made
+                    // a good future Forge/Windmill/Sawmill hub. Favor the
+                    // "least disruptive square" instead: penalize a
+                    // candidate that itself qualifies as a hub site for any
+                    // resource lane (>=2 adjacent partner tiles), same
+                    // adjacency shape `eco_plan::city::lane_can_place_hub`
+                    // uses for the same three lanes. FIRST FIT on the
+                    // magnitude -- dial against measured monument placements
+                    // before trusting it.
+                    if get_structure_setting(s_type).reward_score > 0 {
+                        let adj = get_adjacent_indices(state, target as i32, 1);
+                        let count_adjacent = |pred: &dyn Fn(i32) -> bool| {
+                            adj.iter().filter(|&&i| pred(i)).count()
+                        };
+                        let metal_adj = count_adjacent(&|i| {
+                            state.resources.get(&i).and_then(|r| r.as_ref()).is_some_and(|r| {
+                                r.resource_type == crate::types::ResourceType::Metal
+                            })
+                        });
+                        let crop_adj = count_adjacent(&|i| {
+                            state.resources.get(&i).and_then(|r| r.as_ref()).is_some_and(|r| {
+                                r.resource_type == crate::types::ResourceType::Crop
+                            })
+                        });
+                        let forest_adj = count_adjacent(&|i| {
+                            state
+                                .tiles
+                                .get(&i)
+                                .is_some_and(|t| t.terrain_type == crate::types::TerrainType::Forest)
+                        });
+                        for hub_worthy in [metal_adj >= 2, crop_adj >= 2, forest_adj >= 2] {
+                            if hub_worthy {
+                                score -= 15.0;
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1329,6 +1371,51 @@ mod tests {
             (score - baseline).abs() < 10.0,
             "stepping onto a Lighthouse in an already fully-explored map ({score}) must not \
              outscore a bare tile ({baseline}) by anything close to the +43 capture bonus"
+        );
+    }
+
+    /// Regression for the "least disruptive square" fix: a Monument
+    /// placement must not treat a tile that would make a good future hub
+    /// (>=2 adjacent partner tiles for some lane) the same as a plain one.
+    /// Reproduces the shape of the real incident (turn 8, seed 1787434721):
+    /// 16 legal ParkOfFortune targets scored bit-for-bit identical before
+    /// this fix.
+    #[test]
+    fn monument_placement_avoids_a_tile_that_would_make_a_good_hub() {
+        let player_id = 1;
+        let mut state = explored_field_state(player_id);
+
+        // hub_worthy: 2 adjacent Metal tiles -- a real future Forge site.
+        let hub_worthy_idx = 5 * 11 + 5;
+        let metal_a = 4 * 11 + 5;
+        let metal_b = 5 * 11 + 4;
+        state.resources.insert(
+            metal_a,
+            Some(ResourceState { resource_type: ResourceType::Metal }),
+        );
+        state.resources.insert(
+            metal_b,
+            Some(ResourceState { resource_type: ResourceType::Metal }),
+        );
+
+        // plain: no adjacent resources of any kind, otherwise identical.
+        let plain_idx = 8 * 11 + 8;
+
+        let game = Game { state };
+        let onto_hub_worthy = crate::moves::build::BuildMove::new(
+            hub_worthy_idx,
+            StructureType::ParkOfFortune,
+        );
+        let onto_plain =
+            crate::moves::build::BuildMove::new(plain_idx, StructureType::ParkOfFortune);
+
+        let hub_worthy_score = score_move(&game, &onto_hub_worthy);
+        let plain_score = score_move(&game, &onto_plain);
+
+        assert!(
+            plain_score - hub_worthy_score >= 14.0,
+            "a Monument on a tile that would make a good hub ({hub_worthy_score}) must score \
+             meaningfully below a plain tile ({plain_score}), not tie with it"
         );
     }
 }
