@@ -290,6 +290,34 @@ def resolve_run(resume: str | None) -> dict[str, Any]:
     return info
 
 
+def _load_store(path: str) -> dict[str, Any]:
+    """Read a run-keyed dashboard store. These accumulate every run's history
+    and are not reconstructible from the CSV, so an unreadable one is kept
+    aside rather than silently replaced by an empty dict (#37)."""
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        try:
+            store = json.load(f)
+        except json.JSONDecodeError:
+            quarantine = path + ".corrupt"
+            os.replace(path, quarantine)
+            print(
+                f"{path}: unreadable JSON, kept as {quarantine}; starting a new store",
+                file=sys.stderr,
+            )
+            return {}
+    return store if isinstance(store, dict) else {}
+
+
+def _save_store(path: str, store: dict[str, Any]) -> None:
+    """tmp + os.replace, so a crash mid-dump cannot truncate the history."""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(store, f)
+    os.replace(tmp, path)
+
+
 def _parse_metrics_line(text: str, game: bool) -> dict[str, Any]:
     for line in text.splitlines():
         if not line.startswith("METRICS:"):
@@ -312,9 +340,22 @@ def _load_json_file(path: str) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _consume_json_file(path: str) -> dict[str, Any]:
+    """Read a metrics sidecar and remove it, so it can only ever be read by the
+    iteration that wrote it. Left in place, a stale sidecar is re-parsed after
+    any producer that exits without writing one, duplicating the previous
+    iteration's numbers into the CSV (#37)."""
+    data = _load_json_file(path)
+    try:
+        os.remove(path)
+    except OSError as e:
+        print(f"{path}: could not remove consumed sidecar: {e}", file=sys.stderr)
+    return data
+
+
 def parse_self_play_output(text: str | None = None) -> dict[str, Any]:
     if os.path.exists(SELF_PLAY_METRICS_PATH):
-        return _load_json_file(SELF_PLAY_METRICS_PATH)
+        return _consume_json_file(SELF_PLAY_METRICS_PATH)
     data = _parse_metrics_line(text or "", game=True)
     if not data.get("games_file"):
         m = re.search(r"Saved to (games_\d+\.safetensors)", text or "")
@@ -325,7 +366,7 @@ def parse_self_play_output(text: str | None = None) -> dict[str, Any]:
 
 def parse_train_output(text: str | None = None) -> dict[str, Any]:
     if os.path.exists(TRAIN_METRICS_PATH):
-        return _load_json_file(TRAIN_METRICS_PATH)
+        return _consume_json_file(TRAIN_METRICS_PATH)
     return _parse_metrics_line(text or "", game=False)
 
 
@@ -474,18 +515,11 @@ def update_value_distribution(
     if not values:
         return
 
-    store: dict[str, Any] = {}
-    if os.path.exists(VALUE_DIST_PATH):
-        with open(VALUE_DIST_PATH, encoding="utf-8") as f:
-            try:
-                store = json.load(f)
-            except json.JSONDecodeError:
-                store = {}
+    store = _load_store(VALUE_DIST_PATH)
     store.setdefault(str(run_id), {})[str(iteration)] = compute_value_distribution(
         values, games_file, num_games
     )
-    with open(VALUE_DIST_PATH, "w", encoding="utf-8") as f:
-        json.dump(store, f)
+    _save_store(VALUE_DIST_PATH, store)
 
 
 def backfill_value_distribution() -> int:
@@ -501,13 +535,8 @@ def backfill_value_distribution() -> int:
             games_file = row.get("games_file", "")
             if not run_id or not iteration or not games_file:
                 continue
-            store: dict[str, Any] = {}
-            if os.path.exists(VALUE_DIST_PATH):
-                with open(VALUE_DIST_PATH, encoding="utf-8") as sf:
-                    try:
-                        store = json.load(sf)
-                    except json.JSONDecodeError:
-                        store = {}
+            # Re-read per row: each backfilled iteration adds to the store.
+            store = _load_store(VALUE_DIST_PATH)
             if store.get(run_id, {}).get(iteration):
                 continue
             path = resolve_games_file(games_file)
@@ -605,16 +634,9 @@ def append_row(
 
 
 def update_moves_by_turn(run_id: str, iteration: int, moves_by_turn: Any) -> None:
-    store: dict[str, Any] = {}
-    if os.path.exists(MOVES_PATH):
-        with open(MOVES_PATH, encoding="utf-8") as f:
-            try:
-                store = json.load(f)
-            except json.JSONDecodeError:
-                store = {}
+    store = _load_store(MOVES_PATH)
     store.setdefault(str(run_id), {})[str(iteration)] = moves_by_turn
-    with open(MOVES_PATH, "w", encoding="utf-8") as f:
-        json.dump(store, f)
+    _save_store(MOVES_PATH, store)
 
 
 def finish_run() -> None:
