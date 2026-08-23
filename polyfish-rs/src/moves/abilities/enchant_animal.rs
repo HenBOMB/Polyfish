@@ -21,9 +21,12 @@ impl Move for EnchantAnimalMove {
     }
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
-        let mut undos = Vec::new();
         let tile_idx = self.target_index;
         let pov_id = state.settings.current_player_turn_id;
+        let cost = crate::version_sync::get_polytaur_cost(state);
+        crate::actions::require_stars(state, cost, "enchant animal")?;
+
+        let mut undos = Vec::new();
 
         // 1. Consume Resource
         undos.push(crate::actions::resource::consume_resource(
@@ -33,10 +36,7 @@ impl Move for EnchantAnimalMove {
         ));
 
         // 2. Spend Stars (Costs three stars)
-        undos.push(crate::actions::spend_stars(
-            state,
-            crate::version_sync::get_polytaur_cost(state),
-        ));
+        undos.push(crate::actions::spend_stars(state, cost));
 
         // 3. Handle Unit on tile (Polypush)
         let push_result = crate::actions::units::push_unit(state, tile_idx);

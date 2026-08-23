@@ -1,7 +1,7 @@
 //! Diplomacy move implementation (Break Peace, Peace Response, Establish Embassy)
 
 use crate::actions::{
-    UndoCallback, chain_undos, spend_stars, structure::create_structure,
+    UndoCallback, chain_undos, require_stars, spend_stars, structure::create_structure,
     structure::destroy_structure,
 };
 use crate::moves::{Move, MoveResult};
@@ -255,6 +255,8 @@ impl Move for EstablishEmbassyMove {
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let pov_id = state.settings.current_player_turn_id;
         let opp_id = self.opponent_id;
+        require_stars(state, 5, "establish embassy")?;
+
         let mut undos = Vec::new();
 
         // 1. Spend 5 stars
