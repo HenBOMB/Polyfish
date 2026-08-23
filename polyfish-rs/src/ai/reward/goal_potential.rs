@@ -119,6 +119,33 @@ pub fn goal_potential_with_unit_goals(
         phi -= SHAPE_GOAL_CITY_RISK
             * crate::ai::combat::residual_city_loss(state, player, &a.city_risk);
     }
+    // Aug 2026: a unit sitting on one of our own cities blocks Summon there
+    // for as long as it stays (see SHAPE_CITY_TRAIN_BLOCKED's doc comment).
+    // Gated on `unit_goals.is_some()` like SHAPE_UNIT_GOAL_PER_TILE/COMPLETE
+    // above it -- real-trajectory only, same reasoning: this prices ONE
+    // unit's occupancy choice, not a tribe-wide fact, so it belongs with the
+    // other per-unit terms rollouts don't see. That scope also sidesteps a
+    // real collision found while adding this: city_risk/DEFEND already use
+    // occupancy as a POSITIVE garrison-value signal (`residual_city_loss`,
+    // unconditional on any Defend order per EXP_ELO_050), and an earlier
+    // draft that instead tried to exempt threatened cities from THIS penalty
+    // broke `city_risk_is_priced_without_any_defend_order` (exempting made a
+    // besieged city score higher than a quiet one -- the -200 loss swamped
+    // city_risk's own ~4-magnitude delta). Every one of those garrison
+    // tests calls `goal_potential()`, which always passes `None` here, so
+    // this term never competes with them at all.
+    if unit_goals.is_some() {
+        for city in &tribe.cities {
+            if crate::functions::get_city_unit_count(state, city) > city.level {
+                continue; // no train capacity to protect
+            }
+            let occupied_by_us = crate::functions::get_unit_at(state, city.idx)
+                .map_or(false, |u| u.owner == player);
+            if occupied_by_us {
+                phi -= SHAPE_CITY_TRAIN_BLOCKED;
+            }
+        }
+    }
     if matches!(goal.stance, Stance::Grow | Stance::Save) {
         phi -= SHAPE_GOAL_STRANDED * completion_stranded(state, player) as f32;
     }

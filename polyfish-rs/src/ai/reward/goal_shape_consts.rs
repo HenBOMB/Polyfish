@@ -220,6 +220,23 @@ pub const SHAPE_GOAL_SUPER: f32 = 500.0;
 /// was live but an order of magnitude too quiet to compete. Dialled against
 /// the observed edge-reward distribution over 24 games.
 pub const SHAPE_GOAL_CITY_RISK: f32 = 4.0;
+
+/// Aug 2026: a unit parked on one of our own cities that still has open
+/// Train capacity (`count <= level`) blocks Summon there entirely --
+/// `moves/summon.rs` gates the target tile on `!is_tile_occupied`, so the
+/// city cannot train a replacement while occupied. Potential-based (charges
+/// on step-on, refunds on step-off), so a garrison that never moves pays
+/// once, not per ply. Unconditional on stance -- blocking reinforcement is
+/// bad whether we're growing or arming. Sized at one Expand-tile-equivalent
+/// (`SHAPE_UNIT_GOAL_PER_TILE`): the incident that motivated this (turn-1
+/// return to a 1-unit capital, seed 1787500002) measured a ~199pt gap
+/// between the capital and the next-best adjacent tile -- this closes it
+/// without also needing to touch the Expand pricing that was legitimately
+/// pulling toward the capital. Real-trajectory only (`unit_goals.is_some()`)
+/// -- see the call site's comment for why, including a threat-exemption
+/// attempt that backfired against the city_risk/Defend tests.
+pub const SHAPE_CITY_TRAIN_BLOCKED: f32 = 200.0;
+
 pub const SHAPE_GOAL_DEFEND_COVER: f32 = 600.0;
 
 /// Tile-holding pay, only while the garrison is load-bearing

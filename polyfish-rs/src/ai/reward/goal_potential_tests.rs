@@ -983,3 +983,86 @@ use crate::types::UnitType;
             "the frozen store must diverge from the legacy re-match once A has moved"
         );
     }
+
+    /// Regression for the turn-1 capital-return incident (seed 1787500002):
+    /// a unit sitting on an owned city that still has open Train capacity
+    /// must cost potential on the real trajectory, refunded the instant it
+    /// steps off -- `moves/summon.rs` cannot legally train there while
+    /// occupied.
+    #[test]
+    fn parking_on_a_city_with_train_capacity_costs_potential_when_a_store_is_threaded() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        use crate::ai::search::unit_goals::UnitGoalStore;
+        let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+        let store = UnitGoalStore::default();
+
+        let mut occupied = defense_board(60);
+        occupied.tribes.get_mut(&1).unwrap().units.push(combat_unit(60, UnitType::Warrior, 1));
+        let phi_occupied =
+            goal_potential_with_unit_goals(&occupied, 1, &goal, None, None, Some(&store));
+
+        let mut vacated = occupied.clone();
+        vacated.tribes.get_mut(&1).unwrap().units[0].coords = Coords::from_index(48, 11);
+        let phi_vacated =
+            goal_potential_with_unit_goals(&vacated, 1, &goal, None, None, Some(&store));
+
+        assert!(
+            (phi_vacated - phi_occupied - SHAPE_CITY_TRAIN_BLOCKED).abs() < 1e-3,
+            "stepping off a train-capable city must refund exactly SHAPE_CITY_TRAIN_BLOCKED: \
+             occupied {phi_occupied}, vacated {phi_vacated}"
+        );
+    }
+
+    /// The legacy/rollout path (`unit_goals: None`, what every internal
+    /// macro-mcts rollout call passes) must be completely untouched -- this
+    /// term only prices the real trajectory, same scope as
+    /// `SHAPE_UNIT_GOAL_PER_TILE`/`COMPLETE`.
+    #[test]
+    fn city_train_block_is_invisible_without_a_unit_goal_store() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+
+        let mut occupied = defense_board(60);
+        occupied.tribes.get_mut(&1).unwrap().units.push(combat_unit(60, UnitType::Warrior, 1));
+        let phi_occupied = goal_potential(&occupied, 1, &goal, None);
+
+        let mut vacated = occupied.clone();
+        vacated.tribes.get_mut(&1).unwrap().units[0].coords = Coords::from_index(48, 11);
+        let phi_vacated = goal_potential(&vacated, 1, &goal, None);
+
+        assert!(
+            (phi_vacated - phi_occupied).abs() < 1e-3,
+            "occupied {phi_occupied} vacated {phi_vacated} must match without a unit-goal store"
+        );
+    }
+
+    /// A city already at (or over) its unit cap has no train capacity to
+    /// protect -- occupying it must not be penalized.
+    #[test]
+    fn city_train_block_skips_a_city_already_at_unit_cap() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        use crate::ai::search::unit_goals::UnitGoalStore;
+        let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+        let store = UnitGoalStore::default();
+
+        let mut state = defense_board(60);
+        // CityState::default() level is 1 -- two units homed here already
+        // makes count(2) > level(1), the same over-cap Summon gates on.
+        for home_at in [70, 71] {
+            let mut homed = unit_at(home_at, UnitType::Warrior);
+            homed.owner = 1;
+            homed.home_coords = Some(Coords::from_index(60, 11));
+            state.tribes.get_mut(&1).unwrap().units.push(homed);
+        }
+        state.tribes.get_mut(&1).unwrap().units.push(combat_unit(60, UnitType::Warrior, 1));
+        let phi_occupied = goal_potential_with_unit_goals(&state, 1, &goal, None, None, Some(&store));
+
+        state.tribes.get_mut(&1).unwrap().units[2].coords = Coords::from_index(48, 11);
+        let phi_vacated = goal_potential_with_unit_goals(&state, 1, &goal, None, None, Some(&store));
+
+        assert!(
+            (phi_vacated - phi_occupied).abs() < 1e-3,
+            "a city already at its unit cap has nothing to protect: occupied {phi_occupied} \
+             vacated {phi_vacated}"
+        );
+    }
