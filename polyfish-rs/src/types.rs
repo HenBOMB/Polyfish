@@ -510,6 +510,12 @@ pub enum AbilityType {
     EnchantAnimal = 23,
 }
 
+impl From<i32> for AbilityType {
+    fn from(v: i32) -> Self {
+        Self::from_repr(v as i8).unwrap_or(AbilityType::None)
+    }
+}
+
 /// Structure types
 #[derive(
     Debug,
@@ -522,6 +528,7 @@ pub enum AbilityType {
     Deserialize_repr,
     Default,
     strum_macros::EnumIter,
+    strum_macros::FromRepr,
 )]
 #[repr(i8)]
 pub enum StructureType {
@@ -578,6 +585,12 @@ pub enum StructureType {
     Market = 50,
     Embassy = 70,
     ChurchOfConverts = 123,
+}
+
+impl From<i32> for StructureType {
+    fn from(v: i32) -> Self {
+        Self::from_repr(v as i8).unwrap_or(StructureType::None)
+    }
 }
 
 /// Resource types

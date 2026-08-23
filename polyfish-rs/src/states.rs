@@ -53,6 +53,7 @@ mod flex_bool {
 
 mod tech_list_deserializer {
     use super::TechnologyState;
+    use crate::types::TechnologyType;
     use serde::{Deserialize, Deserializer};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<TechnologyState>, D::Error>
@@ -71,7 +72,7 @@ mod tech_list_deserializer {
             .into_iter()
             .map(|entry| match entry {
                 TechEntry::Id(id) => TechnologyState {
-                    tech_type: unsafe { std::mem::transmute(id as i8) },
+                    tech_type: TechnologyType::from(id),
                     discovered: true,
                     discovered_turn: 0,
                 },
