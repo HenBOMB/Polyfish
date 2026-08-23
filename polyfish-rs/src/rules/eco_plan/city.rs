@@ -236,29 +236,38 @@ pub fn place_monuments(
     (used, gained)
 }
 
-/// Could this lane's hub ever stand here? A Forge needs two Mines beside one
-/// tile, which most maps never offer. Scoring the lane anyway costs a full
-/// allocation pass per city and returns the same hub-less build every time, so
-/// the lane is gated on the terrain rather than evaluated and discarded.
+/// Could this lane's hub ever stand here? A hub needs two partner tiles
+/// beside one tile, which most maps never offer. Scoring the lane anyway
+/// costs a full allocation pass per city and returns the same hub-less
+/// build every time, so the lane is gated on the terrain rather than
+/// evaluated and discarded. Natural placement only -- Forest's `convert`
+/// scenario (grow a forest first) is handled downstream by the exhaustive
+/// per-scenario search, not this cheap pre-check.
 pub fn lane_can_place_hub(state: &GameState, territory: &[i32], lane: Lane) -> bool {
-    if lane != Lane::Mine {
-        return true;
-    }
-    let metal: HashSet<i32> = territory
+    let partner_tiles: HashSet<i32> = territory
         .iter()
         .copied()
-        .filter(|i| {
-            state
+        .filter(|&i| match lane {
+            Lane::Mine => state
                 .resources
-                .get(i)
+                .get(&i)
                 .and_then(|r| r.as_ref())
-                .is_some_and(|r| r.resource_type == ResourceType::Metal)
+                .is_some_and(|r| r.resource_type == ResourceType::Metal),
+            Lane::Farm => state
+                .resources
+                .get(&i)
+                .and_then(|r| r.as_ref())
+                .is_some_and(|r| r.resource_type == ResourceType::Crop),
+            Lane::Forest => state
+                .tiles
+                .get(&i)
+                .is_some_and(|t| t.terrain_type == TerrainType::Forest),
         })
         .collect();
     territory.iter().any(|&t| {
         get_adjacent_indices(state, t, 1)
             .into_iter()
-            .filter(|a| metal.contains(a))
+            .filter(|a| partner_tiles.contains(a))
             .count()
             >= 2
     })
@@ -864,6 +873,46 @@ pub fn pov_of(state: &GameState) -> crate::states::PlayerId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Farm and Forest must get the same real adjacency check Mine always
+    /// had -- previously both unconditionally returned true regardless of
+    /// whether any Crop/Forest tile existed at all.
+    #[test]
+    fn lane_can_place_hub_checks_farm_and_forest_adjacency_for_real() {
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        // A lone Field tile: no Crop resource, no Forest neighbor anywhere.
+        let idx = 5 * 11 + 5;
+        let mut tile = crate::states::TileState::default();
+        tile.terrain_type = TerrainType::Field;
+        state.tiles.insert(idx, tile);
+        let territory = vec![idx];
+
+        assert!(!lane_can_place_hub(&state, &territory, Lane::Farm));
+        assert!(!lane_can_place_hub(&state, &territory, Lane::Forest));
+        assert!(!lane_can_place_hub(&state, &territory, Lane::Mine));
+
+        // Two Crop tiles adjacent to the same center tile: Farm goes true,
+        // Forest/Mine stay false.
+        let center = 5 * 11 + 5;
+        let crop_a = 4 * 11 + 5;
+        let crop_b = 5 * 11 + 4;
+        for &i in &[center, crop_a, crop_b] {
+            let mut t = crate::states::TileState::default();
+            t.terrain_type = TerrainType::Field;
+            state.tiles.insert(i, t);
+        }
+        for &i in &[crop_a, crop_b] {
+            state.resources.insert(
+                i,
+                Some(crate::states::ResourceState { resource_type: ResourceType::Crop }),
+            );
+        }
+        let territory = vec![center, crop_a, crop_b];
+        assert!(lane_can_place_hub(&state, &territory, Lane::Farm));
+        assert!(!lane_can_place_hub(&state, &territory, Lane::Forest));
+        assert!(!lane_can_place_hub(&state, &territory, Lane::Mine));
+    }
 
     /// Regression for the tech-cost undercounting bug: the grow+LumberHut
     /// Buy (Field -> Forest via GrowForest, then build) must price
