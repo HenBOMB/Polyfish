@@ -382,6 +382,19 @@ ALSO FIXED: the record now says what it was taken under.
   dropped it on the floor. `value_r2_insample`, `value_r2_holdout`,
   `holdout_samples` and `ownership_loss` are columns now, and the endpoint serves
   them (verified against a running server, not by inspection).
+- **The holdout is self-play only (#36).** The split ran over the combined file
+  list, teachers included, and membership is a deliberately stable function of
+  the basename — so a teacher file that hashed into the bucket was withheld from
+  fitting *permanently* (teachers never rotate out of the buffer the way
+  self-play files do at ~`REPLAY_BUFFER_FILES` iterations), and its static
+  known-good positions contaminated `value_r2_holdout`, the one series that is
+  supposed to say how the net generalizes on fresh self-play. `partition_buffer`
+  (`train.py`) now splits fresh + archive only and appends the teachers to the
+  training side; an out-of-sample teacher number, if ever wanted, is its own
+  series. The small-buffer case went with it: the guard against an empty
+  training set now sees the self-play buffer alone, so an iteration can no
+  longer end up fitting teachers only while withholding every self-play file it
+  had.
 - **Per-iteration configuration is recorded.** `config.json` is still re-read
   inside the loop — that is the dashboard's live-control feature, not an accident
   — but every row now carries the settings it actually ran at: `tribe1`,
@@ -415,6 +428,23 @@ ALSO FIXED: the record now says what it was taken under.
   re-reads the anchor on the training pair as a cross-check (kept out of both
   `_gauge_series` and the `elo.py` fit). `scripts/smoke_train_loop.sh` now fails
   if a recorded pair disagrees with the one `arena` printed.
+- **The freeze/audit branch now runs somewhere other than a live campaign
+  (#35).** `ladder.py freeze` and `audit-opponents` are invoked from
+  `run_training_loop.sh` and nowhere else, and nothing could reach them: the
+  smoke's 2-game reading cannot clear the 0.80 Wilson bar, and the audit block
+  additionally needs `i % (LEAGUE_INTERVAL * 5) == 0`. In a loop that now aborts
+  on a failed reading, the first execution of that shell↔argparse contract would
+  have been the first good reading of the re-baseline campaign. The smoke forces
+  both branches (`GAUGE_FREEZE_WR`, `GAUGE_LINK_GAMES`, `GAUGE_AUDIT_EVERY`) and
+  asserts the anchor snapshot, the link reading and the audit rows appear;
+  `tests/test_ladder.py` runs the same command lines as subprocesses, with the
+  flags extracted from the loop script itself; and the CLI contract check now
+  covers python CLIs per subcommand, not just Rust binaries. A moved freeze bar
+  is recorded on the reading it decided, so a forced freeze can never pass for
+  an earned one. The interaction the branch surfaced is fixed too: an audit
+  cadence landing on a freeze iteration plays its cross-checks against the
+  outgoing anchor, which by then is no longer `anchors[-1]`, so the loop names
+  that anchor explicitly on the `tribe_audit` row.
 
 STILL OPEN: the search-budget confound is contained, not resolved — restricting
 the window is correct but it means a budget change silently shortens the plateau
@@ -1069,7 +1099,9 @@ and `cargo fmt` advisory pass, a Python syntax compile pass, and a feature-flag
 compile matrix. `.github/workflows/smoke.yml` is a nightly (and
 `workflow_dispatch`) end-to-end run of `scripts/smoke_train_loop.sh` — self_play
 → `games_*.safetensors` → train.py → model.safetensors plus one arena gauge
-reading — which is the seam all three blockers hid in.
+reading — which is the seam all three blockers hid in. The smoke also forces the
+anchor-freeze and audit branches, and the contract check covers the shell's
+python CLIs per subcommand (#35).
 
 ```bash
 # Re-verify locally
@@ -1117,9 +1149,10 @@ to fail the build.
 `tests/test_train.py` and `tests/test_ladder.py` (stdlib `unittest`, no new
 pinned dependency; `scripts/run_python_tests.sh`, CI job `python-tests`) cover
 the helpers whose failure mode is silent — the holdout split's partition and
-stability invariants, `pad_spatial`'s append-don't-prepend contract, D4 as a
-group action, and the Rust↔Python width contract read from the Python side,
-which runs without torch.
+stability invariants, its exclusion of the teacher anchor files (#36),
+`pad_spatial`'s append-don't-prepend contract, D4 as a group action, the
+shell↔`ladder.py` command lines the training loop builds (#35), and the
+Rust↔Python width contract read from the Python side, which runs without torch.
 
 **Search reproducibility took two fixes, and the second was the real one.**
 Every search agent now owns a seeded `SmallRng` — `GumbelMctsAgent`,

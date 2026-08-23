@@ -78,6 +78,80 @@ class HoldoutSplitTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_TORCH, "train.py requires torch")
+class TeacherBufferTest(unittest.TestCase):
+    """#36: teachers are mixed into every iteration and never rotate out, while
+    holdout membership is a stable function of the basename. Splitting the
+    combined list therefore withheld a random ~15% of the teacher set from
+    fitting for the whole campaign, and put static known-good positions into
+    `value_r2_holdout` — the series that is supposed to say how the net
+    generalizes on fresh self-play."""
+
+    FRAC = 0.15
+    SELF_PLAY = [f"games_{i}.safetensors" for i in range(200)]
+    TEACHERS = [f"teachers/games_pro_{i}.safetensors" for i in range(200)]
+
+    def setUp(self):
+        # Without this the rest of the class would pass on a fixture that never
+        # reaches the case at all.
+        self.assertTrue(
+            [f for f in self.TEACHERS if train.is_holdout_file(f, self.FRAC)],
+            "fixture contains no teacher that hashes into the holdout",
+        )
+
+    def test_a_teacher_that_hashes_into_the_holdout_still_trains(self):
+        kept, held = train.partition_buffer(self.SELF_PLAY, self.TEACHERS, self.FRAC)
+        for f in self.TEACHERS:
+            self.assertIn(f, kept)
+            self.assertNotIn(f, held)
+
+    def test_splitting_the_combined_list_is_what_lost_them(self):
+        """The shape of the defect, pinned so the old call cannot come back."""
+        _, held = train.split_holdout(self.SELF_PLAY + self.TEACHERS, self.FRAC)
+        self.assertTrue(set(held) & set(self.TEACHERS))
+        self.assertFalse(
+            set(train.partition_buffer(self.SELF_PLAY, self.TEACHERS, self.FRAC)[1])
+            & set(self.TEACHERS)
+        )
+
+    def test_the_holdout_is_self_play_only(self):
+        _, held = train.partition_buffer(self.SELF_PLAY, self.TEACHERS, self.FRAC)
+        self.assertTrue(held)
+        self.assertTrue(set(held) <= set(self.SELF_PLAY))
+
+    def test_the_self_play_split_is_the_one_it_would_get_alone(self):
+        _, held = train.partition_buffer(self.SELF_PLAY, self.TEACHERS, self.FRAC)
+        self.assertEqual(sorted(held), sorted(train.split_holdout(self.SELF_PLAY, self.FRAC)[1]))
+
+    def test_every_file_lands_on_exactly_one_side(self):
+        kept, held = train.partition_buffer(self.SELF_PLAY, self.TEACHERS, self.FRAC)
+        self.assertEqual(sorted(kept + held), sorted(self.SELF_PLAY + self.TEACHERS))
+        self.assertEqual(set(kept) & set(held), set())
+
+    def test_teachers_cannot_stand_in_for_a_withheld_self_play_buffer(self):
+        # The guard against an empty training set now sees the self-play buffer
+        # alone. Combined, a teacher that hashed out kept it non-empty, so on a
+        # small buffer the guard never fired and the iteration fit teachers only
+        # while withholding every self-play file it had.
+        held_sp = [f for f in self.SELF_PLAY if train.is_holdout_file(f, self.FRAC)][:1]
+        kept_teacher = [f for f in self.TEACHERS if not train.is_holdout_file(f, self.FRAC)][:1]
+        self.assertTrue(held_sp and kept_teacher)
+        kept, held = train.partition_buffer(held_sp, kept_teacher, self.FRAC)
+        self.assertEqual(held, [])
+        self.assertEqual(sorted(kept), sorted(held_sp + kept_teacher))
+
+    def test_a_teacher_only_buffer_still_trains(self):
+        self.assertEqual(
+            train.partition_buffer([], self.TEACHERS, self.FRAC), (self.TEACHERS, [])
+        )
+
+    def test_no_teachers_is_the_plain_split(self):
+        self.assertEqual(
+            train.partition_buffer(self.SELF_PLAY, [], self.FRAC),
+            train.split_holdout(self.SELF_PLAY, self.FRAC),
+        )
+
+
+@unittest.skipUnless(HAVE_TORCH, "train.py requires torch")
 class PadSpatialTest(unittest.TestCase):
     """Legacy 136-channel data is zero-padded to 142. Channels were appended at
     the end of the layout, so padding must go at the end and nowhere else."""

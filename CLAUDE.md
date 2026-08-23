@@ -44,13 +44,13 @@ cd polyfish-rs && cargo run --bin stats -- --games 50              # manual diag
 CI (`.github/workflows/rust.yml`) also runs, and these are worth running locally before touching what they cover:
 ```bash
 cd polyfish-rs && cargo test --no-default-features --test parity_widths   # Rust vs train.py head widths
-cd polyfish-rs && python3 scripts/check_cli_contract.py                   # shell -> binary flag contract
+cd polyfish-rs && python3 scripts/check_cli_contract.py                   # shell -> binary/python-CLI flag contract
 cd polyfish-rs && cargo clippy --no-default-features --all-targets        # gated on a correctness subset
 cd polyfish-rs && cargo fmt --check                                       # advisory
 cd polyfish-rs && ./scripts/run_python_tests.sh                          # ladder.py + train.py (stdlib unittest)
 cd polyfish-rs && ./scripts/run_forward_parity.sh                        # candle CPU vs train.py on one checkpoint
 ```
-`.github/workflows/smoke.yml` runs `scripts/smoke_train_loop.sh` nightly (and on demand): a real one-iteration `self_play` → `games_*.safetensors` → `train.py` → `model.safetensors` pass plus an `arena` gauge reading, into a scratch dir under `target/smoke/`. That seam is where all three of the 2026 pipeline blockers hid — run it after changing `run_training_loop.sh`, `train.py`, or either binary's CLI.
+`.github/workflows/smoke.yml` runs `scripts/smoke_train_loop.sh` nightly (and on demand): a real one-iteration `self_play` → `games_*.safetensors` → `train.py` → `model.safetensors` pass plus an `arena` gauge reading, into a scratch dir under `target/smoke/`. That seam is where all three of the 2026 pipeline blockers hid — run it after changing `run_training_loop.sh`, `train.py`, or either binary's CLI. It also forces the anchor-freeze and audit branches, which no reading it can afford would otherwise reach (`GAUGE_FREEZE_WR=0`, `GAUGE_LINK_GAMES=1`, `GAUGE_AUDIT_EVERY=1`; `SMOKE_FORCE_FREEZE=0` turns that off) — those branches had never executed anywhere, and their first run would have been mid-campaign in a fail-fatal loop (#35).
 
 **Python training setup** (creates `polyfish-rs/.venv` from `requirements.txt`):
 ```bash
@@ -128,6 +128,7 @@ If you change layer shapes, channel counts, or head sizes in one, you must mirro
 - `VALUE_LOSS_WEIGHT`, `OWNERSHIP_LOSS_WEIGHT` — head weighting.
 - `AUGMENT_D4` — D4 symmetry augmentation; implemented, off unless explicitly exported.
 - `TRAIN_EPOCHS`, `LEARNING_RATE`, `BATCH_SIZE`.
+- `TRAIN_HOLDOUT_FRAC` — fraction of the buffer withheld from fitting to give `value_r2_holdout` (default 0.15). The split is by file and keyed on a hash of the basename so membership is stable for a file's whole life in the buffer; it runs over fresh + archive self-play only — `teachers/games_*.safetensors` always train, since they never rotate out and a permanently withheld teacher would also put static positions into the holdout reading (#36).
 
 `bisect_arm.sh` is where diagnostic arms belong; anything exported unconditionally from `run_training_loop.sh` is a production setting.
 
@@ -140,7 +141,7 @@ If you change layer shapes, channel counts, or head sizes in one, you must mirro
 - Diagnostics: `benchmark.rs`, `actor_ceiling.rs`, `compare_evaluators.rs`, `repro_loop.rs`, `validate_csv.rs`, `stats.rs`, `debug_*.rs`, `verify_*.rs`.
 - Replay management: `import_replays.rs`, `upload_replays.rs`, `download_replay.rs`, `delete_all_replays.rs`, `extract_versions.rs`.
 
-Any binary invoked by a shell script forms a **CLI contract with that script**. `scripts/check_cli_contract.py` checks it in CI now (it builds the binaries and diffs every long flag the shell scripts pass against that binary's `--help`, and fails closed on anything it cannot resolve), but still grep `run_training_loop.sh` and `auto_train.sh` when you rename or remove an argument — three such breaks once stopped the pipeline running at all.
+Any binary invoked by a shell script forms a **CLI contract with that script**, and so does any python CLI beside it (`ladder.py`, `training_log.py`). `scripts/check_cli_contract.py` checks both in CI now (it builds the binaries and diffs every long flag the shell scripts pass against that target's `--help` — per subcommand for the python ones — and fails closed on anything it cannot resolve), but still grep `run_training_loop.sh` and `auto_train.sh` when you rename or remove an argument — three such breaks once stopped the pipeline running at all.
 
 ### Strength measurement
 Separate from the training metrics, and the instrument every experiment depends on:
@@ -148,6 +149,7 @@ Separate from the training metrics, and the instrument every experiment depends 
 - `run_training_loop.sh` runs a gauge match every `-l` iterations against the ladder's active anchor, records the reading, and can freeze a new anchor or stop the run (plateau). A freeze needs the reading's Wilson lower bound to clear 80%. The plateau gate is EXP 11's registered rule — pooled window halves flat-or-down **and** least-squares slope ≤ 0, both directional, so a climb the gauge cannot yet *prove* no longer counts as a plateau (#31; the interval-overlap test it replaced struck on every climb below ~12pp). Its window is scoped to the current `run_id` and to the reading budget, which includes `max_turns`; strikes reset on a run change. A failed reading aborts the run.
 - The gauge pins its map set (`--seed`) and asks `self_play --print-curriculum` for the iteration's `max_turns` **and its search knobs** (`prior_heuristic_w`, `policy_target_q_w`), passing them to `arena`. Both ramp over a run — prior 0.5 → 0.1 → 0, σ(Q) 0 → 1 — so a gauge on the converged constants graded a searcher self-play never used for the first ~30–53 iterations (#32). The knobs are recorded on each reading but deliberately **not** in `ladder.py`'s `_budget_key`: they change every iteration by design, so keying on them would leave the plateau window permanently empty.
 - **The gauge's tribe pair is pinned (`arena --tribe1/--tribe2`, default an Imperius mirror) while self-play trains on config.json's 5-tribe pool.** The pin is variance control — the tribe block effect rivals a campaign's whole measured improvement — but it means every ladder Elo is a statement about Imperius-vs-Imperius play, not about the distribution training optimizes. That scope limit is recorded in `ladder.json`'s `scope` field, and the pair is read back off `arena`'s own `Tribes:` line rather than assumed, so the record can never again disagree with the match it describes (#34: the ladder was handed the shuffled *training* pair for a match `arena` hardcoded to Imperius). A `--kind tribe_audit` row at the audit cadence re-reads the active anchor on the iteration's training pair; it is a cross-check only — excluded from the plateau window (`_gauge_series`) and from the Elo fit (`elo.py`'s `EXCLUDED_KINDS`), since its games share a node pair with the pinned reading and would fold the block effect straight back in.
+- **The freeze and audit branches are reached only from `run_training_loop.sh`**, so they are exercised nowhere else: the smoke forces them (above), `tests/test_ladder.py`'s `ShellCommandLineTest` runs `freeze` / `audit-opponents` / `record --kind audit|tribe_audit` as subprocesses with the flags read back off the loop script, and the CLI contract check covers the flags statically. An audit cadence landing on a freeze iteration plays every cross-check against the *outgoing* anchor, so those rows pass `--opponent` explicitly rather than letting `ladder.py` assume the active one (#35).
 - `.anchor_state.json` / `.anchor_decay_start` persist anchor-gate state across invocations.
 - Both `self_play` and `arena` default `--symmetric` to true, and `run_gauge_match` passes it explicitly (`GAUGE_SYMMETRIC`), so the ladder reads the same map family training generates. **Known gap:** a ~64-game reading still only resolves to about ±12pp — `ladder.json` stores the interval, so use it rather than the point estimate.
 

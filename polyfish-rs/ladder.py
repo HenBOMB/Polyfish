@@ -35,7 +35,12 @@ SCOPE_NOTE = (
     "Imperius-mirror strength, not pool strength; `kind: tribe_audit` readings "
     "are the periodic cross-check and take no part in any verdict."
 )
-FREEZE_WR = 0.80
+DEFAULT_FREEZE_WR = 0.80
+# The bar a reading's Wilson lower bound must clear to freeze a new anchor.
+# Overridable only so the branch can be exercised: at 0.80 no cheap reading can
+# reach it, which is why the freeze path had never run anywhere (#35). A reading
+# judged against a non-default bar records the bar it was judged against.
+FREEZE_WR = float(os.environ.get("GAUGE_FREEZE_WR", DEFAULT_FREEZE_WR))
 PLATEAU_WINDOW = 8  # gauge readings vs the same anchor (= 80 iters at interval 10)
 PLATEAU_STRIKES = 2  # consecutive flagged readings before the loop stops
 CI_Z = 1.96  # 95%
@@ -395,9 +400,11 @@ def _append_reading(data, args, kind, opponent):
 def cmd_record(args):
     data = _load()
     # A tribe_audit is the gauge match on a different tribe pair, so it reads
-    # against the same active anchor -- the difference between the two rows is
-    # the block effect the pinned pair buys away.
-    if args.kind in ("gauge", "tribe_audit"):
+    # against the same anchor the gauge did -- the difference between the two
+    # rows is the block effect the pinned pair buys away. It names that anchor
+    # when the caller has one: an audit cadence landing on a freeze iteration
+    # plays the outgoing anchor, which by then is no longer anchors[-1].
+    if args.kind == "gauge" or (args.kind == "tribe_audit" and not args.opponent):
         opponent = data["anchors"][-1]
     else:
         opponent = _anchor_by_name(data, args.opponent)
@@ -411,6 +418,10 @@ def cmd_record(args):
         if data.get("plateau_run_id") != args.run_id:
             data["plateau_strikes"] = 0
             data["plateau_run_id"] = args.run_id
+        if FREEZE_WR != DEFAULT_FREEZE_WR:
+            # The bar was moved for this reading, so the record has to say so:
+            # a forced freeze must not be indistinguishable from an earned one.
+            reading["freeze_wr"] = FREEZE_WR
         # The freeze bar is on the lower bound: a point estimate at 0.80 with a
         # +/-0.12 interval is not evidence the model beats the anchor 4:1.
         if reading["win_rate_ci"][0] >= FREEZE_WR:
@@ -433,6 +444,8 @@ def cmd_record(args):
         "elo_ci": reading["elo_ci"],
         "plateau_strikes": data["plateau_strikes"],
     }
+    if "freeze_wr" in reading:
+        verdict["freeze_wr"] = reading["freeze_wr"]
     # A single reading this size cannot carry a verdict about a difference
     # smaller than its own resolution. Say so on every reading rather than
     # leaving the next reader to rediscover it from the interval.
@@ -491,7 +504,9 @@ def cmd_power(args):
     print(json.dumps(out, indent=2))
 
 
-def main():
+def build_parser():
+    """The CLI itself, separate from main() so the shell<->argparse contract can
+    be checked without running a command (#35)."""
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -545,16 +560,23 @@ def main():
     match_args(rec)
     rec.add_argument("--kind", choices=["gauge", "audit", "tribe_audit"], default="gauge",
                      help="gauge steers the run; audit cross-checks the anchor chain; "
-                          "tribe_audit re-reads the active anchor on another tribe pair. "
+                          "tribe_audit re-reads the gauge's anchor on another tribe pair. "
                           "Only gauge carries a verdict or enters the plateau window.")
-    rec.add_argument("--opponent", help="anchor name (required for --kind audit)")
+    rec.add_argument("--opponent",
+                     help="anchor name; required for --kind audit, and for a "
+                          "tribe_audit whose match was played against an anchor "
+                          "a freeze in the same iteration has since retired")
     rec.set_defaults(func=cmd_record)
 
     frz = sub.add_parser("freeze")
     match_args(frz)
     frz.add_argument("--path", required=True, help="frozen anchor model file")
     frz.set_defaults(func=cmd_freeze)
+    return parser
 
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
     if getattr(args, "cmd", None) == "record" and args.kind == "audit" and not args.opponent:
         parser.error("--kind audit requires --opponent")
