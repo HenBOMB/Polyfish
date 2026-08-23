@@ -193,7 +193,82 @@ have zero good spots, 0% of Xin-xi maps); village spacing ours ≥3 vs real ≥2
 this session started pre-fix (0.65 metal near a Xin-xi capital → adjacent metal *pairs*
 essentially never occurred). Restart the server to see post-fix maps.
 
-## Implications (not acted on)
+## Addendum (Aug 12): the "best Forge ≈ 2.5 vs level 3–4 on iPad" discrepancy — resolved, no generator change
+
+Trigger: post-fix measurement put Xin-xi's best Forge around 2.5, while real iPad games
+regularly show level-3/4 Forges. Re-measured with one metric on both sides (probe
+`forge_probe.rs`, temporary, deleted; spot = Field **or Forest** tile, not village/city;
+level = metal among 8 neighbors; 300 maps/config, seeds 900000+):
+
+| config (Drylands unless noted) | best map-wide mean | ≥3 | ≥4 | best near-XinXi-cap (Cheb ≤2) | spots ≥2 /map |
+|---|---|---|---|---|---|
+| Tiny 11, XinXi+1 | 3.1–3.2 | 80–84% | 28–30% | **2.78** (≥3: 59%) | 13–14 |
+| Normal 16, anjiian 6-tribe mix | 3.24 | 89% | 29% | 2.79 (≥3: 63%) | 20 |
+| Normal 16, XinXi+3 | 3.38 | 93% | 38% | 2.97 (≥3: 72%) | 23 |
+| Large 18, XinXi+3 | 3.52 | 97% | 48% | 3.03 (≥3: 75%) | 30 |
+| Normal 16 Continents, XinXi+3 | 2.95 | 72% | 21% | 2.60 (≥3: 49%) | 11 |
+| **real anjiian (Drylands 16, XinXi)** | **3** | — | no | **3** (5 metal in reach) | **14** |
+| real assha (Lakes 16, mt-poor) | 2 | — | no | — | 3 |
+| real basin (Lakes 14, mt-rich) | 3 | — | no | — | 12 |
+
+**Conclusion: the generator is at or above real parity; the 2.5-vs-iPad comparison mixed
+three different statistics.** (The 2.5's original source wasn't located — no ledger entry;
+candidates are a Tiny-map probe/eco_plan read, or the Aug-10 Field-only probe whose filter
+also depressed anjiian to 2. Every candidate yields the same verdict.) (1) *Map size*: the
+2.5 matches Tiny 11×11 training-map near-capital supply; iPad games are Normal 16×16+. Best-spot supply is extreme-value statistics — it
+rises with map size (≥4 spots: 30% Tiny → 38% Normal → 48% Large). (2) *Scope*: near-capital
+raw supply on Tiny is 2.78 mean, and territory/border-growth constraints shave the
+*achievable* Forge below that (≈2.5); an iPad player's empire spans several cities by
+mid-game, so their reachable best approaches the map-wide number (~3.4). (3) *Selection*:
+"regularly see 3–4" is best-of over many remembered games; our own 16×16 maps produce a
+level-3 spot in ~90% and a level-4 in ~30% of games — the iPad experience, reproduced.
+
+Two corrections to the Aug-10 addendum table: real anjiian's best spot is **3, not 2** —
+the earlier probe counted Field-only sites, but Forge builds on Forest under current
+rules, and both level-3 sites (idx 43/44) are Forest. Real-capture climate ids are the
+tribe-type ids (Xin-xi = 13), not `classic_climate_id`. Note ours measure *above* the
+captures on every comparable line (level-4 spots: 0/3 real maps, ~30% of ours at 16×16) —
+if any follow-up is warranted it is the Aug-10 over-shoot question, not a deficit; the
+open Xin-xi mountain 1.5-vs-2.0 question stays closed-by-default (raising it would move
+us further above the captures).
+
+## Addendum (Aug 12, later): REOPENED for the capital zone — real Tiny 11×11 iPad games contradict the model
+
+Verdi then reported the disputed games were themselves **Tiny 11×11 Drylands** on the
+current iPad build: capital Forge level 3 with NO border growth (⇒ ≥3 metal inside the
+capital's initial 3×3), level 4 after border growth, **two games back to back**, plus a
+second city at level 2 on its own territory. The size/scope resolution above does NOT
+cover this. Under our generator (probe #2, n=2000 Tiny Drylands XinXi+Imperius):
+
+- capital ring (Cheb ≤1) metal: **2: 77.7%, 3: 15.9%, 4: 5.0%, ≥5: 1.5%** (mean ≈ 2.3)
+- best in-territory Forge, no border growth: mean 2.03, **≥3 in 8.6%**
+- best with border growth (Cheb ≤2): mean 2.61, ≥4 in 10.2%
+- the full game-1 pattern (L3 no-BG AND L4 with BG): **3.4%/game; back-to-back ≈ 0.1%**
+- (second city with L2 in its own 3×3: 99.2% — that part is typical, not evidence)
+
+So the report is a ≤1–5% parlay under our model. What the record says against a change:
+Espark's decompiled table reads Xin-xi mountain 1.5/metal 1.5 (fetched + verified Aug 12);
+the era-1 generator's `post_generate` is a **top-up** (`while resources < quantity`), same
+semantics as ours; and every real capture capital sits at the top-up floor — decisive:
+anjiian v111 **Vengir** ring shows exactly 2 game with a ~0.15 natural expectation (0.1×
+multiplier), pinning guarantee quantity = 2 top-up in v111; Cymanti spores 2, Kickoo fish
+2, **Xin-xi metal 2 on 2 ring mountains**. The wiki's Map Generation page (fetched via
+API) documents the 2.0.58+ per-biome exact quota ("terrain will always be generated in
+accordance with the percentage rates") — a quota pins zone counts, not ring concentration,
+and cannot make hot capitals. It documents no starting-resource mechanics at all.
+
+**The unresolved axis is game version.** All three real captures are v111–v115 (newest
+Jun 2026); the iPad games are the Aug-2026 live build (post-2025-Balance-Pass, which is
+already known to have touched Xin-xi starts: 7 stars). If the current build made capitals
+hotter (e.g. additive guarantee — place 2 *on top of* natural spawns — predicted ring
+metal 2: ~22%, 3: ~36%, ≥4: ~42%, mean ≈ 3.4), Verdi's games are typical, and none of our
+captures could have seen it.
+
+**Discrimination experiment (MAPGEN_002, pre-registered in the hypothesis ledger):**
+capture 5+ fresh turn-0 Tiny 11×11 Drylands Xin-xi games from the current Steam build via
+polyfish-mod, then run `polyfish-rs/capital_ring_check.py` on them. Top-up predicts ring
+metal mean ≈ 2.2 with ≥3 in ~22%; additive predicts mean ≈ 3.4 with ≥3 in ~78%. Five
+captures separate the models cleanly. No generator change before that data exists.
 
 - Mining/Smithery/Forge economics are systematically underrepresented in the training
   distribution; the eco_plan hub lanes and any metal-dependent strategy are learned
