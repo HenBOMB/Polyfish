@@ -557,6 +557,24 @@ fn move_matches(m: &dyn polyfish::moves::Move, mv: &polyfish::ai::mcts_types::Mo
         && m.reward_type().ok() == mv.reward_type
 }
 
+/// Odd salt, so the opening stream neither aliases the tribe-shuffle stream
+/// (seeded from the same value) nor collides across games.
+const OPENING_RNG_SALT: u64 = 0x5EED_0BE4_1A89_C0D5;
+
+/// The opening sampler's stream for one game.
+///
+/// Mixes `game_idx` as well as `seed`: a mirror pair shares its seed, and on a
+/// symmetric map with one model on both seats the two games would otherwise
+/// draw the identical opening and play near-duplicates.
+fn opening_rng_for(seed: i64, game_idx: usize) -> rand::rngs::SmallRng {
+    use rand::SeedableRng;
+    rand::rngs::SmallRng::seed_from_u64(
+        (seed as u64)
+            .wrapping_mul(OPENING_RNG_SALT)
+            .wrapping_add(game_idx as u64),
+    )
+}
+
 /// Draw a move from the search's improved policy pi' (`MoveVisit::visits`) and
 /// resolve it against `state`'s legal moves. `None` for a degenerate
 /// distribution or a draw that is not legal in the un-obscured state (the
@@ -564,12 +582,13 @@ fn move_matches(m: &dyn polyfish::moves::Move, mv: &polyfish::ai::mcts_types::Mo
 fn sample_opening_move(
     state: &GameState,
     move_visits: &[polyfish::ai::mcts_types::MoveVisit],
+    rng: &mut impl rand::Rng,
 ) -> Option<Box<dyn polyfish::moves::Move>> {
     use rand::distr::{Distribution, weighted::WeightedIndex};
 
     let weights: Vec<f32> = move_visits.iter().map(|mv| mv.visits.max(0.0)).collect();
     let dist = WeightedIndex::new(&weights).ok()?;
-    let pick = &move_visits[dist.sample(&mut rand::rng())];
+    let pick = &move_visits[dist.sample(rng)];
     polyfish::moves::generate_legal_moves(state)
         .into_iter()
         .find(|m| move_matches(m.as_ref(), pick))
@@ -617,6 +636,12 @@ fn play_single_game(
             game_idx, seed, gen_settings.tribes, map_size, max_turns
         );
     }
+
+    // The opening sampler owns its stream. Drawing from the thread-local
+    // generator left the first `opening_temp_moves` plies unreproducible even
+    // with POLYFISH_SEARCH_SEED pinned -- and those plies override the agent,
+    // so the whole trajectory diverges (#37).
+    let mut opening_rng = opening_rng_for(seed, game_idx);
 
     let mut game = Game::new();
     game.state = polyfish::mapgen::generate(gen_settings);
@@ -846,7 +871,7 @@ fn play_single_game(
         // the first `opening_temp_moves` plies. The policy target stays pi'
         // either way, which is what AlphaZero/Gumbel train on.
         let best_move = if move_count < opening_temp_moves && move_visits.len() > 1 {
-            sample_opening_move(&game.state, &move_visits).or(best_move)
+            sample_opening_move(&game.state, &move_visits, &mut opening_rng).or(best_move)
         } else {
             best_move
         };
@@ -2448,7 +2473,14 @@ fn main() -> anyhow::Result<()> {
         tensors.insert("progress".to_string(), progress_tensor);
         tensors.insert("ownership".to_string(), ownership_tensor);
 
-        candle_core::safetensors::save(&tensors, &games_file)?;
+        // tmp + rename: a ctrl-C or a full disk mid-save otherwise leaves a
+        // truncated games_*.safetensors that train.py skips for the whole
+        // replay window while the CSV records it as trained on (#37). The
+        // suffix keeps the partial file out of every `games_*.safetensors`
+        // glob (train.py's loader, the loop's archive move).
+        let games_tmp = format!("{games_file}.tmp");
+        candle_core::safetensors::save(&tensors, &games_tmp)?;
+        std::fs::rename(&games_tmp, &games_file)?;
 
         // Save BEST game as replay
         if let Some(recap) = best_recap {
@@ -2793,5 +2825,112 @@ mod spt_shaping_tests {
         let p2_sum: f32 = out[1] + out[3] + out[5];
         assert!((p1_sum - 2.0 / norm()).abs() < 1e-6, "got {p1_sum}");
         assert!((p2_sum + 2.0 / norm()).abs() < 1e-6, "got {p2_sum}");
+    }
+}
+
+#[cfg(test)]
+mod opening_sampler_tests {
+    use super::*;
+    use polyfish::ai::mcts_types::MoveVisit;
+
+    fn game_at(seed: i64) -> Game {
+        let mut game = Game::new();
+        game.state = polyfish::mapgen::generate(polyfish::mapgen::MapGenSettings {
+            size: MapSize::Tiny,
+            map_type: polyfish::types::MapType::Drylands,
+            tribes: vec![TribeType::Imperius, TribeType::Imperius],
+            seed,
+            symmetric: true,
+            ..Default::default()
+        });
+        game.post_load();
+        game
+    }
+
+    /// pi' over the real legal moves, weighted so no single move dominates.
+    fn visits_for(game: &Game) -> Vec<MoveVisit> {
+        polyfish::moves::generate_legal_moves(&game.state)
+            .iter()
+            .enumerate()
+            .map(|(i, m)| MoveVisit {
+                move_type: m.move_type(),
+                visits: (i % 7 + 1) as f32,
+                source_idx: m.source_idx().ok(),
+                target_idx: m.target_idx().ok(),
+                structure_type: m.structure_type().ok(),
+                unit_type: m.unit_type().ok(),
+                tech_type: m.tech_type().ok(),
+                ability_type: m.ability_type().ok(),
+                reward_type: m.reward_type().ok(),
+            })
+            .collect()
+    }
+
+    /// Openings drawn from one game's stream, as comparable strings.
+    fn draws(seed: i64, game_idx: usize, game: &Game, visits: &[MoveVisit], n: usize) -> Vec<String> {
+        let mut rng = opening_rng_for(seed, game_idx);
+        (0..n)
+            .map(|_| match sample_opening_move(&game.state, visits, &mut rng) {
+                Some(m) => format!(
+                    "{:?}:{:?}:{:?}",
+                    m.move_type(),
+                    m.source_idx().ok(),
+                    m.target_idx().ok()
+                ),
+                None => "none".to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn opening_draws_are_reproducible_from_the_seed() {
+        // #37: the sampler drew from the thread-local generator, so the first
+        // `opening_temp_moves` plies -- which override the agent and steer the
+        // whole trajectory -- were unreproducible even with POLYFISH_SEARCH_SEED
+        // pinned.
+        let game = game_at(4242);
+        let visits = visits_for(&game);
+        assert!(visits.len() > 1, "need a non-degenerate pi' to sample from");
+
+        assert_eq!(
+            draws(4242, 0, &game, &visits, 16),
+            draws(4242, 0, &game, &visits, 16)
+        );
+    }
+
+    #[test]
+    fn a_mirror_pair_does_not_replay_the_same_opening() {
+        // Games 2k and 2k+1 share a seed by design. On a symmetric map with one
+        // model on both seats, a seed-only stream makes the pair near-duplicates.
+        let game = game_at(4242);
+        let visits = visits_for(&game);
+
+        assert_ne!(
+            draws(4242, 0, &game, &visits, 24),
+            draws(4242, 1, &game, &visits, 24)
+        );
+    }
+
+    #[test]
+    fn different_seeds_get_different_opening_streams() {
+        // A stream shared across games would collapse self-play to one opening
+        // played N times.
+        let game = game_at(4242);
+        let visits = visits_for(&game);
+
+        assert_ne!(
+            draws(4242, 0, &game, &visits, 24),
+            draws(4243, 0, &game, &visits, 24)
+        );
+    }
+
+    #[test]
+    fn sampler_actually_explores_rather_than_pinning_one_move() {
+        let game = game_at(4242);
+        let visits = visits_for(&game);
+
+        let distinct: std::collections::HashSet<String> =
+            draws(4242, 0, &game, &visits, 40).into_iter().collect();
+        assert!(distinct.len() > 1, "sampled only {distinct:?}");
     }
 }
