@@ -1,5 +1,5 @@
 use crate::coords::Coords;
-use crate::functions::{calculate_combat_preview, get_adjacent_indices, get_structure_at};
+use crate::functions::{calculate_combat_preview, get_adjacent_indices, get_city_at, get_structure_at};
 use crate::game::Game;
 use crate::moves::Move;
 use crate::settings::get_structure_setting;
@@ -462,9 +462,25 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                 if let Some(tile) = state.tiles.get(&(target_idx as i32)) {
                     if let Some(s) = get_structure_at(state, target_idx as i32) {
                         match s.structure_type {
-                            StructureType::Ruin
-                            | StructureType::Village
-                            | StructureType::Lighthouse => score += 43.0,
+                            // Lighthouse deliberately excluded: it's
+                            // permanent and never owned/consumed, so there's
+                            // no capture to price here -- its actual value
+                            // (revealing fog) is already priced below via
+                            // openness/newly_revealed, which correctly decay
+                            // to ~0 once a unit has already visited it.
+                            StructureType::Ruin | StructureType::Village => {
+                                // Village becomes a permanent city on
+                                // capture, and its structure record is never
+                                // cleared afterward (see actions/city.rs) --
+                                // `tile.owner` alone isn't enough to detect
+                                // that, since border growth can set it
+                                // before the village is ever captured.
+                                // get_city_at is the precise "already
+                                // captured" check either way.
+                                if get_city_at(state, target_idx as i32).is_none() {
+                                    score += 43.0;
+                                }
+                            }
                             _ => {
                                 // Enemy city potentially
                                 // TODO: Doesnt check for peace treaty
@@ -1157,6 +1173,162 @@ mod tests {
         assert!(
             finishing > stranding,
             "finishing harvest ({finishing}) must outscore stranding one ({stranding})"
+        );
+    }
+
+    /// Regression for the ownership-blind capture bonus: a city's tile
+    /// permanently retains its founding `Village` structure record (never
+    /// cleared by `capture_city`), so stepping onto an ALREADY-OWNED city
+    /// must not collect the fresh-village +43.
+    #[test]
+    fn step_onto_own_city_does_not_repay_the_capture_bonus() {
+        let player_id = 1;
+        let mut state = explored_field_state(player_id);
+        let capital_idx = 5 * 11 + 5;
+        let unit_idx = 5 * 11 + 4;
+
+        state.structures.insert(
+            capital_idx,
+            Some(crate::states::StructureState {
+                structure_type: StructureType::Village,
+                level: 1,
+                founded: 0,
+            }),
+        );
+        state.tiles.get_mut(&capital_idx).unwrap().owner = player_id;
+        state.tiles.get_mut(&capital_idx).unwrap().capital_of = player_id;
+        state.tribes.get_mut(&player_id).unwrap().cities.push(crate::states::CityState {
+            idx: capital_idx,
+            owner: player_id,
+            ..Default::default()
+        });
+        let _ = summon_unit(&mut state, UnitType::Warrior, unit_idx, false, false);
+        let game = Game { state };
+
+        let onto_capital = StepMove::new(unit_idx, capital_idx);
+        let score = score_move(&game, &onto_capital);
+
+        // Sideways step onto a bare, structure-less field tile at the same
+        // distance -- an exact same-terrain baseline with no capture bonus
+        // in play, so the two should land within the small openness/center
+        // wobble of each other, not 43 points apart.
+        let sideways_idx = 4 * 11 + 4;
+        let sideways = StepMove::new(unit_idx, sideways_idx);
+        let baseline = score_move(&game, &sideways);
+
+        assert!(
+            (score - baseline).abs() < 10.0,
+            "stepping onto an already-owned city ({score}) must not outscore a bare tile \
+             ({baseline}) by anything close to the +43 capture bonus"
+        );
+    }
+
+    /// The fix must not break the legitimate case: an unowned, uncaptured
+    /// Village still pays the capture-approach bonus.
+    #[test]
+    fn step_onto_uncaptured_village_still_gets_the_capture_bonus() {
+        let player_id = 1;
+        let mut state = explored_field_state(player_id);
+        let village_idx = 5 * 11 + 5;
+        let unit_idx = 5 * 11 + 4;
+
+        state.structures.insert(
+            village_idx,
+            Some(crate::states::StructureState {
+                structure_type: StructureType::Village,
+                level: 0,
+                founded: 0,
+            }),
+        );
+        let _ = summon_unit(&mut state, UnitType::Warrior, unit_idx, false, false);
+        let game = Game { state };
+
+        let onto_village = StepMove::new(unit_idx, village_idx);
+        let score = score_move(&game, &onto_village);
+
+        let sideways_idx = 4 * 11 + 4;
+        let sideways = StepMove::new(unit_idx, sideways_idx);
+        let baseline = score_move(&game, &sideways);
+
+        assert!(
+            score - baseline > 30.0,
+            "stepping onto a real, uncaptured village ({score}) must still clear a bare tile \
+             ({baseline}) by roughly the +43 capture bonus"
+        );
+    }
+
+    /// The subtle case the fix targets specifically: border growth can set
+    /// `tile.owner` on a village tile before the village is ever actually
+    /// captured (capture_city is the only thing that creates the CityState).
+    /// Gating on `tile.owner` alone would wrongly zero this out; get_city_at
+    /// must not.
+    #[test]
+    fn step_onto_owned_but_uncaptured_village_still_gets_the_bonus() {
+        let player_id = 1;
+        let mut state = explored_field_state(player_id);
+        let village_idx = 5 * 11 + 5;
+        let unit_idx = 5 * 11 + 4;
+
+        state.structures.insert(
+            village_idx,
+            Some(crate::states::StructureState {
+                structure_type: StructureType::Village,
+                level: 0,
+                founded: 0,
+            }),
+        );
+        // Border growth from a nearby city claimed this tile, but nobody
+        // has captured the village sitting on it -- no CityState exists.
+        state.tiles.get_mut(&village_idx).unwrap().owner = player_id;
+        let _ = summon_unit(&mut state, UnitType::Warrior, unit_idx, false, false);
+        let game = Game { state };
+
+        let onto_village = StepMove::new(unit_idx, village_idx);
+        let score = score_move(&game, &onto_village);
+
+        let sideways_idx = 4 * 11 + 4;
+        let sideways = StepMove::new(unit_idx, sideways_idx);
+        let baseline = score_move(&game, &sideways);
+
+        assert!(
+            score - baseline > 30.0,
+            "a village merely inside our border (not yet captured, no city) ({score}) must \
+             still clear a bare tile ({baseline}) by roughly the +43 capture bonus"
+        );
+    }
+
+    /// Lighthouse is permanent and never owned/consumed -- it must not pay
+    /// the flat capture bonus at all (its value comes from openness/reveal
+    /// terms only, which correctly decay once already explored).
+    #[test]
+    fn step_onto_lighthouse_does_not_get_the_flat_capture_bonus() {
+        let player_id = 1;
+        let mut state = explored_field_state(player_id);
+        let lighthouse_idx = 5 * 11 + 5;
+        let unit_idx = 5 * 11 + 4;
+
+        state.structures.insert(
+            lighthouse_idx,
+            Some(crate::states::StructureState {
+                structure_type: StructureType::Lighthouse,
+                level: 0,
+                founded: 0,
+            }),
+        );
+        let _ = summon_unit(&mut state, UnitType::Warrior, unit_idx, false, false);
+        let game = Game { state };
+
+        let onto_lighthouse = StepMove::new(unit_idx, lighthouse_idx);
+        let score = score_move(&game, &onto_lighthouse);
+
+        let sideways_idx = 4 * 11 + 4;
+        let sideways = StepMove::new(unit_idx, sideways_idx);
+        let baseline = score_move(&game, &sideways);
+
+        assert!(
+            (score - baseline).abs() < 10.0,
+            "stepping onto a Lighthouse in an already fully-explored map ({score}) must not \
+             outscore a bare tile ({baseline}) by anything close to the +43 capture bonus"
         );
     }
 }
