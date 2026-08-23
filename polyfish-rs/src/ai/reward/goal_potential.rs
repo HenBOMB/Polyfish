@@ -52,15 +52,72 @@ pub fn goal_potential_with_unit_goals(
     threats: Option<&[(crate::states::UnitState, f32)]>,
     unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
 ) -> f32 {
+    goal_potential_inner(state, player, goal, aux, threats, unit_goals, &mut None)
+}
+
+/// Aug 2026 (reward_lab): same computation as [`goal_potential_with_unit_goals`],
+/// but returns every named term's individual contribution alongside the sum
+/// -- the observability the tuning loop needed after the turn-1
+/// capital-block hunt required a temporary, one-off `POLYFISH_DPHI_PROBE`
+/// rebuild to get an aggregate-only Δφ. A term can appear more than once
+/// (loops over cities/targets/structures emit one entry per iteration) --
+/// sum by label to get that term's total, same convention `POLYFISH_DPHI_PROBE`
+/// already uses for per-candidate rows. `None`-sink production callers are
+/// completely unaffected: `goal_potential_inner` takes the sink by
+/// `&mut Option<&mut Vec<_>>` so the `None` path never allocates.
+pub fn goal_potential_breakdown(
+    state: &GameState,
+    player: i32,
+    goal: &crate::ai::oracle_macro::MacroGoal,
+    aux: Option<&crate::ai::oracle_macro::GoalAux>,
+    threats: Option<&[(crate::states::UnitState, f32)]>,
+    unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
+) -> (f32, Vec<(&'static str, f32)>) {
+    let mut bd = Vec::new();
+    let mut sink = Some(&mut bd);
+    let phi = goal_potential_inner(state, player, goal, aux, threats, unit_goals, &mut sink);
+    (phi, bd)
+}
+
+/// Term-labeled accumulator: every `phi +=`/`phi -=` site below reports
+/// through this instead, so the breakdown sink and the scalar sum can never
+/// drift apart -- there is exactly one computation, not two maintained in
+/// parallel.
+struct PhiAcc<'a, 'b> {
+    phi: f32,
+    bd: &'a mut Option<&'b mut Vec<(&'static str, f32)>>,
+}
+impl PhiAcc<'_, '_> {
+    fn add(&mut self, label: &'static str, v: f32) {
+        self.phi += v;
+        if let Some(bd) = self.bd.as_deref_mut() {
+            bd.push((label, v));
+        }
+    }
+    fn sub(&mut self, label: &'static str, v: f32) {
+        self.add(label, -v);
+    }
+}
+
+fn goal_potential_inner(
+    state: &GameState,
+    player: i32,
+    goal: &crate::ai::oracle_macro::MacroGoal,
+    aux: Option<&crate::ai::oracle_macro::GoalAux>,
+    threats: Option<&[(crate::states::UnitState, f32)]>,
+    unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
+    breakdown: &mut Option<&mut Vec<(&'static str, f32)>>,
+) -> f32 {
     use crate::ai::oracle_macro::{retakeable_village, still_capturable, OrderKind, Stance};
     let Some(tribe) = state.tribes.get(&player) else {
         return 0.0;
     };
     let spt = crate::functions::get_tribe_spt(state, tribe) as f32;
-    let mut phi = match goal.stance {
+    let mut acc = PhiAcc { phi: 0.0, bd: breakdown };
+    match goal.stance {
         // SAVE is an economy stance: it keeps GROW's whole potential and adds
         // the ramp below, so banking never costs the economy gradient.
-        Stance::Grow | Stance::Save => SHAPE_GOAL_SPT * spt,
+        Stance::Grow | Stance::Save => acc.add("spt", SHAPE_GOAL_SPT * spt),
         // v9: ARM is no longer economy-blind. It holds 85% of plies after turn
         // 10, and with only the army term the whole mid-game carried zero
         // economy gradient — the window where a human is pushing cities to
@@ -85,16 +142,17 @@ pub fn goal_potential_with_unit_goals(
                 tribe.units.iter().map(|u| crate::rules::combat::unit_worth(u) as f32).sum();
             let intensity = aux.map_or(1.0, |a| a.arm_strength);
             let spt_rate = intensity * SHAPE_GOAL_ARM_SPT + (1.0 - intensity) * SHAPE_GOAL_SPT;
-            SHAPE_GOAL_ARM_PER_COST * army_value + spt_rate * spt
+            acc.add("arm_value", SHAPE_GOAL_ARM_PER_COST * army_value);
+            acc.add("arm_spt", spt_rate * spt);
         }
-        Stance::Unlock => 0.0,
+        Stance::Unlock => {}
     };
     // v9: the completion bonus now pays under ARM too — level 5 is where the
     // super unit comes from, so progress toward it is armament, not a
     // distraction. The stranded TAX stays off ARM for the v6 reason: combat
     // spending shouldn't be penalised for levels it never planned to finish.
     if matches!(goal.stance, Stance::Grow | Stance::Save | Stance::Arm) {
-        phi += SHAPE_GOAL_COMPLETION * completion_progress(state, player);
+        acc.add("completion_progress", SHAPE_GOAL_COMPLETION * completion_progress(state, player));
     }
     // EXP_ELO_050: the cost of losing a city, priced into the potential
     // itself rather than attached to a Defend order. Two consequences that
@@ -112,12 +170,16 @@ pub fn goal_potential_with_unit_goals(
     // can win potential by letting one fall. Without an aux there is no
     // assessment to price, the convention every aux-carried term follows.
     if let Some(a) = aux {
-        phi -= SHAPE_GOAL_CONNECT
-            * a.connect_remaining.iter().map(|(_, n)| *n as f32).sum::<f32>();
+        acc.sub(
+            "connect",
+            SHAPE_GOAL_CONNECT * a.connect_remaining.iter().map(|(_, n)| *n as f32).sum::<f32>(),
+        );
     }
     if let Some(a) = aux {
-        phi -= SHAPE_GOAL_CITY_RISK
-            * crate::ai::combat::residual_city_loss(state, player, &a.city_risk);
+        acc.sub(
+            "city_risk",
+            SHAPE_GOAL_CITY_RISK * crate::ai::combat::residual_city_loss(state, player, &a.city_risk),
+        );
     }
     // Aug 2026: a unit sitting on one of our own cities blocks Summon there
     // for as long as it stays (see SHAPE_CITY_TRAIN_BLOCKED's doc comment).
@@ -142,12 +204,12 @@ pub fn goal_potential_with_unit_goals(
             let occupied_by_us = crate::functions::get_unit_at(state, city.idx)
                 .map_or(false, |u| u.owner == player);
             if occupied_by_us {
-                phi -= SHAPE_CITY_TRAIN_BLOCKED;
+                acc.sub("city_train_blocked", SHAPE_CITY_TRAIN_BLOCKED);
             }
         }
     }
     if matches!(goal.stance, Stance::Grow | Stance::Save) {
-        phi -= SHAPE_GOAL_STRANDED * completion_stranded(state, player) as f32;
+        acc.sub("stranded", SHAPE_GOAL_STRANDED * completion_stranded(state, player) as f32);
     }
     // v10: pay for super units in EVERY stance. Only ARM ever outbid the Park's
     // +250 score, so the level-5 pick inverted the moment the macro was not
@@ -168,7 +230,7 @@ pub fn goal_potential_with_unit_goals(
                 .map_or(0.0, |l| save_progress(state, player, l)),
             _ => 0.0,
         };
-        phi += SHAPE_GOAL_SUPER * (1.0 - SHAPE_GOAL_SUPER_ECON_DAMP * urgency) * supers;
+        acc.add("super", SHAPE_GOAL_SUPER * (1.0 - SHAPE_GOAL_SUPER_ECON_DAMP * urgency) * supers);
     }
     // v7 savings ramp: progress toward the banked batch is itself scored, so
     // holding stars climbs a gradient instead of sitting in a flat valley that
@@ -189,7 +251,7 @@ pub fn goal_potential_with_unit_goals(
             _ => 0.0,
         };
         if save_weight > 0.0 {
-            phi += SHAPE_GOAL_SAVE * save_weight * save_progress(state, player, lane);
+            acc.add("save_ramp", SHAPE_GOAL_SAVE * save_weight * save_progress(state, player, lane));
         }
     }
     let width = state.settings.size as i32;
@@ -217,8 +279,10 @@ pub fn goal_potential_with_unit_goals(
             if tile.explorers.contains(&player) {
                 if tile.owner == player {
                     if crate::functions::get_city_at(state, *idx).is_some() {
-                        phi += SHAPE_GOAL_EXPAND_PER_TILE
-                            * (SHAPE_PROX_CAP as f32 + SHAPE_GOAL_EXPAND_DONE);
+                        acc.add(
+                            "expand_achieved",
+                            SHAPE_GOAL_EXPAND_PER_TILE * (SHAPE_PROX_CAP as f32 + SHAPE_GOAL_EXPAND_DONE),
+                        );
                         achieved_targets.insert(*idx);
                     }
                     continue;
@@ -244,9 +308,10 @@ pub fn goal_potential_with_unit_goals(
                     );
                     for (unit_idx, target) in &pairs {
                         let d = cheb(*unit_idx, *target, width);
-                        phi += SHAPE_GOAL_EXPAND_PER_TILE
-                            * w_of(*target)
-                            * (SHAPE_PROX_CAP - d).max(0) as f32;
+                        acc.add(
+                            "expand_approach",
+                            SHAPE_GOAL_EXPAND_PER_TILE * w_of(*target) * (SHAPE_PROX_CAP - d).max(0) as f32,
+                        );
                     }
                     // Targets beyond the unit count keep their closest-unit
                     // gradient, so an under-scouted map still pulls.
@@ -259,9 +324,10 @@ pub fn goal_potential_with_unit_goals(
                             .map(|u| cheb(u.coords.idx, *target, width))
                             .min()
                             .unwrap_or(i32::MAX);
-                        phi += SHAPE_GOAL_EXPAND_PER_TILE
-                            * w_of(*target)
-                            * (SHAPE_PROX_CAP - d).max(0) as f32;
+                        acc.add(
+                            "expand_approach_unassigned",
+                            SHAPE_GOAL_EXPAND_PER_TILE * w_of(*target) * (SHAPE_PROX_CAP - d).max(0) as f32,
+                        );
                     }
                     // v6: a CONTESTED target (visible enemy unit standing on
                     // it) pays one extra converger — the nearest unit not
@@ -285,10 +351,13 @@ pub fn goal_potential_with_unit_goals(
                             .map(|idx| cheb(idx, *target, width))
                             .min();
                         if let Some(d) = second {
-                            phi += SHAPE_GOAL_CONTEST_SECOND
-                                * SHAPE_GOAL_EXPAND_PER_TILE
-                                * w_of(*target)
-                                * (SHAPE_PROX_CAP - d).max(0) as f32;
+                            acc.add(
+                                "expand_contest_second",
+                                SHAPE_GOAL_CONTEST_SECOND
+                                    * SHAPE_GOAL_EXPAND_PER_TILE
+                                    * w_of(*target)
+                                    * (SHAPE_PROX_CAP - d).max(0) as f32,
+                            );
                         }
                     }
                 }
@@ -338,8 +407,10 @@ pub fn goal_potential_with_unit_goals(
                         // dropped out of `goal.orders` (a churned ballot) —
                         // read completion straight from state instead of
                         // relying on the branch above.
-                        phi += SHAPE_UNIT_GOAL_PER_TILE
-                            * (SHAPE_PROX_CAP as f32 + SHAPE_UNIT_GOAL_COMPLETE);
+                        acc.add(
+                            "unit_goal_complete",
+                            SHAPE_UNIT_GOAL_PER_TILE * (SHAPE_PROX_CAP as f32 + SHAPE_UNIT_GOAL_COMPLETE),
+                        );
                         continue;
                     }
                     // Unexplored targets can't be disconfirmed (mirrors
@@ -354,9 +425,10 @@ pub fn goal_potential_with_unit_goals(
                         continue; // invalidated -- reconcile pops it next ply
                     }
                     let d = cheb(*unit_idx, *target, width);
-                    phi += SHAPE_UNIT_GOAL_PER_TILE
-                        * w_of(*target)
-                        * (SHAPE_PROX_CAP - d).max(0) as f32;
+                    acc.add(
+                        "unit_goal_approach",
+                        SHAPE_UNIT_GOAL_PER_TILE * w_of(*target) * (SHAPE_PROX_CAP - d).max(0) as f32,
+                    );
                 }
                 // Orders-listed targets no unit is currently assigned to
                 // (more painted targets than idle units at reconcile time)
@@ -370,9 +442,10 @@ pub fn goal_potential_with_unit_goals(
                         .map(|u| cheb(u.coords.idx, *target, width))
                         .min()
                         .unwrap_or(i32::MAX);
-                    phi += SHAPE_UNIT_GOAL_PER_TILE
-                        * w_of(*target)
-                        * (SHAPE_PROX_CAP - d).max(0) as f32;
+                    acc.add(
+                        "unit_goal_approach_unassigned",
+                        SHAPE_UNIT_GOAL_PER_TILE * w_of(*target) * (SHAPE_PROX_CAP - d).max(0) as f32,
+                    );
                 }
                 for (unit_idx, target) in &pairs {
                     let occupied = crate::functions::get_unit_at(state, *target)
@@ -392,10 +465,13 @@ pub fn goal_potential_with_unit_goals(
                         .map(|idx| cheb(idx, *target, width))
                         .min();
                     if let Some(d) = second {
-                        phi += SHAPE_GOAL_CONTEST_SECOND
-                            * SHAPE_UNIT_GOAL_PER_TILE
-                            * w_of(*target)
-                            * (SHAPE_PROX_CAP - d).max(0) as f32;
+                        acc.add(
+                            "unit_goal_contest_second",
+                            SHAPE_GOAL_CONTEST_SECOND
+                                * SHAPE_UNIT_GOAL_PER_TILE
+                                * w_of(*target)
+                                * (SHAPE_PROX_CAP - d).max(0) as f32,
+                        );
                     }
                 }
             }
@@ -429,10 +505,10 @@ pub fn goal_potential_with_unit_goals(
             let urgency = if th.at_risk { 1.0 } else { 0.5 };
             let plan = crate::ai::combat::defend_plan(state, player, th, &attack_targets);
             for (_, sat) in &plan.assigned {
-                phi += SHAPE_GOAL_DEFEND_COVER * urgency * sat;
+                acc.add("defend_cover", SHAPE_GOAL_DEFEND_COVER * urgency * sat);
             }
             if plan.hold_needed {
-                phi += SHAPE_GOAL_DEFEND_HOLD * urgency;
+                acc.add("defend_hold", SHAPE_GOAL_DEFEND_HOLD * urgency);
             }
             // EXP_ELO_042: recall never conscripts attack-committed units;
             // with none free, shortfall drives prep, not un-commitment.
@@ -455,8 +531,11 @@ pub fn goal_potential_with_unit_goals(
                     .map(|u| cheb(u.coords.idx, *idx, width))
                     .min()
                 {
-                    phi += SHAPE_GOAL_DEFEND_COVER * urgency * 0.5
-                        * ((SHAPE_PROX_CAP - d).max(0) as f32 / SHAPE_PROX_CAP as f32);
+                    acc.add(
+                        "defend_recall",
+                        SHAPE_GOAL_DEFEND_COVER * urgency * 0.5
+                            * ((SHAPE_PROX_CAP - d).max(0) as f32 / SHAPE_PROX_CAP as f32),
+                    );
                 }
             }
         }
@@ -469,7 +548,7 @@ pub fn goal_potential_with_unit_goals(
         for u in &tribe.units {
             if let Some(c) = crate::functions::get_city_at(state, u.coords.idx) {
                 if c.owner != player && c.owner != 0 {
-                    phi += SHAPE_GOAL_ATTACK_PRESS * SHAPE_GOAL_SIEGE_HOLD_MULT;
+                    acc.add("attack_siege_hold", SHAPE_GOAL_ATTACK_PRESS * SHAPE_GOAL_SIEGE_HOLD_MULT);
                     sieging.push(u.coords.idx);
                 }
             }
@@ -493,7 +572,7 @@ pub fn goal_potential_with_unit_goals(
             }
             cands.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.2.cmp(&b.2)).then(a.0.cmp(&b.0)));
             for &(_, sat, _) in cands.iter().take(4) {
-                phi += SHAPE_GOAL_ATTACK_PRESS * sat;
+                acc.add("attack_press", SHAPE_GOAL_ATTACK_PRESS * sat);
             }
         }
     }
@@ -509,7 +588,7 @@ pub fn goal_potential_with_unit_goals(
         let map_unexplored = revealed < (width * width) as usize;
         if has_expand || map_unexplored {
             let cap = (tribe.cities.len() + 1).min(BODY_CAP_MAX);
-            phi += SHAPE_GOAL_BODY * tribe.units.len().min(cap) as f32;
+            acc.add("body", SHAPE_GOAL_BODY * tribe.units.len().min(cap) as f32);
         }
     }
     // Scout term, v4: per-quadrant concave reveal payment — fresh quadrants
@@ -529,7 +608,7 @@ pub fn goal_potential_with_unit_goals(
         }
         let capped: i32 = quad.iter().map(|&c| c.min(SCOUT_QUADRANT_CAP)).sum();
         let w = if has_expand { 0.5 } else { 1.0 };
-        phi += SHAPE_GOAL_SCOUT * w * capped as f32;
+        acc.add("scout", SHAPE_GOAL_SCOUT * w * capped as f32);
     }
     // Lighthouse nudge (v4): each explored map corner pays once.
     if width > 0 {
@@ -539,7 +618,7 @@ pub fn goal_potential_with_unit_goals(
                 .get(&c)
                 .map_or(false, |t| t.explorers.contains(&player))
             {
-                phi += SHAPE_GOAL_LIGHTHOUSE;
+                acc.add("lighthouse", SHAPE_GOAL_LIGHTHOUSE);
             }
         }
     }
@@ -588,7 +667,7 @@ pub fn goal_potential_with_unit_goals(
                     // linear ramp priced Explorer too high on mostly-lit
                     // maps. Quadratic keeps the dark-map edge dominant and
                     // the lit-map edge below Workshop's measured Q lead.
-                    phi += bonus * hidden_frac * hidden_frac;
+                    acc.add("explorer", bonus * hidden_frac * hidden_frac);
                 }
             }
         }
@@ -633,8 +712,8 @@ pub fn goal_potential_with_unit_goals(
         let extra_real = (partners - 1).max(0) as f32;
         let extra_cap = (((ceiling - 1).max(0)) as f32 - extra_real).max(0.0);
         let weight = extra_real + SHAPE_GOAL_YIELD_CAPACITY_W * extra_cap;
-        phi += SHAPE_GOAL_YIELD_ADJ * setting.reward_pop.max(0) as f32 * weight;
-        phi += SHAPE_GOAL_YIELD_ADJ_STARS * setting.reward_stars.max(0) as f32 * weight;
+        acc.add("yield_pop", SHAPE_GOAL_YIELD_ADJ * setting.reward_pop.max(0) as f32 * weight);
+        acc.add("yield_stars", SHAPE_GOAL_YIELD_ADJ_STARS * setting.reward_stars.max(0) as f32 * weight);
     }
     // Standing-forest option value (v5): clearing pays only when the
     // follow-up (build / level-up funding) outweighs the lost option.
@@ -643,7 +722,7 @@ pub fn goal_potential_with_unit_goals(
         .values()
         .filter(|t| t.owner == player && t.terrain_type == crate::types::TerrainType::Forest)
         .count();
-    phi += SHAPE_GOAL_FOREST_STANDING * own_forests as f32;
+    acc.add("forest_standing", SHAPE_GOAL_FOREST_STANDING * own_forests as f32);
     if let Some(aux) = aux {
         let owned = aux
             .recommended_techs
@@ -652,14 +731,14 @@ pub fn goal_potential_with_unit_goals(
                 crate::settings::technology::is_tech_unlocked(&tribe.tech_vanilla, **t)
             })
             .count();
-        phi += SHAPE_GOAL_TECH_FIT * owned as f32;
+        acc.add("tech_fit", SHAPE_GOAL_TECH_FIT * owned as f32);
         if aux.rider_push {
             let riders = tribe
                 .units
                 .iter()
                 .filter(|u| u.unit_type == crate::types::UnitType::Rider)
                 .count();
-            phi += SHAPE_GOAL_RIDER * riders as f32;
+            acc.add("rider", SHAPE_GOAL_RIDER * riders as f32);
         }
         if !aux.preferred_units.is_empty() {
             let preferred = tribe
@@ -668,10 +747,10 @@ pub fn goal_potential_with_unit_goals(
                 .filter(|u| aux.preferred_units.contains(&u.unit_type))
                 .map(crate::rules::combat::unit_worth)
                 .sum::<i32>();
-            phi += SHAPE_GOAL_LANE_PER_COST * preferred as f32;
+            acc.add("lane_preferred", SHAPE_GOAL_LANE_PER_COST * preferred as f32);
         }
     }
-    phi
+    acc.phi
 }
 
 #[cfg(test)]
