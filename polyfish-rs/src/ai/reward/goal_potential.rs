@@ -445,16 +445,26 @@ fn goal_potential_inner(
                 }
                 // Orders-listed targets no unit is currently assigned to
                 // (more painted targets than idle units at reconcile time)
-                // keep their closest-unit gradient, same as the legacy path.
+                // keep their closest-unit gradient, same as the legacy path
+                // -- but ONLY over units that are themselves idle. A unit
+                // with its own active goal used to count here too, so
+                // stepping toward *its own* target could pay a second,
+                // unrelated credit just for incidentally being the closest
+                // thing to a DIFFERENT target it was never going to pursue
+                // (the seed 1787500020 double-dip: it out-scored actually
+                // reaching an adjacent village). Only a genuinely idle unit
+                // could ever end up claiming this target, so only idle
+                // units should move its gradient.
                 let assigned: std::collections::HashSet<i32> =
                     pairs.iter().map(|(_, t)| *t).collect();
                 for target in approach_targets.iter().filter(|t| !assigned.contains(t)) {
                     let d = tribe
                         .units
                         .iter()
+                        .filter(|u| store.active(u.id).is_none())
                         .map(|u| cheb(u.coords.idx, *target, width))
-                        .min()
-                        .unwrap_or(i32::MAX);
+                        .min();
+                    let Some(d) = d else { continue };
                     acc.add(
                         "unit_goal_approach_unassigned",
                         SHAPE_UNIT_GOAL_PER_TILE * w_of(*target) * (SHAPE_PROX_CAP - d).max(0) as f32,

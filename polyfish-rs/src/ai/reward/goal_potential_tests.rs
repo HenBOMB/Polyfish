@@ -984,6 +984,75 @@ use crate::types::UnitType;
         );
     }
 
+    /// Regression for the seed 1787500020 double-dip: a unit already
+    /// pursuing its OWN Expand goal must not also move the "unassigned
+    /// target" gradient for a completely different, unclaimed order target
+    /// just by wandering near it -- only a genuinely idle unit could ever
+    /// end up claiming that target, so only idle units should move its
+    /// pricing. This is what let a unit walk past an adjacent, capturable
+    /// village toward its own (bad) guess: the incidental "unassigned"
+    /// credit for a THIRD village out-scored actually reaching the one next
+    /// to it.
+    ///
+    /// Fixture: A holds its own goal (OWN) and is always too far from OWN
+    /// to score there (pinned at 0 both before/after, isolating the effect
+    /// under test). A starts farther than B from OTHER (an unclaimed order
+    /// target), then moves closer than B. Pre-fix, the "closest unit"
+    /// search included A, so OTHER's gradient would track A's shrinking
+    /// distance even though A was never going to pursue it. Post-fix, A is
+    /// excluded (it has its own goal); B never moves, so OTHER's gradient
+    /// -- and the whole Φ delta, since nothing else in this bare fixture
+    /// depends on position -- must stay flat despite A's approach.
+    #[test]
+    fn unassigned_target_gradient_ignores_a_unit_with_its_own_goal() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        use crate::ai::search::unit_goals::{UnitGoal, UnitGoalStore};
+
+        const OWN: i32 = 0; // row0,col0
+        const OTHER: i32 = 115; // row10,col5
+        const A_ID: u32 = 1;
+        const B_ID: u32 = 2;
+
+        let mut before = GameState::default();
+        before.settings.size = 11;
+        add_visible_village(&mut before, OWN);
+        add_visible_village(&mut before, OTHER);
+        let mut t1 = TribeState::default();
+        t1.units.push(UnitState { id: A_ID, ..unit_at(110, UnitType::Warrior) }); // row10,col0: d(OWN)=10, d(OTHER)=5
+        t1.units.push(UnitState { id: B_ID, ..unit_at(22, UnitType::Warrior) }); // row2,col0: d(OTHER)=8, constant
+        before.tribes.insert(1, t1);
+
+        let mut after = before.clone();
+        // A moves to row10,col4: d(OWN)=10 (unchanged, still pinned at 0),
+        // d(OTHER)=1 (much closer). B is untouched.
+        after.tribes.get_mut(&1).unwrap().units[0] = UnitState { id: A_ID, ..unit_at(114, UnitType::Warrior) };
+
+        let goal = MacroGoal {
+            orders: vec![(OrderKind::Expand, OWN), (OrderKind::Expand, OTHER)],
+            stance: Stance::Grow,
+            save_target: None,
+        };
+        let mut store = UnitGoalStore::default();
+        store.assign(A_ID, UnitGoal { kind: OrderKind::Expand, target: OWN });
+
+        let phi_before = goal_potential_with_unit_goals(&before, 1, &goal, None, None, Some(&store));
+        let phi_after = goal_potential_with_unit_goals(&after, 1, &goal, None, None, Some(&store));
+        assert!(
+            (phi_after - phi_before).abs() < 1e-3,
+            "A approaching a target it doesn't own must not move Φ: before {phi_before}, after {phi_after}"
+        );
+
+        // Sanity: the fixture must actually be capable of triggering the
+        // bug -- confirm the pre-fix formula (closest of ALL units, A
+        // included) really would have produced a nonzero delta here.
+        let term = |d: i32| SHAPE_UNIT_GOAL_PER_TILE * (SHAPE_PROX_CAP - d).max(0) as f32;
+        let predicted_buggy_delta = term(1) - term(5); // A's distance to OTHER: 5 -> 1
+        assert!(
+            predicted_buggy_delta.abs() > 1e-3,
+            "sanity: fixture must exercise a real distance change for the pre-fix formula"
+        );
+    }
+
     /// Regression for the turn-1 capital-return incident (seed 1787500002):
     /// a unit sitting on an owned city that still has open Train capacity
     /// must cost potential on the real trajectory, refunded the instant it

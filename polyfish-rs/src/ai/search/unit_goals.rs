@@ -157,15 +157,87 @@ fn assign_from_candidates(
     }
 }
 
+/// Whether `target`'s tile has actually been seen — distinguishes a
+/// confirmed, real target from a still-unconfirmed fog guess. `goal_outcome`
+/// returning `None` doesn't tell them apart (both "can't disconfirm what we
+/// can't see" and "explored and still valid" read as `None`); this does.
+fn is_confirmed(state: &GameState, target: i32, player: PlayerId) -> bool {
+    state.tiles.get(&target).is_some_and(|t| t.explorers.contains(&player))
+}
+
+/// Lets a newly-confirmed real target outbid a unit that's still committed
+/// to an unconfirmed guess (Verdi's Aug 2026 call): a unit can lock onto a
+/// guess before any real village is visible, then a real one turns up right
+/// next to it, and a farther unit gets it instead purely because it happened
+/// to be the idle one when the assignment passes below ran — the exact seed
+/// 1787500020 bug (unit stuck on a guess that resolved to empty ground,
+/// standing adjacent to a real village a freshly-spawned unit three tiles
+/// away claimed by default). Runs BEFORE the two passes below, so anyone
+/// this frees up (the loser's dropped guess) or leaves still wanting
+/// (whoever didn't win the confirmed target) flows straight into the
+/// ordinary idle matching in the same reconcile call, not a ply later.
+///
+/// Deliberately narrow, to stay provably thrash-free: only touches targets
+/// that are confirmed AND still fully unclaimed at this exact moment (never
+/// steals a target that's already assigned to someone, whether that
+/// assignment came from a prior rebid or the ordinary passes), and only
+/// ever displaces a unit that's on an unconfirmed guess or idle — never a
+/// unit already on a confirmed target. Together those mean a given target
+/// can change hands at most once this way, at the moment it's first
+/// confirmed, never again after — real confirmed-to-confirmed swaps are
+/// exactly the thrash this stays away from. Honest scope: a confirmed
+/// target already claimed at the moment it was confirmed doesn't get
+/// revisited later even if a closer unit wanders by afterward; catching
+/// that needs continuous re-optimization, a bigger and thrashier thing this
+/// isn't attempting.
+fn rebid_confirmed_targets(
+    state: &GameState,
+    player: PlayerId,
+    tribe: &crate::states::TribeState,
+    store: &mut UnitGoalStore,
+    status: &mut FxHashMap<u32, GoalStatus>,
+) {
+    let claimed = store.active_targets();
+    let confirmed: Vec<i32> = crate::ai::oracle_macro::expand_targets(state, player, None)
+        .into_iter()
+        .filter(|&t| {
+            is_confirmed(state, t, player)
+                && goal_outcome(state, t, player).is_none()
+                && !claimed.contains(&t)
+        })
+        .collect();
+    if confirmed.is_empty() {
+        return;
+    }
+    let eligible: Vec<&crate::states::UnitState> = tribe
+        .units
+        .iter()
+        .filter(|u| match store.active(u.id) {
+            None => true,
+            Some(g) => g.kind == OrderKind::Expand && !is_confirmed(state, g.target, player),
+        })
+        .collect();
+    if eligible.is_empty() {
+        return;
+    }
+    for (id, target) in assign_expand_targets_by_id(state, player, &eligible, &confirmed) {
+        store.advance(id); // drop whatever unconfirmed guess (if any) it held
+        store.assign(id, UnitGoal { kind: OrderKind::Expand, target });
+        status.insert(id, GoalStatus::Assigned);
+    }
+}
+
 /// Runs once per real ply (never inside a rollout — see the design doc's
 /// Fork 2). Prunes dead/converted-away units, advances completed/invalidated
-/// goals, then assigns idle units in two passes: first against this turn's
-/// committed `MacroGoal.orders`, then — if anyone is still idle — directly
-/// against the scripted layer's own `expand_targets` (Verdi's Aug 2026 call:
-/// a unit can never be goal-less while anything is paintable, full stop, not
+/// goals, lets a newly-confirmed target outbid a unit still chasing an
+/// unconfirmed guess (`rebid_confirmed_targets`), then assigns whoever's
+/// still idle in two passes: first against this turn's committed
+/// `MacroGoal.orders`, then — if anyone is still idle — directly against the
+/// scripted layer's own `expand_targets` (Verdi's Aug 2026 call: a unit can
+/// never be goal-less while anything is paintable, full stop, not
 /// contingent on which candidate the tree's noisy leaf eval happened to
 /// commit to; see EXP_ELO_034b-038's own verdict that directive selection
-/// "starves for evaluation, not options" at this search depth). The second
+/// "starves for evaluation, not options" at this search depth). That last
 /// pass is what makes that a guarantee instead of a bet: `RealFilter` can
 /// strip a fog-guessed target out of `goal.orders` on one turn and not the
 /// next, and a unit shouldn't sit idle in between just because the search's
@@ -218,6 +290,8 @@ pub fn reconcile_unit_goals(
             }
         }
     }
+
+    rebid_confirmed_targets(state, player, tribe, store, &mut status);
 
     let from_orders: Vec<i32> =
         goal.orders.iter().filter(|(k, _)| *k == OrderKind::Expand).map(|(_, t)| *t).collect();
@@ -382,6 +456,58 @@ mod tests {
         let status = reconcile_unit_goals(&state, 1, &expand_goal(5), &mut store);
         assert_ne!(status.get(&1), Some(&GoalStatus::Idle));
         assert_ne!(status.get(&2), Some(&GoalStatus::Idle));
+    }
+
+    #[test]
+    fn rebid_lets_a_confirmed_target_outbid_an_unconfirmed_guess() {
+        // Unit 1 locked onto an unconfirmed guess (tile 70, never explored)
+        // on an earlier ply. Village 5 is real, explored, and now much
+        // closer to unit 1 than to unit 2 (freshly idle) -- the exact shape
+        // of the seed 1787500020 bug: the busy-but-closer unit should win
+        // the confirmed target, not the farther unit that merely happened
+        // to be idle when assignment ran.
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        add_visible_village(&mut state, 5);
+        let mut tribe = TribeState::default();
+        tribe.units.push(UnitState { id: 1, ..unit_at(0) });
+        tribe.units.push(UnitState { id: 2, ..unit_at(100) });
+        state.tribes.insert(1, tribe);
+
+        let mut store = UnitGoalStore::default();
+        store.assign(1, UnitGoal { kind: OrderKind::Expand, target: 70 });
+
+        let status = reconcile_unit_goals(&state, 1, &expand_goal(5), &mut store);
+        assert_eq!(store.active(1), Some(UnitGoal { kind: OrderKind::Expand, target: 5 }));
+        assert_eq!(status.get(&1), Some(&GoalStatus::Assigned));
+    }
+
+    #[test]
+    fn rebid_never_touches_two_units_already_on_confirmed_targets() {
+        // Both units are already committed to real, explored villages.
+        // Confirmed-to-confirmed reassignment must never happen here, no
+        // matter the relative distances -- that's exactly the thrash this
+        // pass stays away from.
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        add_visible_village(&mut state, 5);
+        add_visible_village(&mut state, 90);
+        let mut tribe = TribeState::default();
+        tribe.units.push(UnitState { id: 1, ..unit_at(0) });
+        tribe.units.push(UnitState { id: 2, ..unit_at(99) });
+        state.tribes.insert(1, tribe);
+
+        let mut store = UnitGoalStore::default();
+        store.assign(1, UnitGoal { kind: OrderKind::Expand, target: 5 });
+        store.assign(2, UnitGoal { kind: OrderKind::Expand, target: 90 });
+
+        let goal = MacroGoal {
+            orders: vec![(OrderKind::Expand, 5), (OrderKind::Expand, 90)],
+            ..Default::default()
+        };
+        reconcile_unit_goals(&state, 1, &goal, &mut store);
+        assert_eq!(store.active(1), Some(UnitGoal { kind: OrderKind::Expand, target: 5 }));
+        assert_eq!(store.active(2), Some(UnitGoal { kind: OrderKind::Expand, target: 90 }));
     }
 
     #[test]
