@@ -99,6 +99,24 @@ impl PhiAcc<'_, '_> {
     }
 }
 
+/// Multiplier on a target's approach pull: `SHAPE_GOAL_RUIN_W` while it's a
+/// Ruin and the tribe hasn't found its first village yet (`cities.len() < 2`
+/// -- still just the capital), 1.0 otherwise. Applied on top of whatever
+/// weight the caller already computed (retake, fog-guess, etc.), never in
+/// place of it.
+fn ruin_pull_discount(state: &GameState, tribe: &crate::states::TribeState, idx: i32) -> f32 {
+    if tribe.cities.len() >= 2 {
+        return 1.0;
+    }
+    let is_ruin = crate::functions::get_structure_at(state, idx)
+        .map_or(false, |s| s.structure_type == crate::types::StructureType::Ruin);
+    if is_ruin {
+        SHAPE_GOAL_RUIN_W
+    } else {
+        1.0
+    }
+}
+
 fn goal_potential_inner(
     state: &GameState,
     player: i32,
@@ -108,7 +126,7 @@ fn goal_potential_inner(
     unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
     breakdown: &mut Option<&mut Vec<(&'static str, f32)>>,
 ) -> f32 {
-    use crate::ai::oracle_macro::{expand_target_valid, OrderKind, Stance};
+    use crate::ai::oracle_macro::{OrderKind, Stance};
     let Some(tribe) = state.tribes.get(&player) else {
         return 0.0;
     };
@@ -399,50 +417,30 @@ fn goal_potential_inner(
                     if achieved_targets.contains(target) {
                         continue; // already paid by the goal.orders-scoped branch above
                     }
-                    let Some(tile) = state.tiles.get(target) else {
-                        continue;
-                    };
-                    if tile.owner == player && crate::functions::get_city_at(state, *target).is_some() {
-                        // Reached this ply, but the target had already
-                        // dropped out of `goal.orders` (a churned ballot) —
-                        // read completion straight from state instead of
-                        // relying on the branch above.
-                        acc.add(
-                            "unit_goal_complete",
-                            SHAPE_UNIT_GOAL_PER_TILE * (SHAPE_PROX_CAP as f32 + SHAPE_UNIT_GOAL_COMPLETE),
-                        );
-                        continue;
+                    // Single source of truth, shared with `reconcile_unit_goals`'s
+                    // advance/invalidate decision, so the two can't drift on
+                    // what counts as "this target is done" again -- see the
+                    // Ruin-displacement regression `goal_outcome`'s doc notes.
+                    match crate::ai::search::unit_goals::goal_outcome(state, *target, player) {
+                        Some(true) => {
+                            // Reached this ply, but the target had already
+                            // dropped out of `goal.orders` (a churned ballot)
+                            // — read completion straight from state instead
+                            // of relying on the branch above.
+                            acc.add(
+                                "unit_goal_complete",
+                                SHAPE_UNIT_GOAL_PER_TILE * (SHAPE_PROX_CAP as f32 + SHAPE_UNIT_GOAL_COMPLETE),
+                            );
+                        }
+                        Some(false) => {} // invalidated -- reconcile pops it next ply
+                        None => {
+                            let d = cheb(*unit_idx, *target, width);
+                            acc.add(
+                                "unit_goal_approach",
+                                SHAPE_UNIT_GOAL_PER_TILE * w_of(*target) * (SHAPE_PROX_CAP - d).max(0) as f32,
+                            );
+                        }
                     }
-                    // Ruins are destroyed on capture, never converted into an
-                    // owned city, so the check above can never see a Ruin
-                    // complete -- without this, the approach term's Φ (paid
-                    // up to this point) simply vanishes the ply a Ruin is
-                    // captured, penalizing the capture instead of rewarding
-                    // it. `*unit_idx` is this unit's own position, re-read
-                    // fresh on this call, so there's no occupancy ambiguity
-                    // to guard against here the way `goal_outcome` has to.
-                    if *unit_idx == *target
-                        && crate::functions::get_structure_at(state, *target).is_none()
-                    {
-                        acc.add(
-                            "unit_goal_complete",
-                            SHAPE_UNIT_GOAL_PER_TILE * (SHAPE_PROX_CAP as f32 + SHAPE_UNIT_GOAL_COMPLETE),
-                        );
-                        continue;
-                    }
-                    // Unexplored targets can't be disconfirmed (mirrors
-                    // `goal_outcome`'s same guard) -- skip straight to
-                    // approach pricing instead of reading expand_target_valid,
-                    // which requires exploration and would otherwise
-                    // invalidate every fog-guess pair.
-                    if tile.explorers.contains(&player) && !expand_target_valid(state, *target, player) {
-                        continue; // invalidated -- reconcile pops it next ply
-                    }
-                    let d = cheb(*unit_idx, *target, width);
-                    acc.add(
-                        "unit_goal_approach",
-                        SHAPE_UNIT_GOAL_PER_TILE * w_of(*target) * (SHAPE_PROX_CAP - d).max(0) as f32,
-                    );
                 }
                 // Orders-listed targets no unit is currently assigned to
                 // (more painted targets than idle units at reconcile time)

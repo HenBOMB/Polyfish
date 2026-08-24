@@ -1066,3 +1066,45 @@ use crate::types::UnitType;
              vacated {phi_vacated}"
         );
     }
+
+    /// Aug 2026 regression: a Ruin's "free unit" reward summons the new unit
+    /// ONTO the tile, and if the capturing unit is already standing there,
+    /// the engine displaces it to an adjacent tile to make room -- found by
+    /// watching a real replay where the capturer stepped OFF a Ruin it had
+    /// an active Expand goal for, because the completion check required
+    /// *that exact unit* to still be on the target. It must fire off
+    /// occupancy by ANY of our units instead (matching `goal_outcome`'s
+    /// already-correct pattern), since the displaced unit and the newly
+    /// summoned one are equally good evidence the capture happened.
+    #[test]
+    fn ruin_completion_fires_even_when_the_capturer_is_displaced() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        use crate::ai::search::unit_goals::{UnitGoal, UnitGoalStore};
+
+        const RUIN_IDX: i32 = 60;
+        const CAPTURER_ID: u32 = 1;
+
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        state.tiles.insert(RUIN_IDX, TileState::default());
+        // No entry in state.structures for RUIN_IDX -- captured, destroyed.
+        let mut t1 = TribeState::default();
+        // The goal-holder, displaced one tile off the Ruin after capture.
+        t1.units.push(UnitState { id: CAPTURER_ID, owner: 1, ..unit_at(59, UnitType::Warrior) });
+        // The newly-summoned unit, standing where the Ruin was.
+        t1.units.push(UnitState { id: 2, owner: 1, ..unit_at(RUIN_IDX, UnitType::Swordsman) });
+        state.tribes.insert(1, t1);
+
+        let mut store = UnitGoalStore::default();
+        store.assign(CAPTURER_ID, UnitGoal { kind: OrderKind::Expand, target: RUIN_IDX });
+
+        let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+        let (_, bd) = goal_potential_breakdown(&state, 1, &goal, None, None, Some(&store));
+        let complete: f32 =
+            bd.iter().filter(|(l, _)| *l == "unit_goal_complete").map(|(_, v)| v).sum();
+        assert!(
+            complete > 0.0,
+            "Ruin completion must pay out even when the capturer was displaced by the reward, \
+             got breakdown {bd:?}"
+        );
+    }

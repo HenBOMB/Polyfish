@@ -85,14 +85,18 @@ impl UnitGoalStore {
     }
 }
 
-/// Per-unit completion predicate for an Expand goal. Deliberately NOT
-/// `fog_order_dead`: that whole-tribe check treats any owned-city tile as
-/// "not dead" regardless of which unit got there, which would let a unit
-/// keep chasing (and get paid for) a target a *different* unit already
-/// captured. Returns `Some(true)` = completed (own city on it, pays the
-/// bonus), `Some(false)` = invalidated (no longer capturable/retakeable, no
-/// bonus), `None` = still live, keep pursuing.
-fn goal_outcome(state: &GameState, target: i32, player: PlayerId) -> Option<bool> {
+/// Per-unit completion predicate for an Expand goal -- the single source of
+/// truth for "what happened to this target", shared with `goal_potential.rs`'s
+/// per-unit Φ pricing so the two can never independently drift on it again
+/// (they did once: goal_potential.rs briefly required the exact assignee to
+/// still be standing on the tile, which the Ruin "summon a unit onto it"
+/// reward can displace). Deliberately NOT `fog_order_dead`: that whole-tribe
+/// check treats any owned-city tile as "not dead" regardless of which unit
+/// got there, which would let a unit keep chasing (and get paid for) a
+/// target a *different* unit already captured. Returns `Some(true)` =
+/// completed (pays the bonus), `Some(false)` = invalidated (no longer
+/// capturable/retakeable, no bonus), `None` = still live, keep pursuing.
+pub(crate) fn goal_outcome(state: &GameState, target: i32, player: PlayerId) -> Option<bool> {
     let Some(tile) = state.tiles.get(&target) else {
         return Some(false);
     };
