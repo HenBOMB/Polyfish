@@ -204,12 +204,8 @@ pub fn city_completable_now(
     city.progress + max_affordable_pop(state, player, city, stars) >= city.level + 1
 }
 
-/// v7: a stranded city is FLAGGED, not billed by depth. v6 summed every
-/// stranded pop point, which made a level-up that leaves 2 overflow progress
-/// book −150 against its own +150 of SPT — the level-ups we want paid for
-/// themselves. Capping at one point per city keeps the "don't start a level
-/// you cannot finish" signal (0 → 1 progress still costs a full unit) while
-/// pricing the DECISION rather than the sunk history.
+/// Limits the stranded-growth penalty above to one point per city, no
+/// matter how much progress is stuck there.
 pub const STRANDED_PER_CITY_CAP: i32 = 1;
 
 /// v6: STRANDED PROGRESS — cities whose next level cannot complete from
