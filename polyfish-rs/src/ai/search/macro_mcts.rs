@@ -753,8 +753,7 @@ fn fog_order_dead(state: &crate::states::GameState, t: i32, pov: PlayerId) -> bo
     if tile.owner == pov && crate::functions::get_city_at(state, t).is_some() {
         return false;
     }
-    !crate::ai::oracle_macro::still_capturable(state, t, pov)
-        && !crate::ai::oracle_macro::retakeable_village(state, t, pov)
+    !crate::ai::oracle_macro::expand_target_valid(state, t, pov)
 }
 
 /// EXP_ELO_047 Phase A. One JSONL row per planned root: the same state read

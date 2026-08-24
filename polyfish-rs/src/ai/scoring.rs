@@ -9,6 +9,28 @@ use crate::types::{
 
 /// Score a move based on heuristics
 pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
+    score_move_inner(game, mv, None)
+}
+
+/// Same as [`score_move`], but the Step branch's capturable-pull search
+/// skips targets a DIFFERENT unit's per-unit Expand goal already claims --
+/// see [`nearest_visible_capturable_excluding`]. `macro_exec::rank_plies`
+/// (the real per-ply commit path) is the only caller that has a
+/// `UnitGoalStore` to offer; every other backend keeps calling `score_move`
+/// unchanged.
+pub fn score_move_with_unit_goals(
+    game: &Game,
+    mv: &dyn Move,
+    unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
+) -> f32 {
+    score_move_inner(game, mv, unit_goals)
+}
+
+fn score_move_inner(
+    game: &Game,
+    mv: &dyn Move,
+    unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
+) -> f32 {
     let state = &game.state;
     let move_type = mv.move_type();
     let tribe_id = state.settings.current_player_turn_id;
@@ -546,8 +568,26 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                     if let Ok(src_idx) = mv.source_idx() {
                         let src_coords = Coords::from_index(src_idx as i32, map_size);
 
-                        let capturable =
-                            nearest_visible_capturable(state, player_id, src_coords);
+                        // Claim-aware when a per-unit goal store is
+                        // available: exclude every target a DIFFERENT unit
+                        // already claims, but never our own unit's own
+                        // assigned target, or its own pull toward its own
+                        // goal would break.
+                        let capturable = match unit_goals {
+                            Some(store) => {
+                                let mut exclude = store.active_targets();
+                                if let Some(u) = crate::functions::get_unit_at(state, src_idx as i32)
+                                {
+                                    if let Some(g) = store.active(u.id) {
+                                        exclude.remove(&g.target);
+                                    }
+                                }
+                                nearest_visible_capturable_excluding(
+                                    state, player_id, src_coords, &exclude,
+                                )
+                            }
+                            None => nearest_visible_capturable(state, player_id, src_coords),
+                        };
                         // On final approach (visible capturable within 2), damp the
                         // curiosity terms: measured on replays, reveal-chasing beat
                         // the closing gradient in 85% of d=2 episodes — the unit
@@ -868,11 +908,30 @@ pub(crate) fn nearest_visible_capturable(
     tribe_id: i32,
     from: Coords,
 ) -> Option<(Coords, i32)> {
+    nearest_visible_capturable_excluding(state, tribe_id, from, &rustc_hash::FxHashSet::default())
+}
+
+/// Same as [`nearest_visible_capturable`], but skips targets in `exclude` --
+/// used so a unit doesn't get pulled toward a Ruin/Village a DIFFERENT
+/// unit's own per-unit Expand goal already claims. Without this, two units
+/// near the same close target independently compute the same "nearest
+/// capturable" and walk identical paths (Aug 2026: found chasing the same
+/// Ruin two units deep) -- this heuristic has no notion of "someone else is
+/// already going there" on its own, unlike T3's per-unit goal-priced Φ.
+pub(crate) fn nearest_visible_capturable_excluding(
+    state: &crate::states::GameState,
+    tribe_id: i32,
+    from: Coords,
+    exclude: &rustc_hash::FxHashSet<i32>,
+) -> Option<(Coords, i32)> {
     let map_size = state.map_size();
     let mut best: Option<(Coords, i32)> = None;
     for (&idx, structure) in state.structures.iter() {
         let Some(s) = structure else { continue };
         let _ = s;
+        if exclude.contains(&idx) {
+            continue;
+        }
         if !crate::rules::capture::is_capturable(
             state,
             idx,

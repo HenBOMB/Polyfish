@@ -9,7 +9,7 @@ use crate::ai::eval_server::Evaluator;
 use crate::ai::macro_exec::{self, TurnCounters};
 use crate::ai::oracle_macro::{
     LaneState, MacroGoal, OrderKind, Stance, StanceCommit, tech_discipline_active,
-    retakeable_village, pick_save_lane, compute_macro_goal, compute_goal_aux, still_capturable,
+    expand_target_valid, pick_save_lane, compute_macro_goal, compute_goal_aux,
     observe_lane_state, commit_macro_goal,
 };
 use crate::game::Game;
@@ -334,11 +334,7 @@ pub fn enumerate_candidates_with_belief(
     let real: Vec<(OrderKind, i32)> = base
         .orders
         .iter()
-        .filter(|(kind, idx)| {
-            *kind != OrderKind::Expand
-                || still_capturable(state, *idx, pov)
-                || retakeable_village(state, *idx, pov)
-        })
+        .filter(|(kind, idx)| *kind != OrderKind::Expand || expand_target_valid(state, *idx, pov))
         .cloned()
         .collect();
     if real != base.orders {

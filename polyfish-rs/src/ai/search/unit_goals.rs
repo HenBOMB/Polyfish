@@ -15,8 +15,8 @@ use std::collections::VecDeque;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ai::movement::assign_expand_targets_by_id;
-use crate::ai::oracle_macro::{retakeable_village, still_capturable, MacroGoal, OrderKind};
-use crate::functions::get_city_at;
+use crate::ai::oracle_macro::{expand_target_valid, MacroGoal, OrderKind};
+use crate::functions::{get_city_at, get_structure_at, get_unit_at};
 use crate::states::{GameState, PlayerId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,10 +99,22 @@ fn goal_outcome(state: &GameState, target: i32, player: PlayerId) -> Option<bool
     if tile.owner == player && get_city_at(state, target).is_some() {
         return Some(true);
     }
+    // Ruins are destroyed on capture, never converted into an owned city
+    // like a Village is (whose StructureType::Village record never clears —
+    // see actions/city.rs), so the check above can't see a Ruin complete.
+    // Gated on occupancy: a guessed village site that resolves to empty
+    // ground hits the ordinary invalidation branch below well before a unit
+    // could physically stand on it (vision outruns approach), so "our own
+    // unit is here and nothing's left" reads as a capture, not a bad guess.
+    if get_structure_at(state, target).is_none()
+        && get_unit_at(state, target).is_some_and(|u| u.owner == player)
+    {
+        return Some(true);
+    }
     if !tile.explorers.contains(&player) {
         return None; // unexplored (a fog guess) -- can't disconfirm what we can't see
     }
-    if !still_capturable(state, target, player) && !retakeable_village(state, target, player) {
+    if !expand_target_valid(state, target, player) {
         return Some(false);
     }
     None

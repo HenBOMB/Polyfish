@@ -283,7 +283,7 @@ pub fn rank_plies(
     let mut scored: Vec<(f32, Box<dyn Move>)> = moves
         .into_iter()
         .map(|m| {
-            let mut s = scoring::score_move(game, m.as_ref());
+            let mut s = scoring::score_move_with_unit_goals(game, m.as_ref(), unit_goals);
             if lambda != 0.0 && m.move_type() != MoveType::EndTurn {
                 if let Some(undo) = game.simulate_move(m.as_ref()) {
                     let phi_post = reward::goal_potential_with_unit_goals(

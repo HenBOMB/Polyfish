@@ -582,6 +582,43 @@ pub fn still_capturable(state: &GameState, idx: i32, player: PlayerId) -> bool {
     )
 }
 
+/// A capturable Ruin, explored and not yet taken. `still_capturable` never
+/// sees these (`CaptureKind::OPEN_VILLAGE` is village-only) — Ruins were
+/// excluded from Expand-order painting entirely until Aug 2026, which left
+/// them governed ONLY by the raw, per-unit-uncoordinated scoring.rs pull
+/// (`nearest_visible_capturable`, which DOES see them via
+/// `CaptureKind::NEUTRAL`): two units near the same close Ruin would
+/// independently compute the same "nearest capturable" and walk identical
+/// paths, since neither the T3 goal-priced Φ nor the per-unit `UnitGoalStore`
+/// dedup ever engaged for a target that could never enter `goal.orders`.
+pub fn capturable_ruin(state: &GameState, idx: i32, player: PlayerId) -> bool {
+    crate::rules::capture::is_capturable(
+        state,
+        idx,
+        player,
+        crate::rules::capture::CaptureKind {
+            neutral_villages: false,
+            enemy_villages: false,
+            ruins: true,
+            starfish: false,
+        },
+        true,
+    )
+}
+
+/// A tile worth painting/keeping as an Expand order target: a still-open
+/// village, an enemy-captured village worth retaking, or a capturable Ruin.
+/// One predicate so `expand_targets`, the per-unit goal outcome, the
+/// whole-goal fog-strip, the belief "real filter" candidate, and the
+/// per-unit Φ validity check can never independently drift on what counts —
+/// `capture.rs`'s own doc notes twelve divergent variants were consolidated
+/// once already; this keeps it at one.
+pub fn expand_target_valid(state: &GameState, idx: i32, player: PlayerId) -> bool {
+    still_capturable(state, idx, player)
+        || retakeable_village(state, idx, player)
+        || capturable_ruin(state, idx, player)
+}
+
 /// v6: Chebyshev reach within which a lost/enemy-taken village stays a
 /// painted retake target — beyond it the pull would become a cross-map
 /// crusade holding the GROW window open artificially.
@@ -644,7 +681,7 @@ pub fn expand_targets(
         .structures
         .keys()
         .copied()
-        .filter(|&idx| still_capturable(state, idx, player) || retakeable_village(state, idx, player))
+        .filter(|&idx| expand_target_valid(state, idx, player))
         .collect();
     let tribe_cities = state.tribes.get(&player).map_or(0, |t| t.cities.len());
     if tribe_cities < COMMIT_CITY_TARGET && targets.len() < EXPAND_TARGET_MIN {

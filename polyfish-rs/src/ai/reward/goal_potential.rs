@@ -108,7 +108,7 @@ fn goal_potential_inner(
     unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
     breakdown: &mut Option<&mut Vec<(&'static str, f32)>>,
 ) -> f32 {
-    use crate::ai::oracle_macro::{retakeable_village, still_capturable, OrderKind, Stance};
+    use crate::ai::oracle_macro::{expand_target_valid, OrderKind, Stance};
     let Some(tribe) = state.tribes.get(&player) else {
         return 0.0;
     };
@@ -413,15 +413,29 @@ fn goal_potential_inner(
                         );
                         continue;
                     }
+                    // Ruins are destroyed on capture, never converted into an
+                    // owned city, so the check above can never see a Ruin
+                    // complete -- without this, the approach term's Φ (paid
+                    // up to this point) simply vanishes the ply a Ruin is
+                    // captured, penalizing the capture instead of rewarding
+                    // it. `*unit_idx` is this unit's own position, re-read
+                    // fresh on this call, so there's no occupancy ambiguity
+                    // to guard against here the way `goal_outcome` has to.
+                    if *unit_idx == *target
+                        && crate::functions::get_structure_at(state, *target).is_none()
+                    {
+                        acc.add(
+                            "unit_goal_complete",
+                            SHAPE_UNIT_GOAL_PER_TILE * (SHAPE_PROX_CAP as f32 + SHAPE_UNIT_GOAL_COMPLETE),
+                        );
+                        continue;
+                    }
                     // Unexplored targets can't be disconfirmed (mirrors
                     // `goal_outcome`'s same guard) -- skip straight to
-                    // approach pricing instead of reading still_capturable/
-                    // retakeable_village, which both require exploration
-                    // and would otherwise invalidate every fog-guess pair.
-                    if tile.explorers.contains(&player)
-                        && !still_capturable(state, *target, player)
-                        && !retakeable_village(state, *target, player)
-                    {
+                    // approach pricing instead of reading expand_target_valid,
+                    // which requires exploration and would otherwise
+                    // invalidate every fog-guess pair.
+                    if tile.explorers.contains(&player) && !expand_target_valid(state, *target, player) {
                         continue; // invalidated -- reconcile pops it next ply
                     }
                     let d = cheb(*unit_idx, *target, width);
