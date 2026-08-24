@@ -143,6 +143,7 @@ TAGS = {
     "SHAPE_GOAL_SUPER_ECON_DAMP": (("military",), "carrot"),
     "SHAPE_GOAL_COMPLETION": (("economy",), "carrot"),
     "SHAPE_GOAL_RETAKE_W": (("explore", "military"), "carrot"),
+    "SHAPE_GOAL_RUIN_W": (("explore",), "carrot"),
     "SHAPE_GOAL_CONTEST_SECOND": (("explore", "military"), "carrot"),
     "SHAPE_GOAL_BODY": (("explore", "military"), "carrot"),
     "BODY_CAP_MAX": (("explore", "military"), "carrot"),
