@@ -57,8 +57,9 @@ def init_model():
     print(f"  Total parameters: {total_params:,}")
     print(f"  Trainable parameters: {trainable_params:,}")
     
-    # Save
-    save_file(model.state_dict(), "model.safetensors")
+    # Save (tmp + replace so a crash can't leave a torn model.safetensors)
+    save_file(model.state_dict(), "model.safetensors.tmp")
+    os.replace("model.safetensors.tmp", "model.safetensors")
     print("✅ Saved to model.safetensors")
     
     # Verify save/load works

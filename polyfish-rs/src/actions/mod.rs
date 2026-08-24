@@ -424,7 +424,9 @@ pub fn try_discover_other_tribes(state: &mut GameState) -> UndoCallback {
 
 // Redundant get_city_production removed, use crate::functions::get_total_production
 
-/// Freeze water tiles and enemies in an area around a unit
+/// Freeze adjacent water into Ice and apply `Frozen` to adjacent enemy units.
+/// Known gap vs. the real rules (v115): the third effect, converting adjacent
+/// LAND tiles to the freezer's tribe style (`TileState::climate`), is not applied.
 pub fn freeze_area(
     state: &mut GameState,
     freezer_owner: PlayerId,
@@ -439,9 +441,11 @@ pub fn freeze_area(
             match tile.terrain_type {
                 TerrainType::Water | TerrainType::Ocean => {
                     if !tile.is_frozen() {
+                        let old_terrain = tile.terrain_type;
+                        tile.terrain_type = TerrainType::Ice;
                         undos.push(Box::new(move |s| {
                             if let Some(t) = s.tiles.get_mut(&idx) {
-                                t.terrain_type = TerrainType::Ice;
+                                t.terrain_type = old_terrain;
                             }
                         }));
                     }
@@ -478,7 +482,6 @@ pub fn process_start_turn_effects(state: &mut GameState, player_id: PlayerId) ->
     let mut undos: Vec<UndoCallback> = Vec::new();
     let mut growth_candidates = Vec::new();
     let mut boat_indices = Vec::new();
-    let tribe_type;
 
     // Scope for immutable borrow of state.tribes
     {
@@ -486,7 +489,6 @@ pub fn process_start_turn_effects(state: &mut GameState, player_id: PlayerId) ->
             Some(t) => t,
             None => return noop_undo(),
         };
-        tribe_type = tribe.tribe_type;
 
         // Dragon Growth Logic
         // Iterate through units to find growing dragons
@@ -725,9 +727,9 @@ pub fn process_start_turn_effects(state: &mut GameState, player_id: PlayerId) ->
         }
     }
 
-    if tribe_type == TribeType::Polaris {
-        // TODO: Polaris disabled
-    }
+    // No Polaris start-of-turn hook: its ice spread is driven by unit movement
+    // (SkillType::AutoFreeze in units::step_unit) and its income by IceBank.
+    // The one missing piece is the Outpost network (settings::structures::unimplemented_reason).
 
     // Sanctuary Animal Spawning Logic
     let mut spawns = Vec::new();

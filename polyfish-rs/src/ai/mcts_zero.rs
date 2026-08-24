@@ -2,8 +2,8 @@ use crate::ai::brain::max_turns_ahead;
 use crate::ai::eval_server::Evaluator;
 use crate::ai::features::{self, RawFeatures};
 use crate::ai::mcts_common::{
-    BackpropNode, LeafData, TreeNode, backpropagate_and_remove_virtual_loss, extract_leaf_data,
-    get_node_by_path, get_node_by_path_mut,
+    self, BackpropNode, LeafData, TreeNode, backpropagate_and_remove_virtual_loss,
+    extract_leaf_data, get_node_by_path, get_node_by_path_mut,
 };
 use crate::ai::network::RawPolicyOutput;
 use crate::game::Game;
@@ -19,6 +19,10 @@ pub struct ZeroMctsAgent<'a> {
     pub c_puct: f32,
     pub batch_size: usize,
     pub virtual_loss: f32,
+    /// The agent's own randomness (opening-book shuffles, Dirichlet root noise,
+    /// the temperature sample). Owned rather than drawn from the thread-local
+    /// generator so a search can be replayed — see `mcts_common::next_search_rng`.
+    rng: RefCell<rand::rngs::SmallRng>,
 }
 
 struct ZeroNode {
@@ -50,14 +54,22 @@ impl ZeroNode {
         self.visits + *self.virtual_loss.borrow()
     }
 
-    /// Get effective value including virtual loss penalty
-    fn effective_value(&self, virtual_loss_value: f32) -> f32 {
+    /// Value in this node's PARENT's perspective. `backpropagate_and_remove_virtual_loss`
+    /// stores each node's value in its own player's perspective, so a child
+    /// reached across a handover must be negated before siblings are compared —
+    /// otherwise the parent picks the move that is best for the opponent.
+    fn effective_value_for_parent(&self, virtual_loss_value: f32) -> f32 {
         let vl = *self.virtual_loss.borrow();
-        if self.visits + vl == 0.0 {
-            0.0
-        } else {
-            (self.value_sum + vl * virtual_loss_value) / (self.visits + vl)
+        let denom = self.visits + vl;
+        if denom == 0.0 {
+            return 0.0;
         }
+        let sum = if mcts_common::edge_hands_over(self.move_to_here.as_deref()) {
+            -self.value_sum
+        } else {
+            self.value_sum
+        };
+        (sum + vl * virtual_loss_value) / denom
     }
 
     fn select_child_with_virtual_loss(
@@ -72,11 +84,11 @@ impl ZeroNode {
             .enumerate()
             .max_by(|(_, a), (_, b)| {
                 let a_visits = a.effective_visits();
-                let a_value = a.effective_value(virtual_loss_value);
+                let a_value = a.effective_value_for_parent(virtual_loss_value);
                 let a_score = a_value + c_puct * a.prior * sqrt_n / (1.0 + a_visits);
 
                 let b_visits = b.effective_visits();
-                let b_value = b.effective_value(virtual_loss_value);
+                let b_value = b.effective_value_for_parent(virtual_loss_value);
                 let b_score = b_value + c_puct * b.prior * sqrt_n / (1.0 + b_visits);
 
                 a_score.partial_cmp(&b_score).unwrap_or_else(|| {
@@ -126,7 +138,15 @@ impl<'a> ZeroMctsAgent<'a> {
             c_puct: 1.0,
             batch_size: 24,
             virtual_loss: 1.0,
+            rng: RefCell::new(crate::ai::mcts_common::next_search_rng()),
         }
+    }
+
+    /// Pin this agent's RNG stream, for a test or a replayable experiment.
+    pub fn with_search_seed(self, seed: u64) -> Self {
+        use rand::SeedableRng;
+        *self.rng.borrow_mut() = rand::rngs::SmallRng::seed_from_u64(seed);
+        self
     }
 
     pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
@@ -138,8 +158,8 @@ impl<'a> ZeroMctsAgent<'a> {
         // Instead, we shuffle and pop.
         let mut book_moves = Book::recommend(game);
         if !book_moves.is_empty() {
-            let mut rng = rand::rng();
-            book_moves.shuffle(&mut rng);
+            let mut rng = self.rng.borrow_mut();
+            book_moves.shuffle(&mut *rng);
             if let Some(m) = book_moves.pop() {
                 return Some(m);
             }
@@ -174,8 +194,8 @@ impl<'a> ZeroMctsAgent<'a> {
         // We need to handle book moves but also return valid stats (policy) matching the legal moves order.
         let mut book_moves = Book::recommend(game);
         if !book_moves.is_empty() {
-            let mut rng = rand::rng();
-            book_moves.shuffle(&mut rng);
+            let mut rng = self.rng.borrow_mut();
+            book_moves.shuffle(&mut *rng);
             if let Some(book_move) = book_moves.pop() {
                 // To return correct policy vector, we must know the legal moves order.
                 // So we expand the root node once.
@@ -282,8 +302,8 @@ impl<'a> ZeroMctsAgent<'a> {
 
         let mut book_moves = Book::recommend(game);
         if !book_moves.is_empty() {
-            let mut rng = rand::rng();
-            book_moves.shuffle(&mut rng);
+            let mut rng = self.rng.borrow_mut();
+            book_moves.shuffle(&mut *rng);
             if let Some(selected_move) = book_moves.pop() {
                 // Create MoveVisit for this move with 100% probability (iterations count)
                 let move_info = MoveVisit {
@@ -315,7 +335,7 @@ impl<'a> ZeroMctsAgent<'a> {
             let epsilon = 0.25; // 25% noise
             let gamma = Gamma::new(alpha, 1.0).unwrap();
             let mut noise: Vec<f32> = (0..root.children.len())
-                .map(|_| gamma.sample(&mut rand::rng()))
+                .map(|_| gamma.sample(&mut *self.rng.borrow_mut()))
                 .collect();
             let sum: f32 = noise.iter().sum();
             if sum > 0.0 {
@@ -369,7 +389,7 @@ impl<'a> ZeroMctsAgent<'a> {
             use rand::distr::{Distribution, weighted::WeightedIndex};
             let weights: Vec<f32> = root.children.iter().map(|c| c.visits.max(0.0)).collect();
             if let Ok(dist) = WeightedIndex::new(&weights) {
-                best_idx = dist.sample(&mut rand::rng());
+                best_idx = dist.sample(&mut *self.rng.borrow_mut());
             }
         }
 

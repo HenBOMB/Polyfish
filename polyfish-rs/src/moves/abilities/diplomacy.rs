@@ -1,7 +1,7 @@
 //! Diplomacy move implementation (Break Peace, Peace Response, Establish Embassy)
 
 use crate::actions::{
-    UndoCallback, chain_undos, spend_stars, structure::create_structure,
+    UndoCallback, chain_undos, require_stars, spend_stars, structure::create_structure,
     structure::destroy_structure,
 };
 use crate::moves::{Move, MoveResult};
@@ -63,28 +63,11 @@ impl Move for BreakPeaceMove {
             }
         }
 
-        // Breaking peace ends the turn for the player who broke it.
-        // We find the Game controller and call end_turn?
-        // No, execute is part of Move, and Move doesn't have access to Game.
-        // Instead, we should return an end_turn reward or let play_move handle it?
-        // Wait, play_move handles EndTurnMove specifically.
-        // For other moves, we must manually update the state to "end" or make it a sequence.
-        // In this simulation, the best way is to call end_turn logic inside execute if possible,
-        // or ensure play_move checks for this.
-        // Actually, we can't easily call end_turn here because it requires &mut Game.
-        // BUT! Game::play_move calls end_turn if MoveType is EndTurn.
-        // We can't change MoveType dynamically.
-
-        // Wait! Look at how other moves do it.
-        // Actually, we can just set a flag or let it be.
-        // If we can't end the turn here, we must at least ensure it's not repeatable.
-        // But relation.state becoming 0 ALREADY makes it non-repeatable in generation.
-        // So the loop MUST be SIGN -> BREAK -> SIGN -> BREAK.
-
-        // I will fix PeaceTreatyMove to NOT set state=1.
-
-        // TODO: find solution
-
+        // KNOWN GAP (v115): breaking a peace treaty should end the breaker's turn
+        // immediately. `Move::execute` only gets `&mut GameState`, so the handover has to
+        // come from `Game::play_move`, which today special-cases only `MoveType::EndTurn`.
+        // Harmless for now: the move is unrepeatable (state 0 stops regeneration) and
+        // PeaceTreatyMove generation is disabled, so no sign/break loop is reachable.
         Ok(MoveResult {
             undo: chain_undos(undos),
             rewards: None,
@@ -272,6 +255,8 @@ impl Move for EstablishEmbassyMove {
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let pov_id = state.settings.current_player_turn_id;
         let opp_id = self.opponent_id;
+        require_stars(state, 5, "establish embassy")?;
+
         let mut undos = Vec::new();
 
         // 1. Spend 5 stars

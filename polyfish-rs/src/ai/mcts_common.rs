@@ -52,10 +52,34 @@ pub(crate) struct LeafData {
 /// Convert a terminal game state into a signed outcome in `[-1, 1]` from the
 /// perspective of the player whose turn it currently is.
 ///
-/// Extracted verbatim from the duplicated blocks in `mcts_zero.rs` and
-/// `gumbel_mcts.rs`.
+/// Survival decides first: training plays Domination, so a sole survivor has
+/// won regardless of points (most score outlives its owner — tech, monuments,
+/// parks and exploration are never zeroed on death). Score only breaks
+/// turn-limit terminals, and then only among tribes still alive.
 pub(crate) fn compute_terminal_outcome(game: &Game) -> f32 {
     let current_player = game.state.settings.current_player_turn_id;
+
+    let alive: Vec<i32> = game
+        .state
+        .tribes
+        .iter()
+        .filter(|(_, t)| t.killed_turn <= 0 && t.resigned_turn <= 0)
+        .map(|(id, _)| *id)
+        .collect();
+
+    if alive.len() <= 1 {
+        return match alive.first() {
+            Some(&id) if id == current_player => 1.0,
+            Some(_) => -1.0,
+            None => 0.0, // mutual elimination
+        };
+    }
+
+    // Turn limit with several tribes standing: score decides, among the living.
+    if !alive.contains(&current_player) {
+        return -1.0;
+    }
+
     let my_score = game
         .state
         .tribes
@@ -67,7 +91,7 @@ pub(crate) fn compute_terminal_outcome(game: &Game) -> f32 {
         .state
         .tribes
         .iter()
-        .filter(|(id, _)| **id != current_player)
+        .filter(|(id, _)| **id != current_player && alive.contains(id))
         .map(|(_, t)| t.score)
         .max()
         .unwrap_or(0);
@@ -152,6 +176,18 @@ pub(crate) fn extract_leaf_data(
     }
 }
 
+/// Does descending this edge hand the turn to another player? Only then does a
+/// child's accumulated value live in a different perspective from its parent's.
+/// `Resign` always ends the mover's turn; in-tree `EndTurn` only does so under
+/// `adversarial_search()`.
+pub(crate) fn edge_hands_over(m: Option<&dyn Move>) -> bool {
+    match m.map(|m| m.move_type()) {
+        Some(MoveType::EndTurn) => crate::game::adversarial_search(),
+        Some(MoveType::Resign) => true,
+        _ => false,
+    }
+}
+
 /// Tree-shape trait: any node that exposes a slice of children of the same
 /// type. Used by the generic `get_node_by_path` / `get_node_by_path_mut`
 /// helpers so both agents share the same path-walking logic.
@@ -204,10 +240,10 @@ pub(crate) trait BackpropNode: TreeNode {
 /// path and adding one visit + the (sign-flipped) value to each node's
 /// running sums.
 ///
-/// Sign flipping: the value is negated each time the player to move changes
-/// between consecutive nodes on the path (i.e. across an `EndTurn` boundary).
-/// The root is handled explicitly relative to the leaf player; interior nodes
-/// flip relative to their parent.
+/// Sign flipping: every node is credited in its own player's perspective. The
+/// root is anchored by comparing it to the leaf player; the walk then negates
+/// once per player change, so node k ends up with `+value` iff it shares the
+/// leaf's player.
 ///
 /// This is the single load-bearing correctness path that was previously
 /// duplicated across `mcts_zero.rs` and `gumbel_mcts.rs`. Both agents now
@@ -234,6 +270,11 @@ pub(crate) fn backpropagate_and_remove_virtual_loss<N: BackpropNode>(
     *root.virtual_loss().borrow_mut() -= virtual_loss_amount;
     *root.visits_mut() += 1.0;
     *root.value_sum_mut() += root_value;
+
+    // The walk must start from the ROOT's perspective, not the leaf's: it
+    // negates forward from the root, so seeding it with the leaf-perspective
+    // value inverts every node below a path with an odd number of flips.
+    value = root_value;
 
     let mut current: &mut N = root;
     let mut prev_player = root_player;
@@ -286,11 +327,10 @@ pub(crate) fn backpropagate_and_remove_virtual_loss<N: BackpropNode>(
 /// `backpropagate_and_remove_virtual_loss`'s (a value is negated when
 /// crossing an edge where the mover changes) but is applied per-edge in
 /// each node's own local perspective rather than accumulated as parity from
-/// the root; the two conventions coincide whenever the path has at most one
-/// player change (root vs. leaf) — true of every real search tree in this
-/// codebase (single-player; see module docs) and this function's own
-/// same-player tests — and only diverge on synthetic multi-flip paths
-/// nothing here actually produces.
+/// the root. Under `adversarial_search()` real paths alternate movers, so
+/// both conventions are exercised for real; they differ only in WHOSE frame a
+/// node's stored number lives in — here the parent's (an action value), there
+/// the node's own.
 ///
 /// Setting every reward to 0 does **not** collapse to the plain-value
 /// function's behavior unless `gamma == 1.0` — discounting the whole future
@@ -358,6 +398,67 @@ pub(crate) fn backpropagate_return_with_rewards<N: BackpropNode>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::states::TribeState;
+
+    /// Two-tribe terminal state: `(id, score, killed)` per tribe, `turn_id` to move.
+    fn terminal_game(tribes: &[(i32, i32, bool)], turn_id: i32) -> Game {
+        let mut game = Game::new();
+        game.state.tribes.clear();
+        for &(id, score, killed) in tribes {
+            game.state.tribes.insert(
+                id,
+                TribeState {
+                    id,
+                    score,
+                    killed_turn: if killed { 3 } else { 0 },
+                    ..Default::default()
+                },
+            );
+        }
+        game.state.settings.current_player_turn_id = turn_id;
+        game.state.settings._game_over = true;
+        game
+    }
+
+    #[test]
+    fn elimination_win_beats_the_opponent_score_lead() {
+        // The mover just killed an opponent who still leads on points; most
+        // score survives death, so a score comparison would invert this.
+        let game = terminal_game(&[(0, 40, false), (1, 900, true)], 0);
+        assert_eq!(compute_terminal_outcome(&game), 1.0);
+    }
+
+    #[test]
+    fn elimination_loss_is_negative_even_when_ahead_on_score() {
+        let game = terminal_game(&[(0, 900, true), (1, 40, false)], 0);
+        assert_eq!(compute_terminal_outcome(&game), -1.0);
+    }
+
+    #[test]
+    fn turn_limit_terminal_still_decides_on_score() {
+        let ahead = terminal_game(&[(0, 100, false), (1, 40, false)], 0);
+        assert_eq!(compute_terminal_outcome(&ahead), 1.0);
+
+        let behind = terminal_game(&[(0, 40, false), (1, 100, false)], 0);
+        assert_eq!(compute_terminal_outcome(&behind), -1.0);
+
+        let level = terminal_game(&[(0, 40, false), (1, 40, false)], 0);
+        assert_eq!(compute_terminal_outcome(&level), 0.0);
+    }
+
+    #[test]
+    fn turn_limit_score_ignores_dead_tribes() {
+        // Tribe 2 is dead and still holds the highest score; it must not
+        // decide a turn-limit terminal between the two survivors.
+        let game = terminal_game(&[(0, 100, false), (1, 40, false), (2, 900, true)], 0);
+        assert_eq!(compute_terminal_outcome(&game), 1.0);
+    }
+
+    #[test]
+    fn mutual_elimination_is_a_draw() {
+        let game = terminal_game(&[(0, 100, true), (1, 40, true)], 0);
+        assert_eq!(compute_terminal_outcome(&game), 0.0);
+    }
 
     /// Minimal node for exercising `backpropagate_and_remove_virtual_loss`
     /// in pure isolation from `Game` / `Move` / network machinery.
@@ -451,13 +552,10 @@ mod tests {
 
     #[test]
     fn backprop_flips_across_player_change() {
-        // path_players = [1, 2, 2], indices = [0, 0], leaf value = +0.5
-        // (leaf player = 2). This locks in the exact sign sequence produced
-        // by the pre-extraction reference implementation in `mcts_zero.rs`:
-        //   root_value  = -(0.5) = -0.5            (root player 1 != leaf 2)
-        //   i=0: child_player 2 != prev 1 -> flip  -> child      = -0.5
-        //   i=1: child_player 2 == prev 2 -> no flip -> grandchild = -0.5
-        // The shared fn must reproduce these values byte-for-byte.
+        // path_players = [1, 2, 2], indices = [0, 0], leaf value = +0.5 from
+        // the leaf (player 2) perspective. Every node is credited in its own
+        // player's frame: root is player 1 so it gets -0.5; child and
+        // grandchild are both player 2 so they keep +0.5.
         let mut root = build_two_ply_tree();
 
         backpropagate_and_remove_virtual_loss(
@@ -470,11 +568,11 @@ mod tests {
 
         assert!((root.value_sum - (-0.5)).abs() < 1e-6, "root value_sum");
         assert!(
-            (root.children[0].value_sum - (-0.5)).abs() < 1e-6,
+            (root.children[0].value_sum - 0.5).abs() < 1e-6,
             "child value_sum"
         );
         assert!(
-            (root.children[0].children[0].value_sum - (-0.5)).abs() < 1e-6,
+            (root.children[0].children[0].value_sum - 0.5).abs() < 1e-6,
             "grandchild value_sum"
         );
     }
@@ -693,12 +791,10 @@ mod tests {
         // player 2) in player 2's frame: child and leaf are BOTH player 2,
         // no flip needed, so it stays +0.5 — this is where this function
         // intentionally diverges from `backpropagate_and_remove_virtual_loss`
-        // (which gives -0.5 here): that function accumulates sign flips as
-        // parity-from-root rather than locally per edge, so a node 2+ hops
-        // past the one real perspective change gets a stale sign. Per-edge
-        // local perspective is the mathematically consistent choice (and
-        // the two conventions agree on every real search tree, which is
-        // always single-player — see module docs).
+        // (which gives +0.5 here): that function stores a node's value in the
+        // node's OWN frame, while this one stores the action value of the edge
+        // into the node, i.e. the PARENT's frame. Both are self-consistent;
+        // each agent's child-selection rule matches its own convention.
         let mut root = build_two_ply_tree();
         backpropagate_return_with_rewards(
             &mut root,
@@ -759,5 +855,35 @@ mod tests {
         assert!(get_node_by_path(&root, &[0, 0]).is_some());
         assert!(get_node_by_path(&root, &[1]).is_none());
         assert!(get_node_by_path(&root, &[0, 1]).is_none());
+    }
+}
+
+/// A fresh RNG stream for a search agent.
+///
+/// Agents own their randomness rather than drawing from the thread-local
+/// generator, so a search can be replayed — nothing could pin search behaviour
+/// in a test, and no search experiment was reproducible (audit T3).
+///
+/// `POLYFISH_SEARCH_SEED` pins the base. Each agent still gets a *distinct*
+/// stream (base + a process-wide counter): a seed shared across actors would
+/// give every actor identical noise and collapse self-play to one game played N
+/// times. That makes a single-actor run reproducible; with many actors the
+/// per-agent seeds are deterministic but which agent runs which game is not, so
+/// use each agent's `with_search_seed` when a test needs an exact stream.
+pub fn next_search_rng() -> rand::rngs::SmallRng {
+    use rand::SeedableRng;
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    match std::env::var("POLYFISH_SEARCH_SEED")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        Some(base) => {
+            let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Odd multiplier so successive agents land far apart in the stream.
+            rand::rngs::SmallRng::seed_from_u64(
+                base.wrapping_add(n.wrapping_mul(0x9E37_79B9_7F4A_7C15)),
+            )
+        }
+        None => rand::rngs::SmallRng::from_os_rng(),
     }
 }

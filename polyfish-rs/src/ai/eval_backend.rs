@@ -57,13 +57,13 @@ fn select_device_automatically() -> Result<Device> {
     // Prefer CUDA whenever this binary includes CUDA support and a CUDA
     // device is available.
     #[cfg(feature = "cuda")]
-    if utils::cuda_is_available() {
+    if candle_core::utils::cuda_is_available() {
         return Device::new_cuda(0).context("CUDA is available, but device 0 could not be initialized");
     }
 
     // The `metal` Cargo feature should enable Candle's Metal backend.
     #[cfg(all(target_os = "macos", feature = "metal"))]
-    if utils::metal_is_available() {
+    if candle_core::utils::metal_is_available() {
         return Device::new_metal(0).context("Metal is available, but device 0 could not be initialized");
     }
 
@@ -73,7 +73,7 @@ fn select_device_automatically() -> Result<Device> {
 fn select_cuda() -> Result<Device> {
     #[cfg(feature = "cuda")]
     {
-        if !utils::cuda_is_available() {
+        if !candle_core::utils::cuda_is_available() {
             bail!("CUDA was requested, but no usable CUDA device is available");
         }
 
@@ -89,7 +89,7 @@ fn select_cuda() -> Result<Device> {
 fn select_metal() -> Result<Device> {
     #[cfg(all(target_os = "macos", feature = "metal"))]
     {
-        if !utils::metal_is_available() {
+        if !candle_core::utils::metal_is_available() {
             bail!("Metal was requested, but no usable Metal device is available");
         }
 

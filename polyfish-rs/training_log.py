@@ -65,8 +65,49 @@ HEADER = [
     "vlab_td_absmean",
     "vlab_wl_absmean",
     "vlab_spt_absmean",
+    # Score parity (#40): the value label and the reward-aware backup are built
+    # from the incremental tribe score. A nonzero drift from the canonical
+    # recompute biases the label in a way no other metric here shows.
+    "score_drift_max",
+    "score_drift_games",
     "match_type",
+    # value_r2 above is IN-SAMPLE. train.py has computed the holdout figure
+    # since the split landed, and this file dropped it on the floor — the gap
+    # between the two IS the underfitting-vs-overfitting diagnostic the plateau
+    # question turns on (audit M5).
+    "value_r2_insample",
+    "value_r2_holdout",
+    "holdout_samples",
+    "ownership_loss",
+    # The configuration that produced this row. config.json is re-read inside
+    # the iteration loop, so a dashboard edit changes a run mid-flight; nothing
+    # recorded what any given iteration actually ran at (audit M5). The tribe
+    # pair in particular is reshuffled every iteration and its block effect on
+    # the behaviour metrics is comparable to the whole campaign's measured
+    # improvement, so a per-iteration metric was not interpretable without it.
+    "tribe1",
+    "tribe2",
+    "cfg_mcts_iters",
+    "cfg_gumbel_k",
+    "cfg_num_games",
+    "cfg_gamemode",
+    "cfg_anchor_frac",
+    "cfg_value_trust",
+    "cfg_detach_value_trunk",
 ]
+
+# Keys of the --config-json payload, mapped to their cfg_* column.
+CONFIG_COLUMNS = {
+    "tribe1": "tribe1",
+    "tribe2": "tribe2",
+    "mcts_iters": "cfg_mcts_iters",
+    "gumbel_k": "cfg_gumbel_k",
+    "num_games": "cfg_num_games",
+    "gamemode": "cfg_gamemode",
+    "anchor_frac": "cfg_anchor_frac",
+    "value_trust": "cfg_value_trust",
+    "detach_value_trunk": "cfg_detach_value_trunk",
+}
 
 OLD_13 = [
     "iteration",
@@ -254,6 +295,34 @@ def resolve_run(resume: str | None) -> dict[str, Any]:
     return info
 
 
+def _load_store(path: str) -> dict[str, Any]:
+    """Read a run-keyed dashboard store. These accumulate every run's history
+    and are not reconstructible from the CSV, so an unreadable one is kept
+    aside rather than silently replaced by an empty dict (#37)."""
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        try:
+            store = json.load(f)
+        except json.JSONDecodeError:
+            quarantine = path + ".corrupt"
+            os.replace(path, quarantine)
+            print(
+                f"{path}: unreadable JSON, kept as {quarantine}; starting a new store",
+                file=sys.stderr,
+            )
+            return {}
+    return store if isinstance(store, dict) else {}
+
+
+def _save_store(path: str, store: dict[str, Any]) -> None:
+    """tmp + os.replace, so a crash mid-dump cannot truncate the history."""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(store, f)
+    os.replace(tmp, path)
+
+
 def _parse_metrics_line(text: str, game: bool) -> dict[str, Any]:
     for line in text.splitlines():
         if not line.startswith("METRICS:"):
@@ -276,9 +345,22 @@ def _load_json_file(path: str) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _consume_json_file(path: str) -> dict[str, Any]:
+    """Read a metrics sidecar and remove it, so it can only ever be read by the
+    iteration that wrote it. Left in place, a stale sidecar is re-parsed after
+    any producer that exits without writing one, duplicating the previous
+    iteration's numbers into the CSV (#37)."""
+    data = _load_json_file(path)
+    try:
+        os.remove(path)
+    except OSError as e:
+        print(f"{path}: could not remove consumed sidecar: {e}", file=sys.stderr)
+    return data
+
+
 def parse_self_play_output(text: str | None = None) -> dict[str, Any]:
     if os.path.exists(SELF_PLAY_METRICS_PATH):
-        return _load_json_file(SELF_PLAY_METRICS_PATH)
+        return _consume_json_file(SELF_PLAY_METRICS_PATH)
     data = _parse_metrics_line(text or "", game=True)
     if not data.get("games_file"):
         m = re.search(r"Saved to (games_\d+\.safetensors)", text or "")
@@ -289,7 +371,7 @@ def parse_self_play_output(text: str | None = None) -> dict[str, Any]:
 
 def parse_train_output(text: str | None = None) -> dict[str, Any]:
     if os.path.exists(TRAIN_METRICS_PATH):
-        return _load_json_file(TRAIN_METRICS_PATH)
+        return _consume_json_file(TRAIN_METRICS_PATH)
     return _parse_metrics_line(text or "", game=False)
 
 
@@ -438,18 +520,11 @@ def update_value_distribution(
     if not values:
         return
 
-    store: dict[str, Any] = {}
-    if os.path.exists(VALUE_DIST_PATH):
-        with open(VALUE_DIST_PATH, encoding="utf-8") as f:
-            try:
-                store = json.load(f)
-            except json.JSONDecodeError:
-                store = {}
+    store = _load_store(VALUE_DIST_PATH)
     store.setdefault(str(run_id), {})[str(iteration)] = compute_value_distribution(
         values, games_file, num_games
     )
-    with open(VALUE_DIST_PATH, "w", encoding="utf-8") as f:
-        json.dump(store, f)
+    _save_store(VALUE_DIST_PATH, store)
 
 
 def backfill_value_distribution() -> int:
@@ -465,13 +540,8 @@ def backfill_value_distribution() -> int:
             games_file = row.get("games_file", "")
             if not run_id or not iteration or not games_file:
                 continue
-            store: dict[str, Any] = {}
-            if os.path.exists(VALUE_DIST_PATH):
-                with open(VALUE_DIST_PATH, encoding="utf-8") as sf:
-                    try:
-                        store = json.load(sf)
-                    except json.JSONDecodeError:
-                        store = {}
+            # Re-read per row: each backfilled iteration adds to the store.
+            store = _load_store(VALUE_DIST_PATH)
             if store.get(run_id, {}).get(iteration):
                 continue
             path = resolve_games_file(games_file)
@@ -492,6 +562,7 @@ def append_row(
     game_metrics: dict[str, Any],
     train_metrics: dict[str, Any],
     match_type: str,
+    config: dict[str, Any] | None = None,
 ) -> None:
     migrate_csv()
     archived = games_file
@@ -539,8 +610,18 @@ def append_row(
         "vlab_td_absmean": game_metrics.get("vlab_td_absmean", ""),
         "vlab_wl_absmean": game_metrics.get("vlab_wl_absmean", ""),
         "vlab_spt_absmean": game_metrics.get("vlab_spt_absmean", ""),
+        "score_drift_max": game_metrics.get("score_drift_max", ""),
+        "score_drift_games": game_metrics.get("score_drift_games", ""),
         "match_type": normalize_match_type(match_type),
+        "value_r2_insample": train_metrics.get("value_r2_insample", ""),
+        "value_r2_holdout": train_metrics.get("value_r2_holdout", ""),
+        "holdout_samples": train_metrics.get("holdout_samples", ""),
+        "ownership_loss": train_metrics.get("ownership_loss", ""),
+        **{col: "" for col in CONFIG_COLUMNS.values()},
     }
+    for key, col in CONFIG_COLUMNS.items():
+        value = (config or {}).get(key, "")
+        row[col] = "" if value is None else value
 
     file_exists = os.path.exists(CSV_PATH) and os.path.getsize(CSV_PATH) > 0
     with open(CSV_PATH, "a", newline="", encoding="utf-8") as f:
@@ -560,16 +641,9 @@ def append_row(
 
 
 def update_moves_by_turn(run_id: str, iteration: int, moves_by_turn: Any) -> None:
-    store: dict[str, Any] = {}
-    if os.path.exists(MOVES_PATH):
-        with open(MOVES_PATH, encoding="utf-8") as f:
-            try:
-                store = json.load(f)
-            except json.JSONDecodeError:
-                store = {}
+    store = _load_store(MOVES_PATH)
     store.setdefault(str(run_id), {})[str(iteration)] = moves_by_turn
-    with open(MOVES_PATH, "w", encoding="utf-8") as f:
-        json.dump(store, f)
+    _save_store(MOVES_PATH, store)
 
 
 def finish_run() -> None:
@@ -636,6 +710,8 @@ def main() -> None:
     p_append.add_argument("--game-json", required=True)
     p_append.add_argument("--train-json", required=True)
     p_append.add_argument("--match-type", default="selfplay")
+    p_append.add_argument("--config-json", default="{}",
+                          help="effective configuration this iteration ran at")
     p_append.set_defaults(
         func=lambda a: append_row(
             a.run_id,
@@ -645,6 +721,7 @@ def main() -> None:
             json.loads(a.game_json),
             json.loads(a.train_json),
             a.match_type,
+            json.loads(a.config_json),
         )
     )
 

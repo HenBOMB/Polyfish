@@ -1656,6 +1656,116 @@ mod tests {
     use crate::states::PlayerId;
     use crate::types::{MapSize, MapType, StructureType};
 
+    /// Exactly the map self_play generates, so the seat-fairness invariant
+    /// below is measured on the training distribution.
+    fn selfplay_map(seed: i64, symmetric: bool) -> crate::game::Game {
+        let mut game = crate::game::Game::new();
+        game.state = generate(MapGenSettings {
+            size: MapSize::Tiny,
+            map_type: MapType::Drylands,
+            tribes: vec![TribeType::Imperius, TribeType::Imperius],
+            seed,
+            symmetric,
+            ..Default::default()
+        });
+        game.post_load();
+        game
+    }
+
+    /// (land tiles, resource tiles, neutral villages) within `range` of the
+    /// seat's capital.
+    fn seat_start_quality(
+        game: &crate::game::Game,
+        id: PlayerId,
+        range: i32,
+    ) -> (usize, usize, usize) {
+        let cap = game.state.tribes[&id].cities[0].idx;
+        let near = crate::functions::get_adjacent_indices(&game.state, cap, range);
+        let land = near
+            .iter()
+            .filter(|i| {
+                game.state.tiles.get(*i).map_or(false, |t| {
+                    t.terrain_type != crate::types::TerrainType::Water
+                        && t.terrain_type != crate::types::TerrainType::Ocean
+                })
+            })
+            .count();
+        let resources = near
+            .iter()
+            .filter(|i| game.state.resources.get(*i).map_or(false, |r| r.is_some()))
+            .count();
+        let villages = near
+            .iter()
+            .filter(|i| {
+                game.state.structures.get(*i).map_or(false, |st| {
+                    st.as_ref().map(|st| st.structure_type) == Some(StructureType::Village)
+                }) && game.state.tiles.get(*i).map_or(false, |t| t.owner == 0)
+            })
+            .count();
+        (land, resources, villages)
+    }
+
+    /// `symmetric: true` must make the two seats interchangeable. Training
+    /// relies on this: an uncompensated seat advantage puts a seat term in
+    /// every value label, which the network can only fit as noise.
+    #[test]
+    fn symmetric_maps_give_both_seats_the_same_start() {
+        for seed in 0..120 {
+            let game = selfplay_map(seed, true);
+            for range in [1, 2, 3] {
+                assert_eq!(
+                    seat_start_quality(&game, 1, range),
+                    seat_start_quality(&game, 2, range),
+                    "seed {seed} range {range}: symmetric map has unequal seats"
+                );
+            }
+        }
+    }
+
+    /// The measurement behind that invariant: asymmetric Tiny/Drylands maroons
+    /// seat 2. Diagnostic, not an assertion — run with --ignored --nocapture.
+    #[test]
+    #[ignore]
+    fn report_drylands_seat_imbalance() {
+        for symmetric in [false, true] {
+            let n = 500i64;
+            let (mut l1, mut l2, mut r1, mut r2, mut v1, mut v2) = (0, 0, 0, 0, 0, 0);
+            let (mut iso1, mut iso2, mut differ) = (0, 0, 0);
+            for seed in 0..n {
+                let game = selfplay_map(seed, symmetric);
+                let a = seat_start_quality(&game, 1, 2);
+                let b = seat_start_quality(&game, 2, 2);
+                l1 += a.0;
+                r1 += a.1;
+                v1 += a.2;
+                l2 += b.0;
+                r2 += b.1;
+                v2 += b.2;
+                if a != b {
+                    differ += 1;
+                }
+                if seat_start_quality(&game, 1, 1).0 <= 2 {
+                    iso1 += 1;
+                }
+                if seat_start_quality(&game, 2, 1).0 <= 2 {
+                    iso2 += 1;
+                }
+            }
+            let d = n as f64;
+            println!(
+                "symmetric={symmetric} over {n} Tiny/Drylands seeds: land_r2 P1 {:.2} P2 {:.2} | \
+                 resources_r2 P1 {:.2} P2 {:.2} | villages_r2 P1 {:.2} P2 {:.2} | \
+                 island starts P1 {iso1}/{n} P2 {iso2}/{n} | seeds differing {differ}/{n}",
+                l1 as f64 / d,
+                l2 as f64 / d,
+                r1 as f64 / d,
+                r2 as f64 / d,
+                v1 as f64 / d,
+                v2 as f64 / d,
+            );
+        }
+    }
+
     #[test]
     fn test_no_edge_spawns() {
         let map_types = [

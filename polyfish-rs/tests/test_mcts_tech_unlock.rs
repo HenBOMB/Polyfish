@@ -28,7 +28,7 @@ fn test_mcts_tech_unlock_logic() {
         tribe.stars = 100;
     }
 
-    // 4. Confirm visibility is still hidden for resources
+    // 4. A simulated tech unlocks exactly what a real one does.
     // Metal requires Climbing (Imperius doesn't start with Climbing)
     let research_climbing = ResearchMove::new(TechnologyType::Climbing);
     let _undo = game
@@ -42,8 +42,8 @@ fn test_mcts_tech_unlock_logic() {
         None,
     );
     assert!(
-        !metal_visible,
-        "Metal should NOT be visible because Climbing isn't 'discovered'"
+        metal_visible,
+        "Metal should be visible once Climbing is researched, simulated or not"
     );
 
     // 5. Move starting unit to free the city
@@ -76,8 +76,8 @@ fn test_mcts_tech_unlock_logic() {
         .find(|t| t.tech_type == TechnologyType::Strategy)
         .expect("Strategy should be in tech list");
     assert!(
-        !strat_state.discovered,
-        "Strategy should NOT be 'discovered' in simulation"
+        strat_state.discovered,
+        "a simulated Strategy must be discovered, or nothing it unlocks is reachable"
     );
 
     let moves = game.legal_moves();

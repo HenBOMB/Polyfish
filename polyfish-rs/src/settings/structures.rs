@@ -36,6 +36,22 @@ macro_rules! adjacent {
     }};
 }
 
+/// Single source of truth for structures that have a `StructureSetting` but no working
+/// in-game effect. Movegen skips them and `BuildMove::execute` rejects them with this
+/// reason, so an unimplemented structure can never be silently paid for.
+/// Everything else Polaris-related (units, techs, Ice terrain, IceBank/IceTemple income)
+/// IS implemented; see the notes at `actions/connection.rs` and `actions/mod.rs`.
+pub fn unimplemented_reason(struct_type: StructureType) -> Option<&'static str> {
+    match struct_type {
+        StructureType::Outpost => Some(
+            "Polaris Outpost is unimplemented: nothing consumes it. A real implementation \
+             needs the 5x5 ice connection network in actions/connection.rs plus the \
+             per-outpost ice spread; building one today would only burn 5 stars.",
+        ),
+        _ => None,
+    }
+}
+
 /// Get structure settings by type
 pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
     match struct_type {
@@ -191,17 +207,18 @@ pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
             ..Default::default()
         },
 
+        // Effect unimplemented — see `unimplemented_reason`.
         StructureType::Outpost => StructureSetting {
             cost: Some(5),
             reward_pop: 1,
-            tribe_type: Some(TribeType::Polaris), // TODO: Polaris disabled
+            tribe_type: Some(TribeType::Polaris),
             terrain_types: terrains![TerrainType::Ice],
             ..Default::default()
         },
         StructureType::IceTemple => StructureSetting {
             cost: Some(20),
             reward_pop: 1,
-            tribe_type: Some(TribeType::Polaris), // TODO: Polaris disabled
+            tribe_type: Some(TribeType::Polaris),
             terrain_types: terrains![TerrainType::Ice],
             ..Default::default()
         },
@@ -213,8 +230,8 @@ pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
             ..Default::default()
         },
 
-        // Elyrion
-        // TODO: https://polytopia.fandom.com/wiki/Sanctuary
+        // Elyrion. Income and animal spawning are implemented; the build-time
+        // "must be adjacent to a wild animal" requirement is not enforced.
         StructureType::Sanctuary => StructureSetting {
             cost: Some(5),
             reward_stars: 1,
@@ -224,7 +241,6 @@ pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
                 TerrainType::Forest,
                 TerrainType::Mountain
             ],
-            // required adjacent
             limited_per_city: true,
             ..Default::default()
         },

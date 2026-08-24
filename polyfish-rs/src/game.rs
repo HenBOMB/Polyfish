@@ -24,6 +24,37 @@ pub const STARTING_OWNER_ID: PlayerId = 1;
 /// search crosses a turn boundary in-tree). Read/reset by self_play's summary.
 pub static SIM_END_TURN_EDGES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Tri-state (0 = not yet resolved, 1 = off, 2 = on) so the environment
+/// default is read lazily and an explicit `set_adversarial_search` always wins.
+static ADVERSARIAL_SEARCH: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Whether in-tree `EndTurn` hands control to the next player instead of
+/// cycling straight back to the mover. Off by default; enable with
+/// `POLYFISH_ADVERSARIAL_SEARCH=1` or `set_adversarial_search(true)`.
+pub fn adversarial_search() -> bool {
+    use std::sync::atomic::Ordering;
+    match ADVERSARIAL_SEARCH.load(Ordering::Relaxed) {
+        2 => true,
+        1 => false,
+        _ => {
+            let on = std::env::var("POLYFISH_ADVERSARIAL_SEARCH")
+                .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "on"))
+                .unwrap_or(false);
+            ADVERSARIAL_SEARCH.store(if on { 2 } else { 1 }, Ordering::Relaxed);
+            on
+        }
+    }
+}
+
+/// Override the adversarial-search switch for this process. Set it before any
+/// search starts; every backend reads it on each in-tree `EndTurn`.
+pub fn set_adversarial_search(on: bool) {
+    ADVERSARIAL_SEARCH.store(
+        if on { 2 } else { 1 },
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
 /// The main game controller
 ///
 /// Provides the interface for loading game states, playing moves, and managing turns.
@@ -220,10 +251,25 @@ impl Game {
         Self::from_json(&json).unwrap_or_else(|_| Self::new())
     }
 
-    /// Clone the entire game and obscure hidden information for MCTS simulations
+    /// Clone the entire game and obscure hidden information for MCTS simulations.
+    /// Under `adversarial_search()` the opponent takes its turns inside this
+    /// obscured state, so it plays a belief-state army: only the units, cities
+    /// and tiles `pov_id` can currently see.
     pub fn clone_for_mcts(&self, pov_id: PlayerId) -> Self {
         let mut cloned = self.clone(); // Fast direct clone
         cloned.state.obscure_fog(pov_id);
+
+        // `obscure_fog` blanks tiles but leaves every tribe's `explorers` intact,
+        // so an in-tree opponent would generate moves against terrain, owners and
+        // resources this state has already erased (e.g. a road on its own city,
+        // now reading as neutral). Confine its vision to ours.
+        if adversarial_search() && cloned.state.settings._fow {
+            for tile in cloned.state.tiles.values_mut() {
+                if !tile.explorers.contains(&pov_id) {
+                    tile.explorers.clear();
+                }
+            }
+        }
         cloned
     }
 
@@ -339,8 +385,8 @@ impl Game {
     /// Simulate a move for MCTS (does NOT set _are_you_sure, preventing exploration)
     ///
     /// This is specifically for MCTS simulations where we don't want to
-    /// permanently reveal tiles on the map. For EndTurn moves, this implements
-    /// single-player MCTS by skipping enemy turns and cycling back to the original player.
+    /// permanently reveal tiles on the map. `EndTurn` hands control to the next
+    /// player under `adversarial_search()`, and skips back to the mover otherwise.
     pub fn simulate_move(&mut self, game_move: &dyn Move) -> Option<UndoCallback> {
         if self.state.settings._game_over {
             return None;
@@ -351,7 +397,6 @@ impl Game {
 
         let undo = if game_move.move_type() == MoveType::EndTurn {
             SIM_END_TURN_EDGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            // Single-player MCTS: skip enemy turns and return to original player
             let original_player = self.state.settings.current_player_turn_id;
             let mut undos = Vec::new();
 
@@ -359,16 +404,18 @@ impl Game {
             undos.push(self.end_turn());
             let old_recent_moves = std::mem::take(&mut self.state.settings._recent_moves);
 
-            // Keep ending turns until we're back at original player
-            // This effectively "skips" all enemy turns
-            let max_players = 16; // Safety limit to prevent infinite loop
-            let mut iterations = 0;
-            while self.state.settings.current_player_turn_id != original_player
-                && iterations < max_players
-                && !self.state.settings._game_over
-            {
-                undos.push(self.end_turn());
-                iterations += 1;
+            // Legacy single-player search: keep ending turns until control is
+            // back with the mover, i.e. delete every opponent turn in between.
+            if !adversarial_search() {
+                let max_players = 16; // Safety limit to prevent infinite loop
+                let mut iterations = 0;
+                while self.state.settings.current_player_turn_id != original_player
+                    && iterations < max_players
+                    && !self.state.settings._game_over
+                {
+                    undos.push(self.end_turn());
+                    iterations += 1;
+                }
             }
 
             // Combine all undos

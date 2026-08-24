@@ -66,13 +66,19 @@ impl Node {
         }
     }
 
-    fn uct_select_child(&mut self, c: f32) -> &mut Node {
+    /// `minimize` when the node to move is not the search POV: values here are
+    /// always in the POV's perspective, so an opponent node picks the child
+    /// that minimises them.
+    fn uct_select_child(&mut self, c: f32, minimize: bool) -> &mut Node {
         let parent_visits = self.visits;
+        let sign = if minimize { -1.0 } else { 1.0 };
         self.children
             .iter_mut()
             .max_by(|a, b| {
-                let a_val = (a.value / a.visits) + c * (parent_visits.ln() / a.visits).sqrt();
-                let b_val = (b.value / b.visits) + c * (parent_visits.ln() / b.visits).sqrt();
+                let a_val =
+                    sign * (a.value / a.visits) + c * (parent_visits.ln() / a.visits).sqrt();
+                let b_val =
+                    sign * (b.value / b.visits) + c * (parent_visits.ln() / b.visits).sqrt();
                 a_val.partial_cmp(&b_val).unwrap()
             })
             .unwrap()
@@ -191,7 +197,8 @@ impl MctsAgent {
     fn search_iteration(&self, game: &mut Game, node: &mut Node, pov: PlayerId) -> f32 {
         // 1. Selection
         if node.is_fully_expanded() && !node.children.is_empty() {
-            let child = node.uct_select_child(self.exploration_constant);
+            let minimize = game.state.settings.current_player_turn_id != pov;
+            let child = node.uct_select_child(self.exploration_constant, minimize);
             if let Some(m) = &child.move_to_here {
                 if let Some(undo) = game.simulate_move(m.as_ref()) {
                     let val = self.search_iteration(game, child, pov);

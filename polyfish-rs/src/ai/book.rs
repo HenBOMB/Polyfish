@@ -42,7 +42,10 @@ impl Book {
         recommended
     }
 
-    // TODO most tribes dont use these openings
+    /// Preferred move *types* per tribe and turn, not concrete moves — callers
+    /// pick uniformly among the matching legal moves. Every playable tribe has
+    /// a line, but they are near-identical, so this encodes no tribe-specific
+    /// opening yet.
     fn get_book_moves(tribe: TribeType, turn: i32) -> &'static [MoveType] {
         match tribe {
             TribeType::Imperius => match turn {

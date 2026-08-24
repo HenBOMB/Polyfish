@@ -110,6 +110,12 @@ pub fn generate_research_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>
         // If tech_vanilla is empty (impossible), add Unrequired?
         // Let's assume tech_vanilla is populated.
 
+        // Sorted: a HashSet's iteration order varies between instances, so the
+        // ResearchMove block landed in a different order each run and no search
+        // could be replayed (audit T3).
+        let mut available_techs: Vec<_> = available_techs.into_iter().collect();
+        available_techs.sort_by_key(|t| *t as i8);
+
         for tech in available_techs {
             // Check if already discovered
             if tribe.tech_vanilla.iter().any(|t| t.tech_type == tech) {

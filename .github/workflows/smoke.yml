@@ -1,0 +1,71 @@
+# End-to-end smoke of the training pipeline: run_training_loop.sh drives
+# self_play -> games_*.safetensors -> train.py -> model.safetensors, plus one
+# arena gauge reading. This is the seam the unit tests cannot see; three broken
+# shell -> binary flags shipped because nothing exercised it.
+#
+# Not run on pull requests: it builds the release binaries and installs a CPU
+# PyTorch, which is minutes, not seconds. Nightly plus manual dispatch.
+name: Training smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * *"
+  push:
+    branches: ["main"]
+    paths:
+      - "polyfish-rs/run_training_loop.sh"
+      - "polyfish-rs/train.py"
+      - "polyfish-rs/init_model.py"
+      - "polyfish-rs/training_log.py"
+      - "polyfish-rs/ladder.py"
+      - "polyfish-rs/src/bin/self_play.rs"
+      - "polyfish-rs/src/bin/arena.rs"
+      - "polyfish-rs/scripts/**"
+      - ".github/workflows/smoke.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./polyfish-rs -> target"
+          key: smoke
+
+      # requirements.txt does not list torch, but train.py and init_model.py
+      # both import it. CPU wheels only; the smoke does not need a GPU.
+      - name: Python environment
+        working-directory: ./polyfish-rs
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+          .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Run the training smoke
+        working-directory: ./polyfish-rs
+        env:
+          SMOKE_TIMEOUT: "4200"
+        run: bash scripts/smoke_train_loop.sh
+
+      - name: Upload smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-artifacts
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            polyfish-rs/target/smoke/session.log
+            polyfish-rs/target/smoke/training_log.csv
+            polyfish-rs/target/smoke/ladder.json
+            polyfish-rs/target/smoke/moves_by_turn.json

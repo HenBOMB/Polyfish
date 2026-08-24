@@ -18,6 +18,33 @@ Shorthand used below: results quoted as `rate/cond` = fraction of games that cap
 
 *EXP 1–9 are backfilled on Jul 10, 2026 — they were run before this document existed. From EXP 10 on, entries are written before the experiment runs.*
 
+## Standing note (Aug 18, 2026): every gauge-derived verdict below is provisional
+
+The strength gauge — the instrument EXP 10 built and EXP 11 wired into the loop —
+**never recorded a reading**. `arena` rejected `--dump-stats-dir`, which
+`run_gauge_match` always passed, and the loop tested whether the win count parsed
+rather than checking arena's exit code: it printed `GAUGE: arena reading failed
+to parse — skipping this reading` and continued. `ladder.py record` therefore
+never ran, so `ladder.json` gained no readings, no plateau strike could fire, no
+anchor could freeze at ≥80%, and `.anchor_decay_start` was never written. See P2
+in `expert_pipeline_audit.md`.
+
+Consequently **EXP 11's plateau observation and EXP_ELO_002's "+1pp, the +8pp
+success bar was NOT met" were drawn from an instrument that was returning parse
+failures, and both are provisional pending a re-baseline.** Any reading taken by
+hand in that period is a real match but is not comparable across iterations for
+four further reasons, each since fixed: maps were re-rolled every reading (no
+`--seed`), `arena` searched the un-obscured game while self-play searched a
+fog-obscured clone, the gauge played 30-turn games against 45-turn training
+games, and the map generator gave seat 2 an island start in ~1/3 of Tiny/Drylands
+seeds.
+
+This does not overturn any verdict — it withdraws the evidence for the
+gauge-derived ones. Behaviour-metric verdicts (EXP 1–9, EXP_ELO_001's per-turn
+diagnosis) are unaffected; they were measured on the training log, not the
+ladder. The re-baseline is the first thing that should happen on the repaired
+instrument, and until it exists no EXP registered on Aug 18 can be closed out.
+
 ## EXP 1: Auxiliary training heads (ownership / fog / SPT+5 / opponent tech)
 *Jul 9, 2026 · COMMITTED, watching*
 
@@ -180,6 +207,14 @@ Next stint: readings every 10 iters climb from ~25–34% vs Greedy toward the >5
 ### Actual Results
 It worked but we see it actually plateauing and the trained NN unable to beat the teacher enough to be made an anchor. It wins ~25% of the time against greedy-only.
 
+**Note (Aug 2026, #31):** the shipped gate drifted from the rule registered
+above — the slope conjunction was dropped for a Wilson-interval overlap test,
+which strikes on any climb it cannot prove and so would have stopped a run
+improving at exactly EXP_ELO_002's registered rate. The registered rule is
+restored. This does not rehabilitate the plateau verdict recorded here: that
+reading came from an instrument that never recorded a reading at all (audit P2),
+and remains withdrawn pending the re-baseline.
+
 ---
 
 *From here on, experiments are named by track: `EXP_ELO_*` targets the strength gauge (win rate vs the Greedy anchor / Elo curve). Other tracks get their own prefixes as they open.*
@@ -203,7 +238,11 @@ n=32 seeds (64 games), model 37.5% — reading consistent with the ladder band. 
 4. **Tech is anti-correlated:** the model out-researches Greedy in every split, including its losses (t24: 17.3 vs 12.1 techs). It converts stars into research (early score!) while Greedy converts them into units and cities. The model's early score *lead* (turns 1–7) is exactly this — buying scoreboard points that don't compound.
 
 **Verdict: COMMITTED (instrument + diagnosis).** The opening-village campaign taught a skill the model has; the game is decided by expansion *continuation* and army production, where it under-invests — plausibly a research-shaped local optimum (tech = immediate score = shaped reward). New #1 bottleneck metric: **third-city rate** (target: ≥0.8 by turn 13, Greedy's level), with army value @ turn 12 as the co-metric. Caveat: per-turn means past ~turn 18 are survivorship-biased (Greedy's wins end ~turn 20, the model's ~turn 24).
+
+## EXP_ELO_002: Hold the greedy anchor until the gauge crosses 50%
 *Jul 11, 2026 · pre-registered*
+<!-- heading restored Aug 18, 2026: it was lost in an edit, leaving this entry
+     running on from EXP_ELO_001's results. Text below is unchanged. -->
 
 The plateau's timing matches the crutch schedule, not a capacity wall: `anchor_frac` starts at 0.25 and decays 0.97^iter to its 0.1 floor by ~iter 30, and the heuristic prior weight decays 0.5→0.1 on the same clock — so from mid-run onward ~90% of games are weak-net-vs-weak-net. Value targets from those games teach "who beats a weak net", not "who beats Greedy". EXP 7 showed the teacher seat was the largest single gain of the campaign; we then removed it on a schedule instead of on a condition, while the model was still below the teacher.
 
@@ -225,3 +264,505 @@ The behavior curves carry the real signal. Across readings 30→80: the post-t15
 
 ### Queued follow-up — EXP_ELO_003: anchor dose-response (0.25 → 0.4–0.5)
 Promoted to a live EXP only after 002 reads out. Trigger: 002 shows a real but slow climb (readings rising but <8pp over 3) → test whether more anchor games speed value-head relabeling. Run with `ANCHOR_FRAC=0.4`–`0.5`, watch vs-Greedy win rate + third-city rate, and watch policy CE for imitation-regression (anchor games record the greedy seat as teacher targets — too high a dose re-anchors the policy to the teacher, whose ceiling we're trying to pass; it also risks overfitting an exploit lane against a deterministic opponent instead of general strength). If 002 outright fails its falsifier, skip 003 — dose was never the variable.
+
+---
+
+*Aug 18, 2026 — the entries below were written after the changes landed, which is
+backwards for this protocol and is called out deliberately. Two repair waves fixed
+the pipeline and the gauge (see `expert_pipeline_audit.md`) and carried several
+behaviour changes with them. Each is registered here as its own EXP so it can be
+judged, but **none has been run: no gauge reading exists on the repaired
+instrument yet, so none of these has a verdict.** They are all ON by default
+except EXP_SEARCH_001, which means one re-baseline reading cannot separate them —
+plan the re-baseline accordingly.*
+
+## EXP_LABEL_001: One zero-sum value label (`REL_W` 0.4 → 1.0)
+*Aug 18, 2026 · REGISTERED, NOT YET RUN*
+
+Two constants disagreed about whether the value label is zero-sum:
+`FINAL_OUTCOME_REL_W = 1.0` ("an absolute own-progress component is NOT
+antisymmetric") governed the final-outcome tail, while `reward::REL_W = 0.4`
+("abs-dominant: rewards it regardless of the opponent") governed the TD body —
+which carries `TD_W = 0.7` (`src/bin/self_play.rs:52`), so 70% of the label was
+60% non-antisymmetric. The MCTS backup negates across every player-turn boundary
+(`mcts_common.rs`), which is only valid for antisymmetric v, so the absolute
+share was being corrupted through every EndTurn-crossing line — mildly in a
+2–3 ply tree, worse as search deepens (and EXP_SEARCH_001 deepens it).
+
+This is a **restoration, not a new idea**: notes.md's "Phase-1 training-signal
+fixes" (Jul 8) already set both weights to 1.0 for exactly this reason, and 0.4
+came back in a later re-import. The measured problem that motivated an absolute
+share is real — in mirror play the relative swing nets to ~0 and the label goes
+empty (Jul 7–8 decision traces) — and is attacked in the DATA instead, via
+greedy-anchor games that make passivity actually lose.
+
+**Change:** one constant, `reward::REL_W = 1.0` (`src/ai/reward.rs:26`), read by
+both the TD body (`:47`) and the final-outcome tail (`self_play.rs:560`).
+`GOOD_BOT_FINAL_SCORE` (`self_play.rs:49`) is live again as the absolute
+yardstick, reachable only by lowering `REL_W`.
+
+### Expected Results
+Vs-greedy gauge on the fixed seed set (n=32 seeds sides-swapped) at or above the
+pre-change 25–34% band, and `value_r2_holdout` no worse than −0.05 versus the
+in-sample series it replaces. Direct co-metric: `vlab_wl_share` (the win/loss
+share of the label's magnitude, plotted on the dashboard) rises.
+
+### Falsifier
+Three consecutive readings below the lower bound of the pre-change band →
+REJECT and restore the split constants. **Check A2b first:** the label still
+reads raw `score` (`reward.rs:54`) while training plays Domination, and score was
+measured ~8pp worse than unit count at predicting the winner at every turn. A
+zero-sum label built on the wrong quantity is not evidence against zero-sum.
+
+### Actual Results
+NOT YET RUN.
+
+## EXP_LABEL_002: The `v_progress` head leaves the search Q (aux-only)
+*Aug 22, 2026 · REGISTERED, NOT YET RUN · corrective, no measurement bar*
+
+`GumbelNode::q_value()` returned `value_sum / visits + own_progress`, and the
+root q_value is the TD bootstrap for the value label (`last_root_value`
+→ `self_play.rs`'s `td_lambda_labels`). Two consequences, neither intended:
+
+1. **The label was backend-dependent.** Only candle computes the head
+   (`eval_server.rs:279-288`); tch (`:299-300`) and metal (`:657-659`, "MPSGraph
+   doesn't compute the progress head") stub it to `0`. Identical games therefore
+   produced different training data depending on which box generated them, and
+   gauge readings taken on different backends were not comparable. This is the
+   same failure family as the candle strided-tensor bug — an Apple run and a
+   Linux run of the same weights were not training the same learner.
+2. **It mis-signed under adversarial search.** `value_sum` holds the edge value
+   in the **parent's** perspective (Gumbel convention, `mcts_common.rs`), while
+   `own_progress` is the node's own mover's predicted city share. A handover
+   child's Q therefore gained the *opponent's* progress un-negated, confounding
+   EXP_SEARCH_001 — the one landed-but-unmeasured arm that can be cleanly A/B'd
+   against the re-baseline.
+
+3. **It reached the exported policy targets, not just the value label.**
+   Beyond what #33 records: `extract_policy_targets` builds π′ from
+   `sigma_completed_q(child_qvalues, ...)` (`gumbel_mcts.rs`), and those are
+   `q_value()`s — so the *policy* target written into every training sample
+   carried the progress term as well. Worse, `own_progress` is `0.0` on an
+   unexpanded child, so within one node the term was added to in-cut children
+   and not to out-of-cut ones, biasing π′ toward whatever the search happened
+   to expand. `recommend_final_move` reads the same values, so it moved the
+   played move too.
+
+The term was not small: `progress_target` is a city share rescaled to ±1
+(`self_play.rs:2300-2304`), the same magnitude as Q itself.
+
+**Change:** `q_value()` returns the mean action value only; the `own_progress`
+field and the vestigial `progress_sum` are gone from `gumbel_mcts.rs`, as is the
+`(value, progress)` leaf tuple that existed only to feed them. `mcts_zero.rs`
+already ignored the head, so the two search implementations now agree. The head
+itself is untouched and still trained — `network.rs`'s `v_progress`, `train.py`'s
+MSE on the `progress` target, and the target `self_play` writes are all as they
+were. It is now aux-only, like the `aux_*` heads.
+
+This is a **correction, not a hypothesis**: `git log -S own_progress` puts its
+introduction in `0290a89` ("fixed improper city / capital target scoring") with
+no registered rationale, and no verdict in this log depends on it. Nothing is
+being traded away, so there is no success bar — but it changes what the search
+computes, so it must land *before* the re-baseline rather than during it.
+
+### Expected Results
+Root values return to the value head's own scale (a perturbation probe moved
+`last_root_value` from −0.46 to 273.55 before this change). Candle-generated and
+tch/metal-generated training data — both value labels and policy targets —
+become interchangeable. Because π′ changes, self-play trajectories differ from
+any previous run even at a fixed seed, so this is behaviour-affecting in the
+same sense as the movegen-ordering fix: no metric taken before it is comparable
+with one taken after.
+
+### Falsifier
+Not falsifiable as a strength claim, and should not be treated as one. The one
+outcome that would argue for the *other* repair — implementing the head in
+tch/metal and sign-flipping it across handover edges — is a re-baseline that
+comes in materially below the pre-change candle band, which would suggest the
+progress term was carrying real signal rather than noise. Held by
+`tests/test_progress_head_not_in_search.rs`, which perturbs `v_progress` and
+asserts the search does not move; it was verified to fail before this change.
+
+### Actual Results
+NOT YET RUN.
+
+## EXP_SEARCH_001: Adversarial in-tree search — give the opponent its turn
+*Aug 18, 2026 · REGISTERED, NOT YET RUN · off by default*
+
+The single largest behaviour defect found in this repo. `Game::simulate_move`'s
+`EndTurn` branch looped `end_turn()` until control came back to the mover,
+deleting every opponent turn in between — the comment read "Single-player MCTS:
+skip enemy turns". The opponent still collected income and had its units
+refreshed; it simply never acted. Measured: `simulate_move(EndTurn)` left player
+1 to move while the opponent's stars went 5→7 and its units' `moved` flags reset;
+a 60-ply descent across 15 turn boundaries visited only player 1; and production
+`self_play` reported 5.06 in-tree `EndTurn` edges per move decision at only 16
+MCTS iterations. So the search has always been optimising against an opponent
+that banks resources and passes.
+
+The two-player machinery was already built and correct (player-aware sign-flipping
+backup, POV-correct leaf features, per-mover edge rewards); only `game.rs`
+short-circuited it.
+
+**Change:** `game::adversarial_search()` (`src/game.rs:34`, override
+`set_adversarial_search` `:51`, env `POLYFISH_ADVERSARIAL_SEARCH=1`,
+`arena --adversarial`) makes the `EndTurn` branch hand over exactly once
+(`:390`). Shipped with it, because a naive flip hands control to an opponent with
+no army: `clone_for_mcts` (`:258`) confines the in-tree opponent to the root
+player's vision, so it plays a **belief-state** opponent — only the units, cities
+and tiles the root player can currently see. Sign handling was audited in every
+backend (`mcts_zero.rs:57` negates a handover child before comparing siblings via
+`mcts_common::edge_hands_over` `:159`; `mcts.rs:72` minimises at opponent nodes;
+`gumbel_mcts.rs:1290` refuses to re-root tree reuse across a handover).
+`tests/adversarial_search.rs` pins the switch and the handover.
+
+**Default OFF.** Nothing in `run_training_loop.sh` sets it.
+
+### Expected Results
+Head-to-head at equal sims, 32 seeds sides-swapped, same weights both sides:
+adversarial ≥60% vs non-adversarial. Behaviour co-metrics unchanged or better
+(third-city rate by t13, army value @ t12). Cost must be measured on the same
+run: a turn of horizon now costs ~2× the plies (`brain.rs:423-426`), so also
+compare at equal **wall-clock**, not only at equal sims.
+
+### Falsifier
+<55% at equal sims AND no better at equal wall-clock → keep it off, and record
+that the null opponent was not the binding constraint. Note the honest weakness
+of the fix before running it: a belief-state opponent that can only move what we
+can see is a *weak* opponent model, not a correct one — a null result may be
+about the belief state rather than about adversarial search.
+
+### Actual Results
+NOT YET RUN.
+
+## EXP_SEARCH_002: `max_turns_ahead` honours its `max_turns` argument
+*Aug 18, 2026 · REGISTERED, NOT YET RUN*
+
+The in-tree horizon function ignored the argument it was given and hard-coded a
+20-turn game: `if turn < 8 { 5 } else { (20 - turn).max(2).min(20) }`. From turn
+18 onward it returned the floor of 2 — and the curriculum has been generating
+30-turn and 45-turn games since well before that, so for most of every training
+game the search was running at its minimum horizon for no stated reason.
+
+**Change:** `(max_turns - current_turn).clamp(MIN_TURNS_AHEAD, MAX_TURNS_AHEAD)`
+(`src/ai/brain.rs:430`, bounds at `:421` and `:426`). Monotonically
+non-increasing in `current_turn`, never looks past the game's own end.
+
+### Expected Results
+At the 45-turn curriculum stage the horizon is 5 for every turn ≤40 instead of 2
+from turn 18. The late-game metrics EXP_ELO_002 read as the real signal should
+move first: SPT @ t25, army value @ t25, and the t25 score gap. Throughput falls
+— quantify it, this buys depth with compute.
+
+### Falsifier
+No movement in the late-game metrics over 20 iterations while moves/sec falls
+>15% → revert to a cheap constant horizon (the old function's *behaviour* was a
+constant 2 in the late game; that is the arm to compare against).
+
+### Actual Results
+NOT YET RUN.
+
+## EXP_SEARCH_003: Research actually unlocks inside the search
+*Aug 18, 2026 · REGISTERED, NOT YET RUN*
+
+`unlock_tech` set `discovered: state.settings._are_you_sure`, and the simulation
+path deliberately never sets `_are_you_sure`. So inside the search, researching a
+technology spent stars and granted score but unlocked nothing: no unit, no
+structure, no harvest. The agent could never plan "research X, then use X" — only
+"research X, then notice the scoreboard went up".
+
+This is a plausible mechanism behind EXP_ELO_001's sharpest finding, that the
+model out-researches Greedy in every split including its losses (17.3 vs 12.1
+techs by t24) while converting fewer stars into units and cities.
+
+**Change:** `discovered: true` unconditionally (`src/actions/tech.rs:37`). Real
+states only ever carry discovered techs, so a simulated research now unlocks what
+a real one does.
+
+### Expected Results
+Techs @ t24 in self-play falls toward Greedy's ~12, **or** stays high while
+units/cities in the same window rise (research that now pays for itself). Either
+is a pass; the failure mode is high tech with nothing bought with it.
+
+### Falsifier
+Techs @ t24 unchanged and army value / city count unchanged over 20 iterations →
+the sim was not what made research look free, and the label is the suspect
+instead (points at A2b: tech tier pays raw `score` directly).
+
+### Actual Results
+NOT YET RUN.
+
+## EXP_DATA_001: Symmetric training maps
+*Aug 18, 2026 · REGISTERED, NOT YET RUN*
+
+Over 500 seeds of the exact Tiny/Drylands configuration `self_play` generates,
+player 2 starts on an island with ≤2 land neighbours in 166/500 games (33%) while
+player 1 does so in 0/500. Mean land in the 8 tiles around the capital is P1 8.00
+vs P2 6.01, and 469/500 seeds give materially different seats. Symmetric mapgen
+already existed and was simply never used for training. With `symmetric: true`
+every metric is identical and island starts drop to 0/500.
+
+An uncompensated seat advantage puts a seat term in every value label, which the
+network can only fit as noise — and notes.md already recorded the symptom without
+naming the cause ("p1 vs p2 score gap (~4256 vs 3291) is seat advantage, both
+sides were the same model").
+
+**Change:** `self_play --symmetric` defaults to true
+(`src/bin/self_play.rs:1342`); `src/mapgen.rs:1712` asserts seat equality over
+120 seeds, with the measurement kept as an `--ignored` diagnostic at `:1729`.
+
+### Expected Results
+The p1/p2 win-rate and score gap in the training log collapses toward even within
+5 iterations. `value_r2_holdout` improves, because the seat term is no longer in
+the label.
+
+### Falsifier
+p1/p2 gap unchanged over 10 iterations → the imbalance was not the source of it;
+revert, since symmetric maps cost map diversity for nothing.
+
+### Watch
+Two interactions this does not settle. (1) The **gauge still plays asymmetric
+maps** — `arena --symmetric` defaults to false and `run_gauge_match` does not
+pass it, so training and evaluation now disagree about the map distribution; fix
+before the re-baseline (audit M2). (2) The interaction with `AUGMENT_D4` is
+unexamined: every training position now has a 180°-rotational relationship
+between the two seats, and what that does to rotation augmentation has not been
+measured. D4 is off by default and should stay off here.
+
+### Actual Results
+NOT YET RUN.
+
+## EXP_DATA_002: Opening-move temperature — sample π′ for the first 8 plies
+*Aug 18, 2026 · REGISTERED, NOT YET RUN*
+
+Move-selection temperature was disabled (`TEMPERATURE_MOVE_THRESHOLD = 0`), so
+every game in an iteration opened from the same state with the same deterministic
+argmax. That is a duplicated-data problem before it is an exploration problem:
+the buffer contains many near-identical opening trajectories, and the policy head
+fits them repeatedly.
+
+**Change:** `self_play --opening-temp-moves`, default 8 plies
+(`src/bin/self_play.rs:1349`). For those plies the played move is a draw from the
+search's improved policy π′ (`sample_opening_move`, `:580`; applied at `:868`);
+the argmax resumes afterwards. **The policy target stays π′ either
+way** — this changes which state the game visits, not what is learned at it,
+which is the AlphaZero/Gumbel convention. A draw that is not legal in the
+un-obscured state (the search ran on a fog-obscured clone) falls back to the
+argmax.
+
+8 plies is roughly one Polytopia turn (notes.md: ~8 plies to complete one game
+turn), so this randomizes about the first turn only.
+
+### Expected Results
+Opening diversity within an iteration rises — measured as the fraction of games
+sharing an identical first-8-ply command sequence, from ~1.0 to <0.5. No
+degradation in the behaviour metrics over 10 iterations: `villages_t2c_first_cond`
+within +0.5 turns, captures/game flat or up.
+
+### Falsifier
+t2c worsens by >0.5 turns or captures/game falls over 10 iterations → halve to 4
+plies, and if that still costs, set 0 and record that the opening argmax was
+load-bearing.
+
+### Actual Results
+NOT YET RUN.
+
+## EXP_TEACH_001: Army-composition scoring in the greedy teacher
+*Aug 18, 2026 · REGISTERED, NOT YET RUN*
+
+EXP_ELO_001 named army production and composition as one of the two behavioural
+bottlenecks. Until now every affordable unit scored identically at summon time
+apart from a flat +15 for Giant, so the teacher — whose games are 25% of every
+self-play iteration and whose ordering also feeds the search priors — had no
+notion of an army that fits together.
+
+**Change (`src/ai/scoring.rs`):** summon score gains the unit's meta value
+(`UNIT_VALUES × SUMMON_QUALITY_W`, `:331`) plus three composition bonuses keyed
+off a `UnitRole` classification (`:21`): a Frontline screen when ranged units
+outnumber frontline, Ranged when frontline outnumbers ranged, and Mobile once
+Roads is researched (constants `:57-60`, applied at `:349-352`).
+
+This is a **teacher change, therefore a training-data change** — it must be
+judged like one, not shipped as a tidy-up.
+
+### Expected Results
+Measured on the teacher itself, before any training: `greedy_teacher_behaviour_probe`
+(`src/ai/scoring.rs`, `#[ignore]`d, 64 fixed seeds, reports the EXP_ELO_001
+metrics) shows army value @ t12 up, and the frontline/ranged/mobile mix at t12
+moves off a single role. Third-city rate by t13 unchanged — nothing here targets
+expansion, and a drop means the composition bonuses are stealing stars from it.
+
+```bash
+cd polyfish-rs && cargo test --release --no-default-features \
+    --lib greedy_teacher_behaviour_probe -- --ignored --nocapture
+```
+
+### Falsifier
+Army value @ t12 flat, or third-city rate down → revert the bonuses. The teacher
+is the training data; a worse teacher is strictly worse than no change (EXP 7 is
+the precedent: swapping the teacher was the single largest gain of that
+campaign).
+
+### Note on the other evaluator edit
+`evaluator::economy::penalty_partial_cities` no longer hits a `todo!()` on the
+win-condition-less modes (Custom/Sandbox/Tutorial/None) and returns 0.0 instead
+(`src/ai/evaluator/economy.rs:129`). That is a crash fix, not a behaviour change:
+training runs Domination, whose arm is untouched.
+
+### Actual Results
+NOT YET RUN.
+
+## EXP_TRAIN_001: Persistent optimizer and LR schedule across iterations
+*Aug 18, 2026 · REGISTERED, NOT YET RUN*
+
+`train.py` built a fresh Adam and a fresh `CosineAnnealingWarmRestarts` on every
+invocation, and the loop invokes it once per iteration — so the LR sawtoothed
+back to maximum every iteration and Adam's moments were thrown away each time.
+notes.md recorded the symptom during the behaviour-cloning work without fixing
+it: "each new train.py invocation restarts the cosine LR at max and undoes
+fine-tuning (use one long run, or TRAIN_LR lower for continuations)".
+
+**Change:** Adam state and the scheduler step persist in `optimizer_state.pt`,
+keyed by `run_id` so a new run starts clean (`train.py:412`, load `:423-457`,
+save `:459-466`, wired at `:651` and `:943`). The cosine schedule now spans the
+run.
+
+### Expected Results
+Policy CE at equal iteration lower and visibly smoother — the per-iteration
+sawtooth in the loss series disappears. `value_r2_holdout` up. No change to
+throughput.
+
+### Falsifier
+Loss-curve shape unchanged over 20 iterations → revert, and note the real risk
+being traded away: a stale optimizer state carried across a curriculum stage
+change (10→15→30→45 turns) is a distribution shift Adam's moments were fitted
+before.
+
+### Actual Results
+NOT YET RUN.
+
+## EXP_TRUNK_001: `DETACH_VALUE_TRUNK` — let value gradient reach the trunk
+*Aug 18, 2026 · REGISTERED, NOT YET RUN · the verdict audit A1 says was never written*
+
+`run_training_loop.sh:23` exports `DETACH_VALUE_TRUNK=1`. `train.py:44-48`
+documents it as bisect Arm D and `bisect_arm.sh:14` treats it as a diagnostic;
+CLAUDE.md's own rule is that anything exported unconditionally from the loop is
+a production setting. It has been on for the whole recorded history of this fork
+with **no entry in this file** — which is precisely the state #12 documents for
+`AUGMENT_D4`, where a measured rationale was lost and the setting then read as an
+oversight.
+
+Provenance is unrecoverable: this repo is a fork and the switch was set upstream.
+So it is settled empirically rather than archaeologically, and this entry exists
+so the next reader inherits a registered arm instead of an unexplained export.
+
+**What the switch does.** With it on, no value-loss gradient reaches `conv1`, the
+ResBlocks, or the cross-attention. The value head still trains at full strength,
+but only on whatever representation the trunk built for move-picking — it cannot
+cause the trunk to represent winning-ness at all. MCTS queries that head at every
+leaf of every search, so a value head riding as a passenger on policy features
+caps search quality no matter how good the policy is. The defensible reason to
+have set it: two heads on one trunk can genuinely fight, and a noisy value signal
+can degrade the policy. Detaching isolates that.
+
+**Change:** run the arm both ways at equal budget on a fixed seed set. The switch
+is now overridable rather than hardcoded (`run_training_loop.sh:23`), so the off
+arm needs no edit to the driver:
+
+```bash
+DETACH_VALUE_TRUNK=0 ./run_training_loop.sh --new-run -i 20 -l 5
+```
+
+### Prerequisite — sequencing, not optional
+Run this **after** the A2b label fix, not before. A2b changes the prior on why
+the switch exists: detaching only pays if value gradient was actively harming the
+policy, and A2b shows the value label is built on a quantity ~8pp worse than an
+available alternative at every turn, degrading in the late game. A plausible
+history is that the value signal genuinely was harmful, someone correctly saw the
+policy suffering, and detaching treated the symptom rather than the cause. Remove
+the detach *before* fixing the label and you reproduce the original harm and read
+it as "value gradient hurts the trunk".
+
+It also needs a gauge baseline (#1, #2, #4, #5, #7 — all now closed) so the two
+arms are read on a common map set.
+
+### Expected Results
+With `DETACH_VALUE_TRUNK=0`: `value_r2_holdout` up materially — the trunk can
+finally build features for the value question. vs-Greedy win rate up, because
+the search's leaf evaluations improve. Policy CE flat or slightly worse early
+(the trunk is now serving two objectives) and recovering.
+
+### Falsifier
+Policy CE materially worse and vs-Greedy win rate not up after 20 iterations →
+detaching was load-bearing. Record that as the verdict and stop treating the
+export as an accident.
+
+Read `value_r2_holdout` rather than `value_r2`: in-sample R² rises under either
+arm and cannot distinguish them.
+
+### Actual Results
+NOT YET RUN.
+
+
+## Also landed Aug 18 — behaviour-affecting, not separately registered
+
+Correctness and integrity fixes with no free parameter to tune, listed so a
+behaviour change is never mistaken for noise:
+
+- **Self-play no longer records samples for moves that never happened.** A
+  training sample and a replay entry were pushed *before* `play_move`, so a move
+  the engine rejected left a sample for a transition the game cannot reach.
+  Nothing is recorded until the move lands, and a rejected legal move discards
+  the whole game and increments a new `aborted_games` metric
+  (`src/bin/self_play.rs:933`, `:962`, `:2506-2514`).
+- **`GameRecorder` refuses to write steps with no outcome** instead of labelling
+  them `win = 0.0` (`src/recorder.rs:79-108`). The old constant-0 label trained
+  the value head toward a draw on every human/imitation state it covered.
+- **`freeze_area` actually freezes, and its undo round-trips**
+  (`src/actions/mod.rs:430`; `tests/freeze_undo.rs`). Polaris-only in effect, but
+  a non-round-tripping undo corrupts the MCTS tree for everyone.
+- **`Infiltrate` no longer exempts a unit from road/terrain movement rules**
+  (`src/moves/mod.rs:691`) — it is an attack-targeting skill; the exemptions its
+  carriers enjoy come from Creep or Fly. This narrows legal moves for those
+  units.
+- **Unimplemented structures cannot be built.** `Outpost` is skipped in movegen
+  and rejected by `BuildMove::execute`
+  (`src/settings/structures.rs:44`), so it can no longer silently burn 5 stars.
+- **`arena` searches a fog-obscured clone**, as self-play does
+  (`src/bin/arena.rs:306-313`) — a measurement-alignment fix (audit M2), but it
+  changes what the graded agent can see, so old and new arena readings are not
+  directly comparable.
+- **`generate_legal_moves` returns a deterministic order.** Two containers in
+  movegen were iterated to emit moves — `compute_reachable_tiles`'s `HashMap` of
+  step targets (`src/moves/mod.rs:377`) and `generate_research_moves`'s
+  `HashSet` (`src/moves/research.rs:113`) — and Rust seeds each map instance
+  separately, so the same position produced the same moves in a different order
+  on every run. The *policy* was insulated (`mapper.rs` maps moves to stable
+  semantic coordinates precisely because raw ordering was not stable), but the
+  **search** was not: root children are zipped with Gumbel draws by index, so a
+  permuted list assigns different noise to different moves. This is why no
+  search experiment was ever replayable. Ordered now (`BTreeMap`, and a sort
+  before emission) and held by `tests/search_determinism.rs`. Behaviour-
+  affecting: it changes which move gets which draw and how ties break, so
+  self-play trajectories differ from any previous run even at a fixed seed.
+- **Cross-attention was wrong for every batch row after the first, on the
+  default backend.** `network.rs` fed the attention's `q_proj` a strided view
+  (`x.flatten_from(2)?.transpose(1, 2)?`), and `candle_nn::Linear` on that
+  layout returns different values from its contiguous equivalent for every row
+  but row 0 — position, not contents: it reproduces with all rows identical.
+  The eval server batches leaf evaluations by design, so on Linux and CUDA runs
+  (candle is the default and the only non-Apple backend) most leaf evaluations
+  in every search returned corrupted policy and value. `tch`/`metal` were
+  unaffected — libtorch and MPSGraph handle the stride — so an Apple run was
+  reading a different network from a Linux run of the same weights.
+  **Behaviour-affecting in the strongest sense**: search quality on every
+  non-Apple run changes, and any behaviour metric taken from one is not
+  comparable with one taken after this fix. Found by the new
+  `scripts/run_forward_parity.sh` on its first run; see audit T1 for the
+  measurements, including why a batch-invariance test does not catch it.
+- **The Gumbel agent owns its RNG.** `GumbelMctsAgent::with_search_seed(u64)`
+  pins the stream; `POLYFISH_SEARCH_SEED` pins a base that still differs per
+  agent, because a stream shared across actors would make every actor play the
+  same game. Previously all three draw sites used the thread-local generator,
+  so no test could pin search behaviour (audit T3). Not behaviour-affecting on
+  its own — the default path is still seeded from OS entropy.

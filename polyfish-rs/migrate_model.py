@@ -5,6 +5,8 @@ import os
 # Must match train.py and features.rs
 PLAYER_STATE_DIM = 16
 FILTERS = 64
+# Must match train.py's NUM_ACTION_TYPES and network.rs's NUM_ACTION_TYPES.
+NUM_ACTION_TYPES = 12
 
 
 def migrate_model(file_path):
@@ -90,6 +92,25 @@ def migrate_model(file_path):
         state_dict["conv1.weight"] = torch.cat([conv1, pad], dim=1)
         migrated = True
 
+    # ------------------------------------------------------------------
+    # 5. action_type head widened to NUM_ACTION_TYPES (MoveType::Resign = 11
+    #    used to sit one past the old 11-wide head). Pad with a zero row so
+    #    the existing categories keep their learned weights.
+    # ------------------------------------------------------------------
+    pi_w = state_dict.get("pi_action.weight")
+    if pi_w is not None and pi_w.shape[0] < NUM_ACTION_TYPES:
+        old_n = pi_w.shape[0]
+        print(f"  Padding pi_action {old_n} → {NUM_ACTION_TYPES} action types")
+        state_dict["pi_action.weight"] = torch.cat(
+            [pi_w, torch.zeros(NUM_ACTION_TYPES - old_n, pi_w.shape[1], dtype=pi_w.dtype)], dim=0
+        )
+        pi_b = state_dict.get("pi_action.bias")
+        if pi_b is not None:
+            state_dict["pi_action.bias"] = torch.cat(
+                [pi_b, torch.zeros(NUM_ACTION_TYPES - old_n, dtype=pi_b.dtype)], dim=0
+            )
+        migrated = True
+
     if not migrated:
         print("Checkpoint is already up-to-date. No changes needed.")
         return
@@ -98,7 +119,9 @@ def migrate_model(file_path):
     os.rename(file_path, backup_path)
     print(f"Backed up original model to {backup_path}")
 
-    save_file(state_dict, file_path)
+    tmp_path = file_path + ".tmp"
+    save_file(state_dict, tmp_path)
+    os.replace(tmp_path, file_path)
     print(f"Successfully saved migrated model to {file_path}")
 
 

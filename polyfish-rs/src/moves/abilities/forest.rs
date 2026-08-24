@@ -1,7 +1,7 @@
 //! Forest related abilities
 
 use crate::actions::resource::consume_resource;
-use crate::actions::{chain_undos, gain_stars, modify_terrain, spend_stars};
+use crate::actions::{chain_undos, gain_stars, modify_terrain, require_stars, spend_stars};
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
 use crate::types::{AbilityType, MoveType, ResourceType, TerrainType};
@@ -80,6 +80,8 @@ impl Move for GrowForestMove {
     }
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+        require_stars(state, 5, "grow forest")?;
+
         let mut undos = Vec::new();
         // Spiritualism: Field -> Forest (Cost 5)
         undos.push(modify_terrain(
@@ -136,13 +138,13 @@ impl Move for BurnForestMove {
     }
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+        let cost = crate::version_sync::get_burn_forest_cost(state);
+        require_stars(state, cost, "burn forest")?;
+
         let mut undos = Vec::new();
         // Construction: Forest -> Field + Add Crop (Cost 3)
         undos.push(modify_terrain(state, self.target_index, TerrainType::Field));
-        undos.push(spend_stars(
-            state,
-            crate::version_sync::get_burn_forest_cost(state),
-        ));
+        undos.push(spend_stars(state, cost));
         undos.push(consume_resource(
             state,
             self.target_index,

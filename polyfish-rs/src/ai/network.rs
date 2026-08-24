@@ -1,10 +1,35 @@
 // Enhanced PolyZero Network with Decomposed Policy Heads
 // Based on the successful Python architecture
 
+use crate::ai::features::{MAP_SIZE, NUM_CHANNELS, RawFeatures};
+use crate::ai::mapper::{DecomposedMapper, NUM_MOVE_OPTIONS, REWARD_FALLBACK_SLOT};
+use crate::types::MoveType;
 use candle_core::{Module, ModuleT, Result, Tensor};
 use candle_nn::{Conv2d, GroupNorm, LayerNorm, Linear, VarBuilder};
 
 pub const NUM_ACTION_TYPES: usize = 12;
+
+const FILTERS: usize = 64;
+const RES_BLOCKS: usize = 6;
+const GN_GROUPS: usize = 8;
+const ATTENTION_HEADS: usize = 4;
+
+// Head widths are the shapes stored in model.safetensors, so they must cover
+// the mapper's whole target space (Resign = 11 is the highest action slot).
+const _: () = {
+    assert!(DecomposedMapper::move_type_to_idx(MoveType::Resign) < NUM_ACTION_TYPES);
+    assert!(REWARD_FALLBACK_SLOT < NUM_MOVE_OPTIONS);
+    assert!(FILTERS % GN_GROUPS == 0);
+    assert!(FILTERS % ATTENTION_HEADS == 0);
+};
+
+// Tripwires for the Rust/Python split: train.py hardcodes the matching
+// SPATIAL_CHANNELS / PLAYER_STATE_DIM, and a one-sided edit only shows up as a
+// safetensors load error or silent garbage.
+const _: () = {
+    assert!(NUM_CHANNELS == 142);
+    assert!(RawFeatures::PLAYER_STATE_DIM == 16);
+};
 
 fn conv(
     in_c: usize,
@@ -23,7 +48,7 @@ fn conv(
 }
 
 fn group_norm(c: usize, vs: VarBuilder) -> Result<GroupNorm> {
-    candle_nn::group_norm(8, c, 1e-5, vs)
+    candle_nn::group_norm(GN_GROUPS, c, 1e-5, vs)
 }
 
 struct ResBlock {
@@ -171,49 +196,38 @@ pub struct PolyZeroNet {
 
 impl PolyZeroNet {
     pub fn new(vs: VarBuilder) -> Result<Self> {
-        let filters = 64;
-        let blocks = 6;
-        let input_channels = crate::ai::features::NUM_CHANNELS;
-        let player_state_dim = crate::ai::features::RawFeatures::PLAYER_STATE_DIM;
-        let num_action_types = 11;
-        let num_options = 192;
+        let filters = FILTERS;
+        let input_channels = NUM_CHANNELS;
+        let player_state_dim = RawFeatures::PLAYER_STATE_DIM;
 
         let conv1 = conv(input_channels, filters, 3, 1, 1, vs.pp("conv1"))?;
         let gn1 = group_norm(filters, vs.pp("gn1"))?;
 
         let mut res_blocks = Vec::new();
-        for i in 0..blocks {
+        for i in 0..RES_BLOCKS {
             res_blocks.push(ResBlock::new(filters, vs.pp(format!("res_blocks.{}", i)))?);
         }
 
         // Player state tokenization
         // Use vs.get to load the learnable embeddings [10, 64]
-        let player_feature_embeddings = vs.get(
-            (player_state_dim as usize, filters),
-            "player_feature_embeddings",
-        )?;
-        let player_pos_embeddings = vs.get(
-            (player_state_dim as usize, filters),
-            "player_pos_embeddings",
-        )?;
+        let player_feature_embeddings =
+            vs.get((player_state_dim, filters), "player_feature_embeddings")?;
+        let player_pos_embeddings = vs.get((player_state_dim, filters), "player_pos_embeddings")?;
         let player_fc = candle_nn::linear(filters, filters, vs.pp("player_fc"))?;
 
         // Cross-Attention layer
-        let cross_attention = CrossAttention::new(filters, 4, vs.pp("cross_attention"))?;
+        let cross_attention =
+            CrossAttention::new(filters, ATTENTION_HEADS, vs.pp("cross_attention"))?;
 
         // Shared policy processing
         let p_pool_conv = conv(filters, 1, 1, 1, 0, vs.pp("p_pool_conv"))?;
-        let p_fc_shared = candle_nn::linear(
-            1 * crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE,
-            filters,
-            vs.pp("p_fc_shared"),
-        )?;
+        let p_fc_shared = candle_nn::linear(MAP_SIZE * MAP_SIZE, filters, vs.pp("p_fc_shared"))?;
 
         // Policy heads
-        let pi_action = candle_nn::linear(filters, num_action_types, vs.pp("pi_action"))?;
+        let pi_action = candle_nn::linear(filters, NUM_ACTION_TYPES, vs.pp("pi_action"))?;
         let pi_source = conv(filters, 1, 1, 1, 0, vs.pp("pi_source"))?;
         let pi_target = conv(filters, 1, 1, 1, 0, vs.pp("pi_target"))?;
-        let pi_option = candle_nn::linear(filters, num_options, vs.pp("pi_option"))?;
+        let pi_option = candle_nn::linear(filters, NUM_MOVE_OPTIONS, vs.pp("pi_option"))?;
 
         // Value processing (EXP_ARCH_001): global mean+max pool over the full
         // trunk -> MLP, instead of collapsing to a single channel.
@@ -262,7 +276,15 @@ impl PolyZeroNet {
 
         // 2. Tokenize inputs for Cross-Attention
         // Spatial tokens: [B, H*W, Filters]
-        let spatial_tokens = x.flatten_from(2)?.transpose(1, 2)?;
+        //
+        // `.contiguous()` is load-bearing, not tidiness. `transpose` leaves a
+        // strided view, and a matmul against a strided batch (which is what the
+        // attention's q_proj Linear does first) reads the wrong elements for
+        // every batch item after the first — item 0 has offset 0 and comes out
+        // right, so a batch-1 test cannot see it. Caught by
+        // scripts/py_parity.py against train.py; see the note in
+        // hypothesis_driven_improvements.md.
+        let spatial_tokens = x.flatten_from(2)?.transpose(1, 2)?.contiguous()?;
 
         // Player tokens: [B, 10, Filters]
         // player_tokens = player_input[B, 10, 1] * embeddings[1, 10, 64]
@@ -388,7 +410,23 @@ mod tests {
         net.forward(&map, &player).unwrap()
     }
 
+    /// The decomposed heads must be exactly as wide as the target space the
+    /// mapper and the self-play writers encode against.
+    #[test]
+    fn head_widths_match_the_target_space() {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vs = VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
+        let net = PolyZeroNet::new(vs).unwrap();
+        let (policy, value) = forward_dummy(&net, &device);
 
+        assert_eq!(policy.action_type.dims(), &[2, NUM_ACTION_TYPES]);
+        assert_eq!(policy.move_option.dims(), &[2, NUM_MOVE_OPTIONS]);
+        assert_eq!(policy.source_spatial.dims(), &[2, MAP_SIZE * MAP_SIZE]);
+        assert_eq!(policy.target_spatial.dims(), &[2, MAP_SIZE * MAP_SIZE]);
+        assert_eq!(value.win_value.dims(), &[2, 1]);
+        assert_eq!(value.progress_value.dims(), &[2, 1]);
+    }
 }
 
 impl PolicyOutput {

@@ -29,22 +29,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use strum::IntoEnumIterator;
 
-const HEURISTIC_PRIOR_W0: f32 = 0.5; // net & heur blended 50/50 at start
-const HEURISTIC_PRIOR_DECAY: f32 = 0.97; // decays 0.5 -> 0.1 floor by ~iteration 47
-const HEURISTIC_PRIOR_W_FLOOR: f32 = 0.1; // permanent behavioral floor, root + in-tree
+// The prior/σ(Q) schedules live in the library so `arena` grades the searcher
+// these produce rather than mirroring their converged values (#32).
+use polyfish::ai::curriculum::{
+    ANCHOR_FRAC_DECAY, decay_crutch, policy_target_q_weight, prior_heuristic_weight,
+};
 
 // Absolute yardstick for the value target; 8K points is a good place to end a 30T game
 const GOOD_BOT_FINAL_SCORE: f32 = 8000.0;
-// How much to weight relative (vs opponent) vs absolute (vs yardstick) final outcome.
-// 1.0 = pure relative (zero-sum). The value backup negates across every
-// player-turn boundary (mcts_common.rs), which is only valid when
-// v(mine) = -v(theirs); an absolute own-progress component is NOT
-// antisymmetric — the opponent's progress isn't my loss — so any abs share
-// gets systematically corrupted through EndTurn-crossing lines, worse as
-// search deepens. The mirror-play "empty relative label" problem is fixed in
-// the DATA instead: anchor games vs the greedy backend (--anchor-frac)
-// make passivity actually lose, giving the relative label real signal.
-const FINAL_OUTCOME_REL_W: f32 = 1.0;
 
 // Weight of the TD(lambda) delta vs the final-outcome tail.
 const TD_W: f32 = 0.7;
@@ -63,11 +55,6 @@ const NEAR_DELTA_NORM_FRAC: f32 = 0.15;
 const NEAR_DELTA_NORM_FLOOR: f32 = 600.0;
 // Weight of the near-term delta vs the final-outcome tail.
 const NEAR_DELTA_W: f32 = 0.7;
-// Weight of the relative (vs opponent) component within the near-term delta.
-// 1.0 = pure relative, for the same negamax-antisymmetry reason as
-// FINAL_OUTCOME_REL_W above. The signal against passivity comes from anchor
-// games, not from a non-zero-sum label.
-const NEAR_DELTA_REL_W: f32 = 1.0;
 
 // Potential-based SPT shaping (economy credit). Φ = (my_spt - opp_spt) /
 // default_max_spt, clamped ±1; each step's label gets SPT_SHAPE_W *
@@ -78,12 +65,6 @@ const NEAR_DELTA_REL_W: f32 = 1.0;
 // potential-based (Ng et al. 1999), so it telescopes out of full returns
 // and cannot change the optimal policy, only the credit assignment.
 const SPT_SHAPE_W: f32 = 0.24;
-
-// Ramp (in iterations) for β on σ(Q) in the exported policy targets:
-// β = min(1, iteration/20). Early on the value head's Q ordering is noise
-// that min-max rescaling amplifies to full strength, so π' corrodes the
-// prior; let search re-ranking into the targets only as the head matures.
-const POLICY_TARGET_Q_RAMP_ITERS: f32 = 20.0;
 
 /// Console verbosity for long self-play runs.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -427,6 +408,10 @@ struct GameResult {
     /// Mean tribe SPT sampled at the start of game turns 0, 5, 10, … (player 1
     /// to act, before any moves on that turn).
     spt_at_turn: HashMap<i32, f32>,
+    /// Largest |incremental score − canonical recompute| at game end. The
+    /// value label and the reward-aware backup are built from the incremental
+    /// score, so anything but 0 is a silent bias in the training signal (#40).
+    score_drift: i32,
 }
 
 const SPT_MILESTONES: [i32; 7] = [0, 5, 10, 15, 20, 25, 30];
@@ -560,8 +545,57 @@ fn outcome_for(result: &GameResult, p_id: i32, reward_shaping: bool) -> f32 {
     // We use `my_adjusted` so that asymmetric reward shaping (if enabled)
     // applies to this absolute performance yardstick as well.
     let abs_outcome = (my_adjusted / GOOD_BOT_FINAL_SCORE).clamp(0.0, 1.0) * 2.0 - 1.0;
-    (FINAL_OUTCOME_REL_W * relative_outcome + (1.0 - FINAL_OUTCOME_REL_W) * abs_outcome)
-        .clamp(-1.0, 1.0)
+    (reward::REL_W * relative_outcome + (1.0 - reward::REL_W) * abs_outcome).clamp(-1.0, 1.0)
+}
+
+/// Every field `MoveVisit` carries, so a sampled entry resolves back to the
+/// one legal move it was built from.
+fn move_matches(m: &dyn polyfish::moves::Move, mv: &polyfish::ai::mcts_types::MoveVisit) -> bool {
+    m.move_type() == mv.move_type
+        && m.source_idx().ok() == mv.source_idx
+        && m.target_idx().ok() == mv.target_idx
+        && m.structure_type().ok() == mv.structure_type
+        && m.unit_type().ok() == mv.unit_type
+        && m.tech_type().ok() == mv.tech_type
+        && m.ability_type().ok() == mv.ability_type
+        && m.reward_type().ok() == mv.reward_type
+}
+
+/// Odd salt, so the opening stream neither aliases the tribe-shuffle stream
+/// (seeded from the same value) nor collides across games.
+const OPENING_RNG_SALT: u64 = 0x5EED_0BE4_1A89_C0D5;
+
+/// The opening sampler's stream for one game.
+///
+/// Mixes `game_idx` as well as `seed`: a mirror pair shares its seed, and on a
+/// symmetric map with one model on both seats the two games would otherwise
+/// draw the identical opening and play near-duplicates.
+fn opening_rng_for(seed: i64, game_idx: usize) -> rand::rngs::SmallRng {
+    use rand::SeedableRng;
+    rand::rngs::SmallRng::seed_from_u64(
+        (seed as u64)
+            .wrapping_mul(OPENING_RNG_SALT)
+            .wrapping_add(game_idx as u64),
+    )
+}
+
+/// Draw a move from the search's improved policy pi' (`MoveVisit::visits`) and
+/// resolve it against `state`'s legal moves. `None` for a degenerate
+/// distribution or a draw that is not legal in the un-obscured state (the
+/// search ran on a fog-obscured clone), leaving the caller on the argmax.
+fn sample_opening_move(
+    state: &GameState,
+    move_visits: &[polyfish::ai::mcts_types::MoveVisit],
+    rng: &mut impl rand::Rng,
+) -> Option<Box<dyn polyfish::moves::Move>> {
+    use rand::distr::{Distribution, weighted::WeightedIndex};
+
+    let weights: Vec<f32> = move_visits.iter().map(|mv| mv.visits.max(0.0)).collect();
+    let dist = WeightedIndex::new(&weights).ok()?;
+    let pick = &move_visits[dist.sample(rng)];
+    polyfish::moves::generate_legal_moves(state)
+        .into_iter()
+        .find(|m| move_matches(m.as_ref(), pick))
 }
 
 fn play_single_game(
@@ -574,16 +608,20 @@ fn play_single_game(
     seed: i64,
     tribes: Vec<TribeType>,
     iteration: usize,
+    decay_last_iter: usize,
     gamemode: u8,
     backend1: SearchBackend,
     backend2: SearchBackend,
     value_trust: Option<f32>,
     leaf_batch: Option<usize>,
     progress: ProgressMode,
+    symmetric: bool,
+    opening_temp_moves: usize,
     trace_villages: bool,
     trace_trigger: TraceTrigger,
     trace_max: usize,
     trace_counter: &AtomicUsize,
+    aborted_games: &AtomicUsize,
 ) -> Option<GameResult> {
     let (map_size, max_turns) = curriculum(iteration);
 
@@ -593,6 +631,7 @@ fn play_single_game(
         map_type: polyfish::types::MapType::Drylands,
         tribes: tribes.clone(),
         seed,
+        symmetric,
         ..Default::default()
     };
     if progress == ProgressMode::Full {
@@ -601,6 +640,12 @@ fn play_single_game(
             game_idx, seed, gen_settings.tribes, map_size, max_turns
         );
     }
+
+    // The opening sampler owns its stream. Drawing from the thread-local
+    // generator left the first `opening_temp_moves` plies unreproducible even
+    // with POLYFISH_SEARCH_SEED pinned -- and those plies override the agent,
+    // so the whole trajectory diverges (#37).
+    let mut opening_rng = opening_rng_for(seed, game_idx);
 
     let mut game = Game::new();
     game.state = polyfish::mapgen::generate(gen_settings);
@@ -632,13 +677,11 @@ fn play_single_game(
     let mut village_capture_turns: Vec<i32> = Vec::new();
     let mut ruin_capture_turns: Vec<i32> = Vec::new();
 
-    let prior_w = (HEURISTIC_PRIOR_W0 * HEURISTIC_PRIOR_DECAY.powi(iteration as i32))
-        .max(HEURISTIC_PRIOR_W_FLOOR);
+    let prior_w = prior_heuristic_weight(iteration, decay_last_iter);
     // One trust scalar drives β on σ(Q) in both the exported targets and the
     // search tree itself. --value-trust overrides the iteration ramp, which
     // saturates immediately on ITER_OFFSET-shifted runs.
-    let q_target_w =
-        value_trust.unwrap_or_else(|| (iteration as f32 / POLICY_TARGET_Q_RAMP_ITERS).min(1.0));
+    let q_target_w = value_trust.unwrap_or_else(|| policy_target_q_weight(iteration));
 
     // Create two agents (they might share the same network, or be different)
     let mut agent1 = Brain::with_backend(eval1, mcts_iters, backend1)
@@ -814,7 +857,9 @@ fn play_single_game(
             for x in &mut p_target {
                 *x /= total_visits;
             }
-            // ... (others)
+            for x in &mut p_option {
+                *x /= total_visits;
+            }
         }
 
         let policy_data = DecomposedPolicyData {
@@ -825,6 +870,15 @@ fn play_single_game(
         };
 
         let record_sample = !move_visits.is_empty();
+
+        // Opening diversity: play a sample from pi' rather than its argmax for
+        // the first `opening_temp_moves` plies. The policy target stays pi'
+        // either way, which is what AlphaZero/Gumbel train on.
+        let best_move = if move_count < opening_temp_moves && move_visits.len() > 1 {
+            sample_opening_move(&game.state, &move_visits, &mut opening_rng).or(best_move)
+        } else {
+            best_move
+        };
 
         if let Some(m) = best_move {
             let m_type = m.move_type();
@@ -874,15 +928,51 @@ fn play_single_game(
                 }
             }
 
-            let replay_command = ReplayCommand::from_move(m.as_ref()).ok()?;
-            flat_recap.push((
-                game.state.settings.turn,
-                game.state.settings.current_player_turn_id,
-                replay_command,
-            ));
+            let turn_now = game.state.settings.turn;
+            let replay_command = match ReplayCommand::from_move(m.as_ref()) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!(
+                        "[Game {}] BUG: move '{}' at turn {} failed to serialise ({}) — discarding this game",
+                        game_idx,
+                        m.describe(&game.state),
+                        turn_now,
+                        e,
+                    );
+                    aborted_games.fetch_add(1, Ordering::Relaxed);
+                    return None;
+                }
+            };
             // Snapshot scores/SPT at this moment (pre-move) for the TD label.
             let (my_score_now, opp_score_now) = reward::score_snapshot(&game.state, pov);
             let (my_spt_now, opp_spt_now) = reward::spt_snapshot(&game.state, pov);
+            if progress == ProgressMode::Full && move_count > 0 && move_count % 10 == 0 {
+                eprintln!(
+                    "[Game {}]: Turn: {} Player: {} Move: {}",
+                    game_idx,
+                    turn_now,
+                    pov,
+                    m.describe(&game.state),
+                );
+            }
+
+            // Nothing is recorded until the move actually lands: `execute`
+            // failing on a legal move is an engine bug, and a sample or a
+            // replay entry for a transition that never happened is training
+            // data for a state the game cannot reach.
+            if game.play_move(m.as_ref()).is_none() {
+                eprintln!(
+                    "[Game {}] BUG: play_move rejected legal move '{}' (player {}, turn {}) — discarding this game",
+                    game_idx,
+                    m.describe(&game.state),
+                    pov,
+                    turn_now,
+                );
+                aborted_games.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+
+            flat_recap.push((turn_now, pov, replay_command));
             if record_sample {
                 game_history.push(HistoryStep {
                     features: state_t,
@@ -892,20 +982,10 @@ fn play_single_game(
                     opp_score: opp_score_now,
                     my_spt: my_spt_now,
                     opp_spt: opp_spt_now,
-                    turn: game.state.settings.turn,
+                    turn: turn_now,
                     root_value,
                 });
             }
-            if progress == ProgressMode::Full && move_count > 0 && move_count % 10 == 0 {
-                eprintln!(
-                    "[Game {}]: Turn: {} Player: {} Move: {}",
-                    game_idx,
-                    game.state.settings.turn,
-                    pov,
-                    m.describe(&game.state),
-                );
-            }
-            let _ = game.play_move(m.as_ref());
 
             if progress == ProgressMode::Periodic {
                 while next_milestone < milestones.len()
@@ -1035,6 +1115,7 @@ fn play_single_game(
 
     Some(GameResult {
         game_idx,
+        score_drift: polyfish::score::max_abs_score_drift(&game.state),
         history: game_history,
         scores,
         final_cities,
@@ -1211,6 +1292,29 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, default_value_t = 0.05)]
         anchor_probe_frac: f32,
 
+        /// Iteration at which both heuristic crutches (the search-prior blend
+        /// and the anchor-game rate) hard-cut to 0, having spent the
+        /// iterations before that decaying to a 10% floor. Default is
+        /// effectively "never" so standalone runs are not surprised; the
+        /// training loop passes DECAY_LAST_ITER explicitly.
+        #[arg(long, default_value_t = u32::MAX)]
+        decay_last_iter: u32,
+
+        /// EXP_ELO_002: iteration where the anchor-frac decay clock starts —
+        /// the anchor's effective decay iteration is `iteration - this`
+        /// (clamped at 0). The loop passes the current iteration to HOLD
+        /// anchor_frac at its starting rate until the model crosses 50% vs
+        /// greedy, then pins the crossing iteration so decay runs from there.
+        /// The prior-blend decay is unaffected.
+        #[arg(long, default_value_t = 0)]
+        anchor_decay_start: u32,
+
+        /// Print this iteration's curriculum (map size, turn cap) as JSON and
+        /// exit. The gauge match reads max_turns from here so it measures the
+        /// same game length self-play generates.
+        #[arg(long, default_value_t = false)]
+        print_curriculum: bool,
+
         /// Value-head trust in [0,1]: β on σ(completed-Q) both inside the
         /// search tree and in exported policy targets. Overrides the
         /// iteration-based ramp (min(1, iteration/20)), which saturates
@@ -1239,6 +1343,20 @@ fn main() -> anyhow::Result<()> {
         /// map/spawn/seat luck from the label. Disable: --mirror-labels=false.
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         mirror_labels: bool,
+
+        /// Point-symmetric (180deg-rotated) 1v1 maps, so both seats start
+        /// from an identical position. Asymmetric Drylands maroons seat 2 on
+        /// an island in ~1/3 of Tiny games, which puts a seat term in every
+        /// value label. Disable: --symmetric=false.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        symmetric: bool,
+
+        /// Plies at the start of each game played by SAMPLING the search's
+        /// improved policy pi' instead of taking its argmax, for opening
+        /// diversity within an iteration. Counted in plies, not game turns
+        /// (~8 plies make one Polytopia turn). 0 disables sampling.
+        #[arg(long, default_value_t = 8)]
+        opening_temp_moves: usize,
 
         /// Current training iteration (for curriculum learning)
         #[arg(long, default_value_t = 1)]
@@ -1338,6 +1456,29 @@ fn main() -> anyhow::Result<()> {
     }
 
     let args = Args::parse();
+
+    if args.print_curriculum {
+        let (map_size, max_turns) = curriculum(args.iteration);
+        // The search knobs are on the same footing as max_turns: callers that
+        // must reproduce this iteration's searcher (the gauge) ask for them
+        // rather than mirroring the schedules (#32).
+        let prior_w = prior_heuristic_weight(args.iteration, args.decay_last_iter as usize);
+        let q_w = args
+            .value_trust
+            .unwrap_or_else(|| policy_target_q_weight(args.iteration));
+        println!(
+            "{}",
+            json!({
+                "iteration": args.iteration,
+                "map_size": format!("{map_size:?}"),
+                "max_turns": max_turns,
+                "prior_heuristic_w": prior_w,
+                "policy_target_q_w": q_w,
+                "tree_q_w": q_w,
+            })
+        );
+        return Ok(());
+    }
 
     if args.anchor_frac > 0.0 && args.opponent.is_some() {
         anyhow::bail!("--anchor-frac and --opponent are mutually exclusive");
@@ -1588,6 +1729,21 @@ fn main() -> anyhow::Result<()> {
             }
         }
     };
+    // EXP_ELO_002 decay clock, independent of the win-rate gate above: the
+    // rate holds at its starting value until --anchor-decay-start (the loop
+    // pins the iteration at which a gauge reading first crossed 50% vs
+    // greedy), then decays to the crutch floor and hard-cuts at
+    // --decay-last-iter. Two phase-out gates on one quantity — tightest wins.
+    let decay_last_iter = args.decay_last_iter as usize;
+    let anchor_decay_iter = args
+        .iteration
+        .saturating_sub(args.anchor_decay_start as usize);
+    let anchor_frac = anchor_frac.min(decay_crutch(
+        args.anchor_frac,
+        ANCHOR_FRAC_DECAY,
+        anchor_decay_iter,
+        decay_last_iter,
+    ));
     // Floor a nonzero gate output to >= 1 mirror pair this run, else small
     // probe fractions round to zero games and the win rate silently goes stale.
     let anchor_frac = if anchor_frac > 0.0 {
@@ -1596,6 +1752,15 @@ fn main() -> anyhow::Result<()> {
         anchor_frac
     };
     if args.anchor_frac > 0.0 && args.opponent.is_none() {
+        let cut = if args.decay_last_iter == u32::MAX {
+            "never".to_string()
+        } else {
+            args.decay_last_iter.to_string()
+        };
+        println!(
+            "[Self-Play] crutch decay: anchor decay iter {anchor_decay_iter} (clock starts at {}), hard cut at {cut}",
+            args.anchor_decay_start,
+        );
         match anchor_winrate {
             Some(wr) => println!(
                 "[Self-Play] anchor gate: rolling winrate vs greedy {:.0}% -> effective anchor_frac {:.3} (hold <= iter {}, graduate at {:.0}%, probe {:.3})",
@@ -1606,7 +1771,7 @@ fn main() -> anyhow::Result<()> {
                 args.anchor_probe_frac,
             ),
             None => println!(
-                "[Self-Play] anchor gate: no measurements yet -> full anchor_frac {:.3}",
+                "[Self-Play] anchor gate: no measurements yet -> effective anchor_frac {:.3}",
                 anchor_frac
             ),
         }
@@ -1649,6 +1814,7 @@ fn main() -> anyhow::Result<()> {
     let job_counter = Arc::new(AtomicUsize::new(0));
     let games_completed = Arc::new(AtomicUsize::new(0));
     let trace_counter = Arc::new(AtomicUsize::new(0));
+    let aborted_games = Arc::new(AtomicUsize::new(0));
     let finish_milestones = finish_milestones(args.num_games);
     let results_mutex: Arc<std::sync::Mutex<Vec<GameResult>>> =
         Arc::new(std::sync::Mutex::new(Vec::with_capacity(args.num_games)));
@@ -1659,6 +1825,7 @@ fn main() -> anyhow::Result<()> {
             let results_mutex = results_mutex.clone();
             let games_completed = games_completed.clone();
             let trace_counter = trace_counter.clone();
+            let aborted_games = aborted_games.clone();
             let finish_milestones = finish_milestones.clone();
             let network1 = &network1;
             let network2 = &network2;
@@ -1722,16 +1889,20 @@ fn main() -> anyhow::Result<()> {
                             seed,
                             game_tribes,
                             args.iteration,
+                            decay_last_iter,
                             args.gamemode,
                             backend_seat1,
                             backend_seat2,
                             args.value_trust,
                             args.leaf_batch,
                             progress_mode,
+                            args.symmetric,
+                            args.opening_temp_moves,
                             args.trace_villages,
                             args.trace_trigger,
                             args.trace_max,
                             &trace_counter,
+                            &aborted_games,
                         )
                     }))
                     .unwrap_or_else(|_| {
@@ -1914,6 +2085,8 @@ fn main() -> anyhow::Result<()> {
         HashMap::new();
 
     let mut decisive_games = 0usize;
+    let mut score_drift_max = 0i32;
+    let mut score_drift_games = 0usize;
     let mut anchor_games_n = 0usize;
     let mut anchor_model_wins = 0.0f32;
 
@@ -1959,6 +2132,10 @@ fn main() -> anyhow::Result<()> {
     for result in results {
         if result.decisive {
             decisive_games += 1;
+        }
+        if result.score_drift != 0 {
+            score_drift_games += 1;
+            score_drift_max = score_drift_max.max(result.score_drift);
         }
         if let Some(anchor_pid) = result.anchor_seat {
             anchor_games_n += 1;
@@ -2307,7 +2484,14 @@ fn main() -> anyhow::Result<()> {
         tensors.insert("progress".to_string(), progress_tensor);
         tensors.insert("ownership".to_string(), ownership_tensor);
 
-        candle_core::safetensors::save(&tensors, &games_file)?;
+        // tmp + rename: a ctrl-C or a full disk mid-save otherwise leaves a
+        // truncated games_*.safetensors that train.py skips for the whole
+        // replay window while the CSV records it as trained on (#37). The
+        // suffix keeps the partial file out of every `games_*.safetensors`
+        // glob (train.py's loader, the loop's archive move).
+        let games_tmp = format!("{games_file}.tmp");
+        candle_core::safetensors::save(&tensors, &games_tmp)?;
+        std::fs::rename(&games_tmp, &games_file)?;
 
         // Save BEST game as replay
         if let Some(recap) = best_recap {
@@ -2352,6 +2536,26 @@ fn main() -> anyhow::Result<()> {
         0.0
     };
 
+    // A game the engine could not finish is a bug, not attrition: count it in
+    // the metrics so a silent drop can never be invisible again.
+    let aborted_games_n = aborted_games.load(Ordering::Relaxed);
+    if aborted_games_n > 0 {
+        eprintln!(
+            "[Self-Play] WARNING: {aborted_games_n}/{} games discarded — the engine rejected a legal move mid-game",
+            args.num_games
+        );
+    }
+
+    // Score parity: the value label and the reward-aware backup both read the
+    // incremental score, so a divergence from the canonical recompute is a
+    // bias no other training metric shows (#40).
+    if score_drift_games > 0 {
+        eprintln!(
+            "[Self-Play] WARNING: incremental score diverged from the recompute in {score_drift_games}/{} games (max |drift| {score_drift_max})",
+            args.num_games
+        );
+    }
+
     let metrics = json!({
         "num_games": args.num_games,
         "avg_score": avg_score,
@@ -2393,6 +2597,9 @@ fn main() -> anyhow::Result<()> {
         "vlab_spt_absmean": vlab_spt_absmean,
         "anchor_games": anchor_games_n,
         "anchor_model_wins": anchor_model_wins,
+        "aborted_games": aborted_games_n,
+        "score_drift_max": score_drift_max,
+        "score_drift_games": score_drift_games,
         "games_file": games_file,
         "moves_by_turn": moves_by_turn,
     });
@@ -2641,5 +2848,120 @@ mod spt_shaping_tests {
         let p2_sum: f32 = out[1] + out[3] + out[5];
         assert!((p1_sum - 2.0 / norm()).abs() < 1e-6, "got {p1_sum}");
         assert!((p2_sum + 2.0 / norm()).abs() < 1e-6, "got {p2_sum}");
+    }
+}
+
+#[cfg(test)]
+mod opening_sampler_tests {
+    use super::*;
+    use polyfish::ai::mcts_types::MoveVisit;
+
+    fn game_at(seed: i64) -> Game {
+        let mut game = Game::new();
+        game.state = polyfish::mapgen::generate(polyfish::mapgen::MapGenSettings {
+            size: MapSize::Tiny,
+            map_type: polyfish::types::MapType::Drylands,
+            tribes: vec![TribeType::Imperius, TribeType::Imperius],
+            seed,
+            symmetric: true,
+            ..Default::default()
+        });
+        game.post_load();
+        game
+    }
+
+    /// pi' over the real legal moves, weighted so no single move dominates.
+    fn visits_for(game: &Game) -> Vec<MoveVisit> {
+        polyfish::moves::generate_legal_moves(&game.state)
+            .iter()
+            .enumerate()
+            .map(|(i, m)| MoveVisit {
+                move_type: m.move_type(),
+                visits: (i % 7 + 1) as f32,
+                source_idx: m.source_idx().ok(),
+                target_idx: m.target_idx().ok(),
+                structure_type: m.structure_type().ok(),
+                unit_type: m.unit_type().ok(),
+                tech_type: m.tech_type().ok(),
+                ability_type: m.ability_type().ok(),
+                reward_type: m.reward_type().ok(),
+            })
+            .collect()
+    }
+
+    /// Openings drawn from one game's stream, as comparable strings.
+    fn draws(
+        seed: i64,
+        game_idx: usize,
+        game: &Game,
+        visits: &[MoveVisit],
+        n: usize,
+    ) -> Vec<String> {
+        let mut rng = opening_rng_for(seed, game_idx);
+        (0..n)
+            .map(
+                |_| match sample_opening_move(&game.state, visits, &mut rng) {
+                    Some(m) => format!(
+                        "{:?}:{:?}:{:?}",
+                        m.move_type(),
+                        m.source_idx().ok(),
+                        m.target_idx().ok()
+                    ),
+                    None => "none".to_string(),
+                },
+            )
+            .collect()
+    }
+
+    #[test]
+    fn opening_draws_are_reproducible_from_the_seed() {
+        // #37: the sampler drew from the thread-local generator, so the first
+        // `opening_temp_moves` plies -- which override the agent and steer the
+        // whole trajectory -- were unreproducible even with POLYFISH_SEARCH_SEED
+        // pinned.
+        let game = game_at(4242);
+        let visits = visits_for(&game);
+        assert!(visits.len() > 1, "need a non-degenerate pi' to sample from");
+
+        assert_eq!(
+            draws(4242, 0, &game, &visits, 16),
+            draws(4242, 0, &game, &visits, 16)
+        );
+    }
+
+    #[test]
+    fn a_mirror_pair_does_not_replay_the_same_opening() {
+        // Games 2k and 2k+1 share a seed by design. On a symmetric map with one
+        // model on both seats, a seed-only stream makes the pair near-duplicates.
+        let game = game_at(4242);
+        let visits = visits_for(&game);
+
+        assert_ne!(
+            draws(4242, 0, &game, &visits, 24),
+            draws(4242, 1, &game, &visits, 24)
+        );
+    }
+
+    #[test]
+    fn different_seeds_get_different_opening_streams() {
+        // A stream shared across games would collapse self-play to one opening
+        // played N times.
+        let game = game_at(4242);
+        let visits = visits_for(&game);
+
+        assert_ne!(
+            draws(4242, 0, &game, &visits, 24),
+            draws(4243, 0, &game, &visits, 24)
+        );
+    }
+
+    #[test]
+    fn sampler_actually_explores_rather_than_pinning_one_move() {
+        let game = game_at(4242);
+        let visits = visits_for(&game);
+
+        let distinct: std::collections::HashSet<String> =
+            draws(4242, 0, &game, &visits, 40).into_iter().collect();
+        assert!(distinct.len() > 1, "sampled only {distinct:?}");
     }
 }

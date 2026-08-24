@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""
-Test script to count legal moves per turn in a Polytopia game.
-This will show the actual branching factor/complexity.
+"""Emit a standalone Rust probe that counts legal moves per turn.
+
+Scaffolding for the branching-factor analysis written up in notes.md — it
+writes /tmp/test_branching.rs for you to compile against the crate; it does not
+run anything itself. Lived in tests/ under a test_* name, where `unittest
+discover` picked it up and executed it as a test case.
 """
 
 import subprocess

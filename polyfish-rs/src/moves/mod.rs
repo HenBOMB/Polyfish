@@ -208,10 +208,10 @@ pub fn generate_legal_moves(state: &GameState) -> Vec<Box<dyn Move>> {
     moves.push(Box::new(EndTurnMove));
 
     // 2. Army Moves (Units, Summons, Upgrades)
+    // Unit-action moves are emitted per unit inside generate_unit_moves.
     generate_unit_moves(state, &mut moves);
     crate::moves::summon::generate_summon_moves(state, &mut moves);
     crate::moves::upgrade::generate_upgrade_moves(state, &mut moves);
-    crate::moves::abilities::unit_actions::generate_unit_action_moves(state, &mut moves);
 
     // 3. Econ Moves (Research, Build, Harvest, Econ Abilities)
     generate_econ_moves(state, &mut moves);
@@ -389,16 +389,21 @@ fn generate_step_moves(state: &GameState, unit: &UnitState, moves: &mut Vec<Box<
     }
 }
 
+/// Reachable tiles keyed by index. A `BTreeMap` rather than a `HashMap`
+/// because `generate_step_moves` iterates it to emit moves: hash order varies
+/// between map instances, so the legal-move list came out permuted run to run
+/// and no search could be replayed (audit T3). Ordering is also not a cost
+/// here — the graph is <=121 nodes and this drops a SipHash per probe.
 fn compute_reachable_tiles(
     state: &GameState,
     unit: &UnitState,
-) -> std::collections::HashMap<i32, f32> {
+) -> std::collections::BTreeMap<i32, f32> {
     let mut effective_movement = crate::functions::get_unit_movement(state, unit) as f32;
     // Cap movement at 1 if unit has segments attached
     if unit.child_unit_idx.is_some() {
         effective_movement = 1.0;
     }
-    let mut reachable = std::collections::HashMap::new();
+    let mut reachable = std::collections::BTreeMap::new();
     let mut open_list = std::collections::BinaryHeap::new();
 
     open_list.push(ReachableNode {
@@ -705,14 +710,12 @@ fn is_roadpath_and_usable(state: &GameState, unit: &UnitState, idx: i32) -> bool
         return false;
     }
 
-    // Usable if friendly or neutral or peace treaty or Infiltrate
+    // Usable if friendly, neutral or at peace. Infiltrate is purely an attack-targeting
+    // skill (only adjacent enemy cities); the road/terrain exemptions its carriers enjoy
+    // come from Creep (Cloak) or Fly (Moth), handled in compute_movement_cost/is_terminal.
     tile.owner == unit.owner
         || tile.owner == 0
         || crate::functions::is_at_peace(state, unit.owner, tile.owner)
-        || get_unit_setting(unit.unit_type)
-            .skills
-            // TODO not sure infiltrate influences movement range..?
-            .contains(&SkillType::Infiltrate)
 }
 
 fn is_naval_unit(unit_type: UnitType) -> bool {

@@ -44,11 +44,15 @@ fn test_summon_contextual_priority() {
     let mv = SummonMove::new(city_idx, UnitType::Warrior);
 
     // --- Scenario 1: Base Summoning (No threat, small army) ---
+    // Warrior's meta value (UNIT_VALUES 0.38) times SUMMON_QUALITY_W (10.0).
+    // No composition bonus applies: the tribe has no ranged units to screen.
+    let quality = 3.8;
+
     let score_base = score_move(&game, &mv);
-    // Base 15.0 + Small Army Bonus 8.0 = 23.0 (base bumped from 10.0 to 15.0
-    // in scoring.rs — see the MoveType::Summon comment there)
+    // Base 15.0 + Small Army Bonus 8.0 + quality (base bumped from 10.0 to
+    // 15.0 in scoring.rs — see the MoveType::Summon comment there)
     println!("Score Base: {}", score_base);
-    assert_eq!(score_base, 23.0);
+    assert_eq!(score_base, 23.0 + quality);
 
     // --- Scenario 2: High Threat (Enemy nearby) ---
     // Add an enemy unit near the city
@@ -71,9 +75,9 @@ fn test_summon_contextual_priority() {
     );
 
     let score_threat = score_move(&game, &mv);
-    // Base 15.0 + Threat 15.0 + Small Army 8.0 = 38.0
+    // Base 15.0 + Threat 15.0 + Small Army 8.0 + quality
     println!("Score Threat: {}", score_threat);
-    assert_eq!(score_threat, 38.0);
+    assert_eq!(score_threat, 38.0 + quality);
 
     // --- Scenario 3: Large Army (No threat) ---
     // Remove enemy, add many units
@@ -91,7 +95,7 @@ fn test_summon_contextual_priority() {
         }
     }
     let score_bloat = score_move(&game, &mv);
-    // Base 15.0 + (-15.0 penalty) = 0.0
+    // Base 15.0 + (-15.0 penalty) + quality
     println!("Score Bloat: {}", score_bloat);
-    assert_eq!(score_bloat, 0.0);
+    assert_eq!(score_bloat, quality);
 }

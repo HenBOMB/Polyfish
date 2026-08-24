@@ -8,6 +8,9 @@ use crate::types::MoveType;
 pub struct HeuristicMctsAgent {
     pub iterations: usize,
     pub exploration_constant: f32,
+    /// See `mcts_common::next_search_rng`. This agent is the greedy teacher and
+    /// the UI's analysis engine, so its randomness reaches training data.
+    rng: std::cell::RefCell<rand::rngs::SmallRng>,
 }
 
 struct Node {
@@ -89,7 +92,15 @@ impl Node {
 /// move, policy = softmax over scores. This is the same distribution
 /// `blend_heuristic_prior` injects into Gumbel roots, produced ~1000x cheaper
 /// than the rollout MCTS — built for bulk imitation-corpus generation.
-pub struct GreedyHeuristicAgent;
+pub struct GreedyHeuristicAgent {
+    rng: std::cell::RefCell<rand::rngs::SmallRng>,
+}
+
+impl Default for GreedyHeuristicAgent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Softmax temperature over raw `score_move` values. At 1.0 the 40+-point
 /// score bands make the distribution one-hot; 5.0 keeps the best move
@@ -98,6 +109,19 @@ pub struct GreedyHeuristicAgent;
 const GREEDY_SOFTMAX_TEMP: f32 = 5.0;
 
 impl GreedyHeuristicAgent {
+    pub fn new() -> Self {
+        Self {
+            rng: std::cell::RefCell::new(crate::ai::mcts_common::next_search_rng()),
+        }
+    }
+
+    /// Pin this agent's RNG stream, for a test or a replayable experiment.
+    pub fn with_search_seed(self, seed: u64) -> Self {
+        use rand::SeedableRng;
+        *self.rng.borrow_mut() = rand::rngs::SmallRng::seed_from_u64(seed);
+        self
+    }
+
     pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
         self.select_move_with_decomposed_visits(game, usize::MAX).0
     }
@@ -159,7 +183,7 @@ impl GreedyHeuristicAgent {
             use rand::distr::{Distribution, weighted::WeightedIndex};
             WeightedIndex::new(&probs)
                 .ok()
-                .map(|d| d.sample(&mut rand::rng()))
+                .map(|d| d.sample(&mut *self.rng.borrow_mut()))
         } else {
             None
         };
@@ -179,9 +203,32 @@ impl GreedyHeuristicAgent {
 /// Uniform-random legal-move agent. Exists as the fixed 0-Elo anchor for the
 /// rating ladder (`elo.py`): it never changes, so every rating ever computed
 /// against it stays comparable across runs and architectures.
-pub struct RandomAgent;
+/// Uniform-random play. The ladder's Elo-0 floor, so its stream is worth
+/// pinning for a reproducible gauge reading.
+pub struct RandomAgent {
+    rng: std::cell::RefCell<rand::rngs::SmallRng>,
+}
+
+impl Default for RandomAgent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl RandomAgent {
+    pub fn new() -> Self {
+        Self {
+            rng: std::cell::RefCell::new(crate::ai::mcts_common::next_search_rng()),
+        }
+    }
+
+    /// Pin this agent's RNG stream, for a test or a replayable experiment.
+    pub fn with_search_seed(self, seed: u64) -> Self {
+        use rand::SeedableRng;
+        *self.rng.borrow_mut() = rand::rngs::SmallRng::seed_from_u64(seed);
+        self
+    }
+
     pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
         self.select_move_with_decomposed_visits(game, usize::MAX).0
     }
@@ -221,17 +268,29 @@ impl RandomAgent {
             })
             .collect();
 
-        let idx = rand::rng().random_range(0..moves.len());
+        let idx = self.rng.borrow_mut().random_range(0..moves.len());
         (Some(moves.swap_remove(idx)), visits)
     }
 }
 
 impl HeuristicMctsAgent {
     pub fn new(iterations: usize) -> Self {
+        Self::with_exploration(iterations, 0.6)
+    }
+
+    pub fn with_exploration(iterations: usize, exploration_constant: f32) -> Self {
         Self {
             iterations,
-            exploration_constant: 0.6,
+            exploration_constant,
+            rng: std::cell::RefCell::new(crate::ai::mcts_common::next_search_rng()),
         }
+    }
+
+    /// Pin this agent's RNG stream, for a test or a replayable experiment.
+    pub fn with_search_seed(self, seed: u64) -> Self {
+        use rand::SeedableRng;
+        *self.rng.borrow_mut() = rand::rngs::SmallRng::seed_from_u64(seed);
+        self
     }
 
     pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
@@ -302,7 +361,7 @@ impl HeuristicMctsAgent {
             // All-zero weights error out; fall through to argmax below.
             WeightedIndex::new(&weights)
                 .ok()
-                .map(|dist| dist.sample(&mut rand::rng()))
+                .map(|dist| dist.sample(&mut *self.rng.borrow_mut()))
         } else {
             None
         };

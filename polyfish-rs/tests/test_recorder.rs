@@ -29,7 +29,11 @@ fn test_recorder_save() {
     // We pass arbitrary eco/mil values
     recorder.record_step(&game.state, &step_move, 0.5, 0.5);
 
-    // 5. Save
+    // 5. Attach an outcome; `save` refuses to write steps with no win label
+    let finished = recorder.finish_game(Some(game.state.settings.current_player_turn_id));
+    assert_eq!(finished, 1, "the recorded step must receive an outcome");
+
+    // 6. Save
     let result = recorder.save();
     assert!(
         result.is_ok(),
@@ -44,13 +48,13 @@ fn test_recorder_save() {
     let parts: Vec<&str> = message.split_whitespace().collect();
     let filename = parts.last().unwrap(); // "human_games_X.safetensors"
 
-    // 6. Verify file exists
+    // 7. Verify file exists
     assert!(
         fs::metadata(filename).is_ok(),
         "File {} was not created",
         filename
     );
 
-    // 7. Cleanup
+    // 8. Cleanup
     fs::remove_file(filename).expect("Failed to delete test file");
 }

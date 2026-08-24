@@ -368,15 +368,6 @@ pub fn has_technology(tech_list: &[crate::states::TechnologyState], tech: Techno
         .any(|t| t.tech_type == tech && t.discovered)
 }
 
-/// Check if a technology is present in the tribe's tech list, even if not yet "discovered"
-/// (Used for unlocking units/actions during MCTS simulations)
-pub fn is_tech_unlocked(
-    tech_list: &[crate::states::TechnologyState],
-    tech: TechnologyType,
-) -> bool {
-    tech_list.iter().any(|t| t.tech_type == tech)
-}
-
 /// Helper to find which technology unlocks a specific unit
 pub fn get_tech_unlocking_unit(unit_type: UnitType) -> Option<TechnologyType> {
     use strum::IntoEnumIterator;

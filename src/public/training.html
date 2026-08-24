@@ -201,7 +201,9 @@
         <div class="chart-grid">
           <div class="chart-box"><header><h3>Loss</h3><button class="dl-png" data-canvas="lossChart">PNG</button></header><div class="chart-wrap"><canvas id="lossChart"></canvas></div></div>
           <div class="chart-box"><header><h3>Value fit (R²)</h3><button class="dl-png" data-canvas="valueR2Chart">PNG</button></header><div class="chart-wrap"><canvas id="valueR2Chart"></canvas></div></div>
-          <div class="chart-box"><header><h3>Aux losses</h3><button class="dl-png" data-canvas="auxLossChart">PNG</button></header><div class="chart-wrap"><canvas id="auxLossChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Value-label composition</h3><button class="dl-png" data-canvas="vlabChart">PNG</button></header><div class="chart-wrap"><canvas id="vlabChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Decisive games &amp; turn cap</h3><button class="dl-png" data-canvas="decisiveChart">PNG</button></header><div class="chart-wrap"><canvas id="decisiveChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Policy KL (search vs prior)</h3><button class="dl-png" data-canvas="policyKlChart">PNG</button></header><div class="chart-wrap"><canvas id="policyKlChart"></canvas></div></div>
           <div class="chart-box"><header><h3>Score</h3><button class="dl-png" data-canvas="scoreChart">PNG</button></header><div class="chart-wrap"><canvas id="scoreChart"></canvas></div></div>
           <div class="chart-box"><header><h3>Player balance</h3><button class="dl-png" data-canvas="p1p2Chart">PNG</button></header><div class="chart-wrap"><canvas id="p1p2Chart"></canvas></div></div>
           <div class="chart-box"><header><h3>League vs self-play</h3><button class="dl-png" data-canvas="leagueChart">PNG</button></header><div class="chart-wrap"><canvas id="leagueChart"></canvas></div></div>
@@ -398,6 +400,23 @@ function makeChart(id, config) {
   return charts[id];
 }
 
+function hasSeries(rows, field) {
+  return rows.some(r => r[field] != null && isFinite(r[field]));
+}
+
+function setChartBoxVisible(id, visible) {
+  const box = document.getElementById(id)?.closest('.chart-box');
+  if (box) box.style.display = visible ? '' : 'none';
+}
+
+// Metrics logged only from a given CSV era: draw the chart when the run has the
+// column, hide the whole box otherwise rather than show an empty grid.
+function optionalChart(id, hasData, buildConfig) {
+  setChartBoxVisible(id, hasData);
+  if (!hasData) { destroyChart(id); return; }
+  makeChart(id, buildConfig());
+}
+
 async function fetchJson(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(await r.text());
@@ -510,16 +529,24 @@ function renderPanelA() {
     },
     options: chartDefaults,
   });
+  const hasHoldout = hasSeries(runMetrics, 'value_r2_holdout');
   makeChart('valueR2Chart', {
     type: 'line',
     data: {
       labels: it,
       datasets: [
-        { label: 'value R²', data: runMetrics.map(r => r.value_r2), borderColor: '#9b59b6', tension: 0.2 },
+        { label: hasHoldout ? 'in-sample' : 'value R²', data: runMetrics.map(r => r.value_r2), borderColor: '#9b59b6', tension: 0.2 },
+        ...(hasHoldout ? [{ label: 'holdout', data: runMetrics.map(r => r.value_r2_holdout), borderColor: '#f1c40f', borderDash: [6, 3], tension: 0.2, spanGaps: true }] : []),
       ],
     },
     options: {
       ...chartDefaults,
+      plugins: {
+        ...chartDefaults.plugins,
+        title: hasHoldout
+          ? { display: true, text: 'high in-sample + low holdout = overfitting · both low = underfitting', color: '#8b9cb3', font: { size: 11 } }
+          : { display: false },
+      },
       scales: {
         x: chartDefaults.scales.x,
         // 1 = perfect fit, 0 = no better than predicting the mean, and it can
@@ -528,19 +555,64 @@ function renderPanelA() {
       },
     },
   });
-  makeChart('auxLossChart', {
+  // vlab_* is the EXP_ARCH_001 drowning meter: how much of the value label's
+  // magnitude is genuine win/loss rather than TD or stars-per-turn shaping.
+  optionalChart('vlabChart', hasSeries(runMetrics, 'vlab_wl_share'), () => ({
     type: 'line',
     data: {
       labels: it,
       datasets: [
-        { label: 'ownership', data: runMetrics.map(r => r.aux_own_loss), borderColor: '#1abc9c', tension: 0.2 },
-        { label: 'fog units', data: runMetrics.map(r => r.aux_fog_loss), borderColor: '#3498db', tension: 0.2 },
-        { label: 'SPT +5', data: runMetrics.map(r => r.aux_spt_loss), borderColor: '#f1c40f', tension: 0.2 },
-        { label: 'opp tech', data: runMetrics.map(r => r.aux_tech_loss), borderColor: '#e74c3c', tension: 0.2 },
+        { label: 'win/loss share %', data: runMetrics.map(r => r.vlab_wl_share != null ? r.vlab_wl_share * 100 : null), borderColor: '#2ecc71', tension: 0.2, spanGaps: true },
+        { label: '|win/loss|', data: runMetrics.map(r => r.vlab_wl_absmean), borderColor: '#4a9eff', tension: 0.2, spanGaps: true, yAxisID: 'y1' },
+        { label: '|TD|', data: runMetrics.map(r => r.vlab_td_absmean), borderColor: '#e67e22', tension: 0.2, spanGaps: true, yAxisID: 'y1' },
+        { label: '|SPT|', data: runMetrics.map(r => r.vlab_spt_absmean), borderColor: '#e74c3c', tension: 0.2, spanGaps: true, yAxisID: 'y1' },
       ],
     },
-    options: chartDefaults,
-  });
+    options: {
+      ...chartDefaults,
+      scales: {
+        x: chartDefaults.scales.x,
+        y: { ...chartDefaults.scales.y, min: 0, max: 100, title: { display: true, text: 'win/loss share %', color: '#8b9cb3' } },
+        y1: { position: 'right', beginAtZero: true, ticks: { color: '#8b9cb3' }, grid: { drawOnChartArea: false }, title: { display: true, text: 'mean |contribution|', color: '#8b9cb3' } },
+      },
+    },
+  }));
+  optionalChart('decisiveChart', hasSeries(runMetrics, 'decisive_frac'), () => ({
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: [
+        { label: 'decisive %', data: runMetrics.map(r => r.decisive_frac != null ? r.decisive_frac * 100 : null), borderColor: '#2ecc71', tension: 0.2, spanGaps: true },
+        { label: 'turn cap', data: runMetrics.map(r => r.max_turns), borderColor: '#8b9cb3', stepped: true, pointRadius: 0, yAxisID: 'y1' },
+      ],
+    },
+    options: {
+      ...chartDefaults,
+      plugins: {
+        ...chartDefaults.plugins,
+        title: { display: true, text: 'games that ended in a win/loss rather than the curriculum turn cap', color: '#8b9cb3', font: { size: 11 } },
+      },
+      scales: {
+        x: chartDefaults.scales.x,
+        y: { ...chartDefaults.scales.y, min: 0, max: 100 },
+        y1: { position: 'right', beginAtZero: true, ticks: { color: '#8b9cb3' }, grid: { drawOnChartArea: false } },
+      },
+    },
+  }));
+  // self_play writes -1 when no move produced a comparable prior.
+  const policyKl = runMetrics.map(r => (r.policy_kl != null && r.policy_kl >= 0) ? r.policy_kl : null);
+  optionalChart('policyKlChart', policyKl.some(v => v != null), () => ({
+    type: 'line',
+    data: { labels: it, datasets: [{ label: 'policy KL', data: policyKl, borderColor: '#9b59b6', tension: 0.2, spanGaps: true }] },
+    options: {
+      ...chartDefaults,
+      plugins: {
+        ...chartDefaults.plugins,
+        title: { display: true, text: 'KL(search visits ‖ network prior) — falls as the policy head catches up to search', color: '#8b9cb3', font: { size: 11 } },
+      },
+      scales: { x: chartDefaults.scales.x, y: { ...chartDefaults.scales.y, beginAtZero: true } },
+    },
+  }));
   makeChart('scoreChart', {
     type: 'line',
     data: {
@@ -587,11 +659,25 @@ async function renderEloChart() {
     ladder = { anchors: [], readings: [] };
   }
   const readings = [...(ladder.readings || [])].sort((a, b) => (a.at || '').localeCompare(b.at || ''));
+  // A ~64-game reading only resolves to about ±12pp, so the band is what says
+  // whether two readings differ at all; ladder.py stores it per reading.
+  const hasCi = readings.some(r => Array.isArray(r.elo_ci));
+  const band = (label, edge, extra) => ({
+    label,
+    data: readings.map(r => (Array.isArray(r.elo_ci) ? r.elo_ci[edge] : null)),
+    borderColor: 'rgba(74,158,255,0.3)',
+    borderWidth: 1,
+    pointRadius: 0,
+    spanGaps: true,
+    tension: 0.2,
+    ...extra,
+  });
   makeChart('eloChart', {
     type: 'line',
     data: {
       labels: readings.map(r => r.iteration ?? (r.at ? r.at.slice(0, 10) : '')),
       datasets: [
+        ...(hasCi ? [band('CI low', 0), band('95% CI', 1, { fill: '-1', backgroundColor: 'rgba(74,158,255,0.12)' })] : []),
         {
           label: 'Elo estimate',
           data: readings.map(r => r.elo_est),
@@ -606,11 +692,14 @@ async function renderEloChart() {
       ...chartDefaults,
       plugins: {
         ...chartDefaults.plugins,
+        legend: { labels: { color: '#8b9cb3', filter: item => item.text !== 'CI low' } },
         tooltip: {
+          filter: item => item.dataset.label === 'Elo estimate',
           callbacks: {
             label: ctx => {
               const r = readings[ctx.dataIndex];
-              return `${r.model} vs ${r.opponent}: ${Math.round(r.elo_est)} elo (${r.wins}-${r.losses}-${r.draws}, ${r.kind})`;
+              const ci = Array.isArray(r.elo_ci) ? ` [${Math.round(r.elo_ci[0])}, ${Math.round(r.elo_ci[1])}]` : '';
+              return `${r.model} vs ${r.opponent}: ${Math.round(r.elo_est)} elo${ci} (${r.wins}-${r.losses}-${r.draws}, ${r.kind})`;
             },
           },
         },
@@ -718,22 +807,16 @@ function renderGameStatsCharts() {
       labels: it,
       datasets: [
         { label: '1st village', data: rows.map(r => r.villages_t2c_first || null), borderColor: '#2ecc71', tension: 0.2, spanGaps: true },
-        { label: '1st (captured games only)', data: rows.map(r => r.villages_t2c_first_cond > 0 ? r.villages_t2c_first_cond : null), borderColor: '#1abc9c', borderDash: [6, 3], tension: 0.2, spanGaps: true },
         { label: '50% villages', data: rows.map(r => r.villages_t2c_p50 || null), borderColor: '#3498db', tension: 0.2, spanGaps: true },
         { label: '80% villages', data: rows.map(r => r.villages_t2c_p80 || null), borderColor: '#9b59b6', tension: 0.2, spanGaps: true },
         { label: 'all villages', data: rows.map(r => r.villages_t2c_all || null), borderColor: '#e67e22', tension: 0.2, spanGaps: true },
-        { label: 'capture rate %', data: rows.map(r => r.villages_first_rate > 0 ? r.villages_first_rate * 100 : null), borderColor: '#f1c40f', tension: 0.2, spanGaps: true, yAxisID: 'y1' },
       ],
     },
     options: {
       ...chartDefaults,
-      scales: {
-        ...chartDefaults.scales,
-        y1: { position: 'right', min: 0, max: 100, ticks: { color: '#f1c40f' }, grid: { drawOnChartArea: false } },
-      },
       plugins: {
         ...chartDefaults.plugins,
-        title: { display: true, text: 'Turn to capture (lower is better) · yellow = % of games capturing ≥1 village (right axis)', color: '#8b9cb3', font: { size: 11 } },
+        title: { display: true, text: 'Turn to capture (lower is better) · censored: a game that never captures counts as the turn cap', color: '#8b9cb3', font: { size: 11 } },
       },
     },
   });
@@ -951,8 +1034,11 @@ function renderGenBatchMeta(row, valDist) {
   el.innerHTML = parts.join(' · ');
 }
 
+const VALUE_DIST_CHARTS = ['valDistChart', 'valHistChart', 'valTsChart', 'valAbsChart', 'valBucketChart'];
+
 function renderPanelB(row, valDist) {
   renderGenBatchMeta(row, valDist);
+  VALUE_DIST_CHARTS.forEach(id => setChartBoxVisible(id, !!(valDist && valDist.hist)));
   if (valDist && valDist.hist) {
     const smooth = (counts) => {
       const out = counts.map((c, i) => {
@@ -998,7 +1084,7 @@ function renderPanelB(row, valDist) {
       options: { ...chartDefaults, plugins: { legend: { display: false } } },
     });
   } else {
-    ['valDistChart', 'valHistChart', 'valTsChart', 'valAbsChart', 'valBucketChart'].forEach(id => destroyChart(id));
+    VALUE_DIST_CHARTS.forEach(destroyChart);
   }
 
   makeChart('sptSnapChart', {

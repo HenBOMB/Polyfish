@@ -12,6 +12,10 @@ set -e
 #   Arm A (baseline):            ./bisect_arm.sh
 #   Arm B (LR/optimizer restart): ARM_LABEL=B TRAIN_LR=0.00001 ./bisect_arm.sh
 #   Arm C (value-trunk interference): ARM_LABEL=C VALUE_LOSS_WEIGHT=0 ./bisect_arm.sh
+#   Arm D (value-trunk detach):   ARM_LABEL=D DETACH_VALUE_TRUNK=1 ./bisect_arm.sh
+#
+# Arm A leaves DETACH_VALUE_TRUNK at train.py's default 0, which is NOT what
+# run_training_loop.sh exports (=1); set it explicitly to reproduce production.
 #
 # Output: bisect_<ARM_LABEL>.csv, one row per iteration.
 
@@ -24,6 +28,14 @@ EVAL_LOG_DIR="bisect_eval_games_${ARM_LABEL}"
 export REPLAY_BUFFER_FILES=0
 export RUST_BACKTRACE=1
 export PYTHONUNBUFFERED=1
+
+# Arm-local run identity and optimizer sidecar (#30): without these a
+# diagnostic arm resumes the production run's Adam moments and schedule
+# position, and then overwrites the production sidecar. TRAIN_TOTAL_ITERS is
+# deliberately left at train.py's default so the LR stays ~flat at peak
+# across the arm — a decaying LR would confound the trainer-corrosion read.
+export TRAIN_RUN_ID="bisect_${ARM_LABEL}"
+export TRAIN_OPTIMIZER_STATE="optimizer_state_bisect_${ARM_LABEL}.pt"
 
 # self_play is linked against libtorch (tch-eval/metal-eval features) with no
 # rpath baked in — without this, dyld aborts on load ("no LC_RPATH's found").

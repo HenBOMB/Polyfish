@@ -1,7 +1,9 @@
 # OPENING BOOK
 
 Opening book is a must, 99% always the best moves. `polyfish-rs/src/ai/book.rs`
-[PARTIAL]
+[PARTIAL] — it encodes preferred move *types* per tribe and turn (callers pick
+uniformly among the matching legal moves), and every playable tribe has a line,
+but the lines are near-identical: there is no tribe-specific opening yet.
 
 # GAME MODES
 
@@ -35,6 +37,9 @@ Score is all that matters?
   - Army Size Awareness: +10.0 if army is small, -10.0 if over 2x city count
     (unless threatened).
   - Giant Prioritization: +15.0 bonus.
+  - [IMPLEMENTED] Unit quality: the unit's meta value (`evaluator::army::UNIT_VALUES`)
+    scaled by `SUMMON_QUALITY_W`, so affordable units no longer tie.
+  - [IMPLEMENTED] Composition, see Unit Combinations below.
 - [TODO] Self-healing units; heal other units.
 - Unit steps (steps that explore tiles descending)
 - Unit promotions (veterancy +3 kills)
@@ -163,13 +168,22 @@ formula: (explored - total * (1 - maxExploration)) / (total * maxExploration)
     health and fully heal up when near death. [PARTIAL] (Evaluator rewards high
     HP/Veteran)
 
-- **Unit Combinations**: [TODO]
+- **Unit Combinations**: [PARTIAL] (Via `ai/scoring.rs` — a `UnitRole`
+  classification into Frontline / Ranged / Mobile, plus three summon bonuses.
+  Units outside those three roles fall into `Other` and get no bonus.
+  Composition is scored at SUMMON time only; nothing yet scores how an existing
+  army is positioned relative to itself.)
   - **Rider + Roads**: Essential for hit-and-run tactics. High mobility allows
-    Riders to attack and retreat to safety.
+    Riders to attack and retreat to safety. [IMPLEMENTED] (`SUMMON_MOBILITY_BONUS`
+    — Mobile units score higher once Roads is researched.)
   - **Shields + Archers**: Use Shields (Defenders) to tank damage while Archers
-    deal damage from behind.
+    deal damage from behind. [IMPLEMENTED] (`SUMMON_SCREEN_BONUS` when ranged
+    units outnumber frontline, `SUMMON_RANGED_BONUS` when frontline outnumbers
+    ranged — the pairing is enforced by pulling the summon back toward whichever
+    side of it is short.)
   - **Swordsmen spam**: Effective in late game vs almost anything except
-    battleships.
+    battleships. [TODO] — no game-stage or counter-matchup term; a Swordsman is
+    just its flat meta value.
 
 - **Defense**: [TODO]
   - Always end turn on defensive terrain (Mountains with Climbing, Forests with

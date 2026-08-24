@@ -41,6 +41,8 @@ use crate::game::Game;
 use crate::moves::{EndTurnMove, Move};
 use crate::types::MoveType;
 use rand::distr::Distribution;
+use rand::rngs::SmallRng;
+use rand::SeedableRng;
 use rand_distr::Gumbel;
 use std::cell::{Cell, RefCell};
 
@@ -101,12 +103,18 @@ pub struct GumbelMctsAgent<'a> {
     /// prior. ~0 means search is just echoing the policy and the AlphaZero
     /// improvement operator is idle. `None` when no real search ran.
     last_search_kl: Option<f32>,
+    /// The search's own Gumbel/temperature RNG. Owned rather than drawn from
+    /// the thread-local generator so a search can be replayed: nothing could
+    /// pin search behaviour in a test, and no search experiment was
+    /// reproducible (audit T3). Two of the three draw sites are behind `&self`,
+    /// hence the cell.
+    rng: RefCell<SmallRng>,
 }
+
 
 struct GumbelNode {
     visits: f32,
     value_sum: f32,
-    progress_sum: f32,
     logit: f32,
     /// Gumbel(0,1) noise sampled at the root. `0.0` for non-root nodes.
     gumbel: f32,
@@ -119,7 +127,6 @@ struct GumbelNode {
     /// visited by this or a prior search. Survives re-root (kept out of
     /// `reset_stats_recursive`) like `own_value`/`logit`.
     edge_reward: Cell<Option<f32>>,
-    own_progress: f32,
     children: Vec<GumbelNode>,
     move_to_here: Option<Box<dyn Move>>,
     is_expanded: bool,
@@ -135,12 +142,10 @@ impl GumbelNode {
         Self {
             visits: 0.0,
             value_sum: 0.0,
-            progress_sum: 0.0,
             logit,
             gumbel,
             own_value: 0.0,
             edge_reward: Cell::new(None),
-            own_progress: 0.0,
             children: Vec::new(),
             move_to_here,
             is_expanded: false,
@@ -149,13 +154,20 @@ impl GumbelNode {
         }
     }
 
+    /// Mean action value of the edge into this node, in the **parent's**
+    /// perspective (Gumbel convention, see `mcts_common`). The `v_progress`
+    /// head is deliberately not folded in here: only candle computes it
+    /// (tch and metal stub it to 0), and this value is the TD bootstrap for
+    /// training labels, so including it made labels backend-dependent. It
+    /// is also the node's own mover's quantity, so under adversarial search
+    /// a handover child would gain the opponent's progress un-negated.
+    /// It remains a trained aux head (EXP_LABEL_002).
     fn q_value(&self) -> f32 {
-        let q = if self.visits == 0.0 {
+        if self.visits == 0.0 {
             0.0
         } else {
             self.value_sum / self.visits
-        };
-        q + self.own_progress
+        }
     }
 
     fn effective_visits(&self) -> f32 {
@@ -217,7 +229,15 @@ impl<'a> GumbelMctsAgent<'a> {
             trace: RefCell::new(None),
             last_root_value: None,
             last_search_kl: None,
+            rng: RefCell::new(mcts_common::next_search_rng()),
         }
+    }
+
+    /// Pin the search's RNG stream. The only way to make a search reproducible
+    /// across runs regardless of how many agents were constructed first.
+    pub fn with_search_seed(self, seed: u64) -> Self {
+        *self.rng.borrow_mut() = SmallRng::seed_from_u64(seed);
+        self
     }
 
     /// The completed search's root value (see `last_root_value` field docs),
@@ -469,11 +489,12 @@ impl<'a> GumbelMctsAgent<'a> {
 
         // Re-sample Gumbel(0,1) on the new root's children: they were created
         // as non-root nodes with gumbel = 0.0, but root candidates need noise.
-        let mut rng = rand::rng();
+        let mut rng = self.rng.borrow_mut();
         let gumbel_dist = Gumbel::new(0.0, 1.0).expect("BUG: Gumbel distribution");
         for c in &mut new_root.children {
-            c.gumbel = gumbel_dist.sample(&mut rng);
+            c.gumbel = gumbel_dist.sample(&mut *rng);
         }
+        drop(rng);
 
         // Bootstrap with the priors from the heuristic mcts agent. Skip if
         // this node's children were already blended at in-tree expansion
@@ -496,14 +517,13 @@ impl<'a> GumbelMctsAgent<'a> {
         start_turn: i32,
     ) -> GumbelNode {
         let results = self.evaluator.evaluate(vec![features]);
-        let (root_value, root_progress, ref policy_row) = results[0];
+        let (root_value, _progress, ref policy_row) = results[0];
 
         let mut legal_moves = game.legal_moves();
         let map_size = game.state.settings.size as usize;
 
         let mut root = GumbelNode::new(0.0, 0.0, None);
         root.own_value = root_value;
-        root.own_progress = root_progress;
         root.is_expanded = true;
 
         if legal_moves.is_empty() {
@@ -522,16 +542,17 @@ impl<'a> GumbelMctsAgent<'a> {
         let logits =
             policy_composer::compute_move_log_probs_raw(policy_row, &legal_moves, map_size);
 
-        let mut rng = rand::rng();
+        let mut rng = self.rng.borrow_mut();
         let gumbel_dist = Gumbel::new(0.0, 1.0).expect("BUG: Gumbel distribution");
         root.children = legal_moves
             .into_iter()
             .zip(logits.into_iter())
             .map(|(m, l)| {
-                let g = gumbel_dist.sample(&mut rng);
+                let g = gumbel_dist.sample(&mut *rng);
                 GumbelNode::new(l, g, Some(m))
             })
             .collect();
+        drop(rng);
 
         // Snapshot pre-blend logits for trace capture below; blend below
         // overwrites child.logit in place, so this is the only chance to see
@@ -715,7 +736,7 @@ impl<'a> GumbelMctsAgent<'a> {
             total_collected += leaves.len();
 
             let values = self.batched_evaluate_and_expand(root, &leaves);
-            for (leaf, &(value, _progress)) in leaves.iter().zip(values.iter()) {
+            for (leaf, &value) in leaves.iter().zip(values.iter()) {
                 backpropagate_return_with_rewards(
                     root,
                     &leaf.data.path_indices,
@@ -896,14 +917,14 @@ impl<'a> GumbelMctsAgent<'a> {
         &self,
         root: &mut GumbelNode,
         leaves: &[GumbelLeaf],
-    ) -> Vec<(f32, f32)> {
-        let mut values = vec![(0.0f32, 0.0f32); leaves.len()];
+    ) -> Vec<f32> {
+        let mut values = vec![0.0f32; leaves.len()];
         let mut indices_needing_eval: Vec<usize> = Vec::new();
         let mut eval_batch: Vec<RawFeatures> = Vec::new();
 
         for (i, leaf) in leaves.iter().enumerate() {
             if let Some(tv) = leaf.data.terminal_value {
-                values[i] = (tv, 0.0); // Progress is 0.0 at terminal state
+                values[i] = tv;
             } else if let Some(ref feat) = leaf.data.features {
                 indices_needing_eval.push(i);
                 eval_batch.push(RawFeatures {
@@ -917,8 +938,8 @@ impl<'a> GumbelMctsAgent<'a> {
             let results = self.evaluator.evaluate(eval_batch);
 
             for (local_idx, &global_idx) in indices_needing_eval.iter().enumerate() {
-                let (value, progress, ref policy_row) = results[local_idx];
-                values[global_idx] = (value, progress);
+                let (value, _progress, ref policy_row) = results[local_idx];
+                values[global_idx] = value;
 
                 let leaf = &leaves[global_idx];
                 let node = get_node_by_path_mut(root, &leaf.data.path_indices)
@@ -931,7 +952,6 @@ impl<'a> GumbelMctsAgent<'a> {
                     leaf.data.map_size,
                     policy_row,
                     value,
-                    progress,
                     leaf.data.heuristic_scores.as_deref(),
                 );
             }
@@ -953,14 +973,12 @@ impl<'a> GumbelMctsAgent<'a> {
         map_size: usize,
         policy: &RawPolicyOutput,
         own_value: f32,
-        own_progress: f32,
         heuristic_scores: Option<&[f32]>,
     ) {
         if node.is_expanded {
             return;
         }
         node.own_value = own_value;
-        node.own_progress = own_progress;
 
         if legal_moves.is_empty() {
             node.is_expanded = true;
@@ -1108,7 +1126,7 @@ impl<'a> GumbelMctsAgent<'a> {
             use rand::distr::weighted::WeightedIndex;
             let weights: Vec<f32> = root.children.iter().map(|c| c.visits.max(0.0)).collect();
             match WeightedIndex::new(&weights) {
-                Ok(dist) => dist.sample(&mut rand::rng()),
+                Ok(dist) => dist.sample(&mut *self.rng.borrow_mut()),
                 // All-zero weights (nothing searched) — fall back to the recommendation.
                 Err(_) => self.recommend_final_move(&root),
             }
@@ -1287,6 +1305,12 @@ fn next_root_hash_for(game: &Game, m: Option<&dyn Move>) -> Option<u64> {
     let m = m?;
     let mut preview = game.clone();
     let _ = preview.play_move(m)?;
+    // Never re-root across a handover: the stored subtree under an EndTurn
+    // child belongs to the OPPONENT and was built from this player's belief
+    // state, so promoting it would search the wrong side's tree.
+    if preview.state.settings.current_player_turn_id != game.state.settings.current_player_turn_id {
+        return None;
+    }
     let mut mcts_preview = preview.clone_for_mcts(preview.current_player_id());
     let feat = features::state_to_cpu_features(
         &mcts_preview.state,

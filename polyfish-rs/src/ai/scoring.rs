@@ -4,8 +4,61 @@ use crate::game::Game;
 use crate::moves::Move;
 use crate::settings::get_structure_setting;
 use crate::types::{
-    AbilityType, CityRewardType, ModeType, MoveType, SkillType, StructureType, TerrainType,
+    AbilityType, CityRewardType, ModeType, MoveType, SkillType, StructureType, TechnologyType,
+    TerrainType, UnitType,
 };
+
+/// Combat role used for army-composition scoring: a Frontline screen absorbs
+/// hits, Ranged deals damage from behind it, Mobile units hit and run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UnitRole {
+    Frontline,
+    Ranged,
+    Mobile,
+    Other,
+}
+
+fn unit_role(unit_type: UnitType) -> UnitRole {
+    match unit_type {
+        UnitType::Warrior
+        | UnitType::Defender
+        | UnitType::Swordsman
+        | UnitType::Giant
+        | UnitType::Juggernaut
+        | UnitType::Crab
+        | UnitType::Kiton
+        | UnitType::Polytaur
+        | UnitType::Mantis
+        | UnitType::Doomux
+        | UnitType::Segment => UnitRole::Frontline,
+
+        UnitType::Archer
+        | UnitType::Catapult
+        | UnitType::Tridention
+        | UnitType::Exida
+        | UnitType::Bomber
+        | UnitType::Scoutship
+        | UnitType::FireDragon => UnitRole::Ranged,
+
+        UnitType::Rider
+        | UnitType::Knight
+        | UnitType::Amphibian
+        | UnitType::Hexapod
+        | UnitType::Rammership
+        | UnitType::BabyDragon
+        | UnitType::Raychi
+        | UnitType::Moth => UnitRole::Mobile,
+
+        _ => UnitRole::Other,
+    }
+}
+
+/// Summon: weight on the unit's meta value, plus the composition bonuses that
+/// pair a screen with ranged damage and reward mobility once roads exist.
+const SUMMON_QUALITY_W: f32 = 10.0;
+const SUMMON_SCREEN_BONUS: f32 = 8.0;
+const SUMMON_RANGED_BONUS: f32 = 6.0;
+const SUMMON_MOBILITY_BONUS: f32 = 5.0;
 
 /// Score a move based on heuristics
 pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
@@ -268,10 +321,36 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                 score -= 15.0; // Avoid bloat if safe
             }
 
-            // 3. Super Unit / Giant preference
+            // 3. Unit quality and composition. Without this every affordable
+            // unit scores identically: an army wants a screen for its ranged
+            // units, ranged behind that screen, and mobility once roads exist.
             if let Ok(u_type) = mv.unit_type() {
-                if u_type == crate::types::UnitType::Giant {
+                if u_type == UnitType::Giant {
                     score += 15.0;
+                }
+                score += crate::ai::evaluator::army::UNIT_VALUES.get(u_type) * SUMMON_QUALITY_W;
+
+                let (mut frontline, mut ranged) = (0, 0);
+                for u in &tribe.units {
+                    match unit_role(u.unit_type) {
+                        UnitRole::Frontline => frontline += 1,
+                        UnitRole::Ranged => ranged += 1,
+                        _ => {}
+                    }
+                }
+                let has_roads = crate::settings::technology::has_technology(
+                    &tribe.tech_vanilla,
+                    crate::settings::technology::resolve_tech_for_tribe(
+                        TechnologyType::Roads,
+                        tribe.tribe_type,
+                    ),
+                );
+
+                match unit_role(u_type) {
+                    UnitRole::Frontline if ranged > frontline => score += SUMMON_SCREEN_BONUS,
+                    UnitRole::Ranged if frontline > ranged => score += SUMMON_RANGED_BONUS,
+                    UnitRole::Mobile if has_roads => score += SUMMON_MOBILITY_BONUS,
+                    _ => {}
                 }
             }
 
@@ -496,10 +575,18 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                                 // Fixed priority just under an actual Capture
                                 // (100.1) and above any attack (<=90), so the
                                 // agent seizes the objective instead of
-                                if crate::functions::is_enemy_capital(state, target_idx.try_into().unwrap(), player_id) {
+                                if crate::functions::is_enemy_capital(
+                                    state,
+                                    target_idx as i32,
+                                    player_id,
+                                ) {
                                     return 99.0;
                                 }
-                                if crate::functions::is_enemy_city(state, target_idx.try_into().unwrap(), player_id) {
+                                if crate::functions::is_enemy_city(
+                                    state,
+                                    target_idx as i32,
+                                    player_id,
+                                ) {
                                     return 96.0;
                                 }
                             }
@@ -1060,6 +1147,127 @@ mod tests {
         assert!(
             toward_score > side_score,
             "toward fog ({toward_score}) should beat sidestep ({side_score})"
+        );
+    }
+
+    /// Teacher behaviour probe: the zero-search greedy agent (the self-play
+    /// teacher) against itself on fixed seeds, reporting the EXP_ELO_001
+    /// metrics. Measurement tool, not an assertion — `--ignored`.
+    #[test]
+    #[ignore]
+    fn greedy_teacher_behaviour_probe() {
+        use crate::ai::evaluator::army::assess_unit_power;
+        use crate::ai::heuristic_mcts::GreedyHeuristicAgent;
+        use crate::mapgen::{MapGenSettings, generate};
+        use crate::types::{MapSize, MapType, ModeType};
+
+        const GAMES: i64 = 64;
+        const MAX_TURNS: i32 = 30;
+        const SAMPLE_TURN: i32 = 12;
+        const CITY_TURN: i32 = 13;
+
+        let agent = GreedyHeuristicAgent::new();
+        let mut n = 0.0f32;
+        let (mut cities12, mut units12, mut army12, mut techs12, mut spt12) =
+            (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        let (mut front12, mut ranged12, mut mobile12, mut cover12) =
+            (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        let mut third_city = 0.0f32;
+        let mut city_n = 0.0f32;
+        let (mut techs_end, mut army_end, mut score_end, mut end_n) =
+            (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+
+        for seed in 0..GAMES {
+            let mut game = Game::new();
+            game.state = generate(MapGenSettings {
+                size: MapSize::Tiny,
+                map_type: MapType::Drylands,
+                tribes: vec![TribeType::Imperius, TribeType::Bardur],
+                seed,
+                ..Default::default()
+            });
+            game.state.settings.mode = ModeType::Domination;
+            game.state.settings.max_turns = MAX_TURNS;
+            game.post_load();
+
+            let mut done: std::collections::HashSet<i32> = std::collections::HashSet::new();
+            let mut steps = 0;
+            while !crate::functions::is_game_over(&game.state) && steps < 20000 {
+                let turn = game.state.settings.turn;
+                if (turn == SAMPLE_TURN || turn == CITY_TURN) && done.insert(turn) {
+                    let ids: Vec<i32> = game.state.tribes.keys().copied().collect();
+                    for id in ids {
+                        let tribe = &game.state.tribes[&id];
+                        if turn == CITY_TURN {
+                            city_n += 1.0;
+                            if tribe.cities.len() >= 3 {
+                                third_city += 1.0;
+                            }
+                            continue;
+                        }
+                        n += 1.0;
+                        cities12 += tribe.cities.len() as f32;
+                        units12 += tribe.units.len() as f32;
+                        techs12 +=
+                            tribe.tech_vanilla.iter().filter(|t| t.discovered).count() as f32;
+                        spt12 += crate::functions::get_tribe_spt(&game.state, tribe) as f32;
+                        for u in &tribe.units {
+                            army12 += assess_unit_power(&game.state, u);
+                            if crate::functions::get_defense_bonus(&game.state, u) > 1.0 {
+                                cover12 += 1.0;
+                            }
+                            match unit_role(u.unit_type) {
+                                UnitRole::Frontline => front12 += 1.0,
+                                UnitRole::Ranged => ranged12 += 1.0,
+                                UnitRole::Mobile => mobile12 += 1.0,
+                                UnitRole::Other => {}
+                            }
+                        }
+                    }
+                }
+                let Some(mv) = agent.select_move(&mut game) else {
+                    break;
+                };
+                game.play_move(mv.as_ref());
+                steps += 1;
+            }
+
+            let ids: Vec<i32> = game.state.tribes.keys().copied().collect();
+            for id in ids {
+                let tribe = &game.state.tribes[&id];
+                end_n += 1.0;
+                techs_end += tribe.tech_vanilla.iter().filter(|t| t.discovered).count() as f32;
+                army_end += tribe
+                    .units
+                    .iter()
+                    .map(|u| assess_unit_power(&game.state, u))
+                    .sum::<f32>();
+                score_end += tribe.score as f32;
+            }
+        }
+
+        println!("PROBE games={GAMES} seats@t12={n} seats@t13={city_n}");
+        println!(
+            "t12: cities={:.2} units={:.2} army={:.2} techs={:.2} spt={:.2} cover_frac={:.3}",
+            cities12 / n,
+            units12 / n,
+            army12 / n,
+            techs12 / n,
+            spt12 / n,
+            cover12 / units12.max(1.0)
+        );
+        println!(
+            "t12 roles: frontline={:.2} ranged={:.2} mobile={:.2}",
+            front12 / n,
+            ranged12 / n,
+            mobile12 / n
+        );
+        println!("t13: third_city_rate={:.3}", third_city / city_n.max(1.0));
+        println!(
+            "end: techs={:.2} army={:.2} score={:.0}",
+            techs_end / end_n,
+            army_end / end_n,
+            score_end / end_n
         );
     }
 }

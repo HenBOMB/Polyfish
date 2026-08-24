@@ -17,7 +17,8 @@
 //! device) is preserved exactly as with the candle path.
 
 use crate::ai::features::{MAP_SIZE, NUM_CHANNELS};
-use crate::ai::network::RawPolicyOutput;
+use crate::ai::mapper::NUM_MOVE_OPTIONS;
+use crate::ai::network::{RawPolicyOutput, NUM_ACTION_TYPES};
 use std::collections::HashMap;
 use tch::{Device, Kind, Tensor};
 
@@ -26,7 +27,8 @@ const NHEAD: i64 = 4;
 const HEAD_DIM: i64 = FILTERS / NHEAD; // 16
 const PLAYER_DIM: i64 = 16;
 const SPATIAL: i64 = (MAP_SIZE * MAP_SIZE) as i64; // 121
-const BN_EPS: f64 = 1e-5;
+const GN_EPS: f64 = 1e-5;
+const GN_GROUPS: i64 = 8;
 const LN_EPS: f64 = 1e-5;
 const NUM_RES_BLOCKS: usize = 6;
 
@@ -47,7 +49,7 @@ impl TchPolyZeroNet {
         let named = Tensor::read_safetensors(path)?;
         
         // Reject older checkpoints that used BatchNorm to avoid subtle eval bugs
-        if named.keys().any(|k| k.contains("running_mean")) {
+        if named.iter().any(|(k, _)| k.contains("running_mean")) {
             anyhow::bail!("Rejecting BatchNorm-era checkpoint (found running_mean)");
         }
 
@@ -56,6 +58,19 @@ impl TchPolyZeroNet {
             // Move each parameter onto the inference device once, up front.
             w.insert(name, tensor.to_device(device).to_kind(Kind::Float));
         }
+
+        // The readback row is sliced by NUM_ACTION_TYPES, so a narrower stored
+        // head would silently misalign every row after it.
+        let action_rows = w
+            .get("pi_action.weight")
+            .and_then(|t| t.size().first().copied())
+            .ok_or_else(|| anyhow::anyhow!("model file has no usable pi_action.weight"))?;
+        anyhow::ensure!(
+            action_rows == NUM_ACTION_TYPES as i64,
+            "checkpoint pi_action head is {action_rows} wide, expected {NUM_ACTION_TYPES} \
+             (load it once through train.py to migrate the head)"
+        );
+
         Ok(Self { w, device })
     }
 
@@ -86,7 +101,7 @@ impl TchPolyZeroNet {
     fn group_norm(&self, x: &Tensor, prefix: &str) -> Tensor {
         let weight = self.get(&format!("{prefix}.weight"));
         let bias = self.get(&format!("{prefix}.bias"));
-        x.group_norm(8, Some(weight), Some(bias), 1e-5, true)
+        x.group_norm(GN_GROUPS, Some(weight), Some(bias), GN_EPS, true)
     }
 
     fn res_block(&self, x: &Tensor, i: usize) -> Tensor {
@@ -175,7 +190,7 @@ impl TchPolyZeroNet {
         // 2. Cross-attention inputs
         // spatial tokens: [B, D, H, W] -> [B, H*W, D]
         let spatial_tokens = x.flatten(2, 3).transpose(1, 2);
-        // player tokens: player[B,10,1] * embeddings[1,10,D] -> [B,10,D]
+        // player tokens: player[B,PLAYER_DIM,1] * embeddings[1,PLAYER_DIM,D]
         let emb = self.get("player_feature_embeddings").unsqueeze(0);
         let pos_emb = self.get("player_pos_embeddings").unsqueeze(0);
         let player_tokens = player.unsqueeze(-1) * emb + pos_emb;
@@ -194,8 +209,8 @@ impl TchPolyZeroNet {
         let p_pooled = self.conv2d(&x, "p_pool_conv", 0);
         let p_pooled = p_pooled.flatten(1, 3);
         let p_latent = self.linear(&p_pooled, "p_fc_shared").relu();
-        let action_type = self.linear(&p_latent, "pi_action"); // [B, 11]
-        let move_option = self.linear(&p_latent, "pi_option"); // [B, 192]
+        let action_type = self.linear(&p_latent, "pi_action"); // [B, NUM_ACTION_TYPES]
+        let move_option = self.linear(&p_latent, "pi_option"); // [B, NUM_MOVE_OPTIONS]
         let source_spatial = self.conv2d(&x, "pi_source", 0).flatten(1, 3); // [B, 121]
         let target_spatial = self.conv2d(&x, "pi_target", 0).flatten(1, 3); // [B, 121]
 
@@ -211,15 +226,15 @@ impl TchPolyZeroNet {
         // Read value + 4 policy heads back to CPU in a SINGLE device->CPU
         // copy. Each .to_device(Cpu) on MPS forces a commit +
         // waitUntilCompleted, so per-head readbacks stall the stream ~5x per
-        // forward. Concat on-device into one [B, 446] row, one readback, then
+        // forward. Concat on-device into one [B, ROW] row, one readback, then
         // split by static offset on the CPU. Bit-identical to the per-head
         // path (cat/slice copy bytes, no op changes).
         const V: usize = 1;
-        const AT: usize = 11;
+        const AT: usize = NUM_ACTION_TYPES;
         const SS: usize = SPATIAL as usize; // 121
         const TS: usize = SPATIAL as usize; // 121
-        const MO: usize = 192;
-        const ROW: usize = V + AT + SS + TS + MO; // 446
+        const MO: usize = NUM_MOVE_OPTIONS;
+        const ROW: usize = V + AT + SS + TS + MO;
 
         let row = Tensor::cat(
             &[

@@ -1,12 +1,23 @@
 #!/usr/bin/env python3
-"""Anchored Elo ratings for the arena match ledger (matches.jsonl).
+"""Anchored Elo ratings from the arena match ledger or the strength ladder.
 
 Batch Bradley-Terry maximum-likelihood fit over ALL recorded games, refit from
 scratch on every run — no order-dependent K-factor drift. The scale is pinned
-by the `random` backend at 0 Elo (it never changes), so ratings stay comparable
-across runs, checkpoints, and architecture changes. Draws count as half a win.
+by one player that never moves, so ratings stay comparable across runs,
+checkpoints, and architecture changes. Draws count as half a win.
+
+Two sources, same fit:
+  --source matches  arena --json-out ledger (matches.jsonl), anchor `random`.
+  --source ladder   ladder.json's readings, anchor `greedy` (its Elo-0 floor).
+The ladder source replaces run_training_loop.sh's chained per-reading win rates
+with one joint fit over every gauge, audit and link match ever recorded, with
+bootstrap intervals. `tribe_audit` readings are excluded (EXCLUDED_KINDS): they
+replay the gauge match on another tribe pair, so pooling them would fold the
+block effect the pinned pair exists to remove back into the rating. Ladder rows
+carry no elimination flag, so finish% is 0 there.
 
 Usage:
+  python3 elo.py fit    [--source ladder] [--ladder ladder.json]
   python3 elo.py fit    [--matches matches.jsonl] [--out elo_ratings.json]
   python3 elo.py report [--ratings elo_ratings.json]
 """
@@ -22,9 +33,11 @@ import sys
 from collections import defaultdict
 
 MATCHES_PATH = "matches.jsonl"
+LADDER_PATH = "ladder.json"
 RATINGS_PATH = "elo_ratings.json"
 
 ANCHOR = "random"
+LADDER_ANCHOR = "greedy"
 ANCHOR_ELO = 0.0
 LN10_400 = math.log(10.0) / 400.0
 # Virtual draws per played pair (BayesElo-style shrinkage): bounds the MLE for
@@ -64,6 +77,52 @@ def load_games(path: str) -> list[tuple[str, str, float, bool]]:
     return games
 
 
+def _ladder_node(reading: dict) -> str:
+    """run_id-qualified player name; bare `model@iterN` collides across runs."""
+    run, model = reading.get("run_id") or "", reading.get("model") or ""
+    return f"{run}/{model}" if run else model
+
+
+# Cross-check readings, not rating evidence: a tribe_audit replays the gauge
+# match on another tribe pair, and its games share the (model, anchor) node pair
+# with the pinned reading. Pooling them would fold the tribe block effect the pin
+# exists to remove straight back into the ladder Elo (#34).
+EXCLUDED_KINDS = {"tribe_audit"}
+
+
+def load_ladder_games(path: str) -> list[tuple[str, str, float, bool]]:
+    """ladder.json readings -> the same rows as the arena ledger, expanded from
+    each reading's W/D/L. Each anchor is aliased back to the model it was frozen
+    from (matched on its link match's iteration) or the graph splits in two at
+    every freeze. Ladder rows carry no elimination flag, so finish% is 0."""
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    readings = [r for r in data.get("readings", []) if r.get("kind") not in EXCLUDED_KINDS]
+    links = {
+        r.get("iteration"): _ladder_node(r) for r in readings if r.get("kind") == "link"
+    }
+    alias = {
+        a["name"]: links[a.get("frozen_iteration")]
+        for a in data.get("anchors", [])
+        if a.get("frozen_iteration") in links
+    }
+
+    games: list[tuple[str, str, float, bool]] = []
+    for r in readings:
+        model = _ladder_node(r)
+        opponent = alias.get(r.get("opponent"), r.get("opponent"))
+        if not model or not opponent or model == opponent:
+            continue
+        for count, score in (
+            (r.get("wins", 0), 1.0),
+            (r.get("losses", 0), 0.0),
+            (r.get("draws", 0), 0.5),
+        ):
+            games.extend((model, opponent, score, False) for _ in range(int(count)))
+    return games
+
+
 def _pair_stats(
     games: list[tuple[str, str, float]],
     virtual_draws: float = VIRTUAL_DRAWS,
@@ -88,6 +147,7 @@ def fit_ratings(
     max_sweeps: int = 500,
     tol: float = 1e-3,
     virtual_draws: float = VIRTUAL_DRAWS,
+    anchor: str = ANCHOR,
 ) -> dict[str, float]:
     """Per-player Newton coordinate sweeps on the BT log-likelihood.
     The anchor is held fixed; everything else moves."""
@@ -100,7 +160,7 @@ def fit_ratings(
     if warm_start:
         for p in players:
             r[p] = warm_start.get(p, ANCHOR_ELO)
-    r[ANCHOR] = ANCHOR_ELO
+    r[anchor] = ANCHOR_ELO
 
     # opponents[p] = list of (opponent, score for p, games) merging both orders
     opponents: dict[str, list[tuple[str, float, float]]] = defaultdict(list)
@@ -112,7 +172,7 @@ def fit_ratings(
     for _ in range(max_sweeps):
         max_delta = 0.0
         for p in order:
-            if p == ANCHOR:
+            if p == anchor:
                 continue
             grad = 0.0  # in units of expected-score
             hess = 0.0
@@ -131,13 +191,13 @@ def fit_ratings(
     return r
 
 
-def connected_to_anchor(games: list[tuple[str, str, float]]) -> set[str]:
+def connected_to_anchor(games: list[tuple[str, str, float]], anchor: str = ANCHOR) -> set[str]:
     adj: dict[str, set[str]] = defaultdict(set)
     for a, b, _ in games:
         adj[a].add(b)
         adj[b].add(a)
-    seen = {ANCHOR}
-    stack = [ANCHOR]
+    seen = {anchor}
+    stack = [anchor]
     while stack:
         for q in adj[stack.pop()]:
             if q not in seen:
@@ -151,13 +211,20 @@ def bootstrap_ci(
     point: dict[str, float],
     reps: int = BOOTSTRAP_REPS,
     virtual_draws: float = VIRTUAL_DRAWS,
+    anchor: str = ANCHOR,
 ) -> dict[str, tuple[float, float]]:
     samples: dict[str, list[float]] = defaultdict(list)
     rng = random.Random(0)
     n = len(games)
     for _ in range(reps):
         resample = [games[rng.randrange(n)] for _ in range(n)]
-        r = fit_ratings(resample, warm_start=point, max_sweeps=100, virtual_draws=virtual_draws)
+        r = fit_ratings(
+            resample,
+            warm_start=point,
+            max_sweeps=100,
+            virtual_draws=virtual_draws,
+            anchor=anchor,
+        )
         for p, v in r.items():
             samples[p].append(v)
     ci: dict[str, tuple[float, float]] = {}
@@ -190,7 +257,7 @@ def record(games: list[tuple[str, str, float, bool]]) -> dict[str, dict[str, int
     return rec
 
 
-def print_table(ratings: dict[str, dict]) -> None:
+def print_table(ratings: dict[str, dict], anchor: str = ANCHOR) -> None:
     rows = sorted(ratings.items(), key=lambda kv: -kv[1]["elo"])
     width = max((len(p) for p in ratings), default=6)
     print(
@@ -203,7 +270,7 @@ def print_table(ratings: dict[str, dict]) -> None:
         # % of the player's games won by actually eliminating the opponent —
         # the "can it close out a Domination game" number.
         finish = 100.0 * info.get("decisive_wins", 0) / max(info["games"], 1)
-        anchor_mark = "  (anchor)" if p == ANCHOR else ""
+        anchor_mark = "  (anchor)" if p == anchor else ""
         print(
             f"{p:<{width}}  {info['elo']:>7.0f}  [{lo:>6.0f}, {hi:>6.0f}]  "
             f"{info['games']:>5}  {wdl:>11}  {finish:>6.1f}%{anchor_mark}"
@@ -211,22 +278,31 @@ def print_table(ratings: dict[str, dict]) -> None:
 
 
 def cmd_fit(args: argparse.Namespace) -> None:
-    if not os.path.exists(args.matches):
-        sys.exit(f"no ledger at {args.matches} — run arena with --json-out first")
-    games = load_games(args.matches)
+    if args.source == "ladder":
+        anchor = args.anchor or LADDER_ANCHOR
+        if not os.path.exists(args.ladder):
+            sys.exit(f"no ladder at {args.ladder} — run a gauge match first")
+        games = load_ladder_games(args.ladder)
+        source = args.ladder
+    else:
+        anchor = args.anchor or ANCHOR
+        if not os.path.exists(args.matches):
+            sys.exit(f"no ledger at {args.matches} — run arena with --json-out first")
+        games = load_games(args.matches)
+        source = args.matches
     if not games:
-        sys.exit(f"{args.matches} contains no usable games")
+        sys.exit(f"{source} contains no usable games")
     bt_games = [(a, b, s) for a, b, s, _ in games]
 
     players = {p for a, b, _ in bt_games for p in (a, b)}
-    if ANCHOR not in players:
+    if anchor not in players:
         print(
-            f"warning: anchor '{ANCHOR}' has no games — the scale floats "
-            "(ratings are relative-only until you play the random anchor)",
+            f"warning: anchor '{anchor}' has no games — the scale floats "
+            "(ratings are relative-only until the anchor plays)",
             file=sys.stderr,
         )
     else:
-        stranded = players - connected_to_anchor(bt_games)
+        stranded = players - connected_to_anchor(bt_games, anchor)
         if stranded:
             print(
                 f"warning: not connected to the anchor (ratings unreliable): "
@@ -234,9 +310,15 @@ def cmd_fit(args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
 
-    point = fit_ratings(bt_games, virtual_draws=args.virtual_draws)
+    point = fit_ratings(bt_games, virtual_draws=args.virtual_draws, anchor=anchor)
     ci = (
-        bootstrap_ci(bt_games, point, reps=args.bootstrap, virtual_draws=args.virtual_draws)
+        bootstrap_ci(
+            bt_games,
+            point,
+            reps=args.bootstrap,
+            virtual_draws=args.virtual_draws,
+            anchor=anchor,
+        )
         if args.bootstrap > 0
         else {}
     )
@@ -257,14 +339,14 @@ def cmd_fit(args: argparse.Namespace) -> None:
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2)
     print(f"{len(games)} games, {len(players)} players -> {args.out}\n")
-    print_table(out)
+    print_table(out, anchor)
 
 
 def cmd_report(args: argparse.Namespace) -> None:
     if not os.path.exists(args.ratings):
         sys.exit(f"no ratings at {args.ratings} — run `elo.py fit` first")
     with open(args.ratings, encoding="utf-8") as f:
-        print_table(json.load(f))
+        print_table(json.load(f), args.anchor)
 
 
 def main() -> None:
@@ -272,7 +354,14 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p_fit = sub.add_parser("fit", help="refit all ratings from the ledger")
+    p_fit.add_argument("--source", choices=["matches", "ladder"], default="matches")
     p_fit.add_argument("--matches", default=MATCHES_PATH)
+    p_fit.add_argument("--ladder", default=LADDER_PATH)
+    p_fit.add_argument(
+        "--anchor",
+        default=None,
+        help=f"player pinned at 0 Elo (default: {ANCHOR} / {LADDER_ANCHOR} for --source ladder)",
+    )
     p_fit.add_argument("--out", default=RATINGS_PATH)
     p_fit.add_argument(
         "--bootstrap",
@@ -290,6 +379,7 @@ def main() -> None:
 
     p_rep = sub.add_parser("report", help="print the last fitted table")
     p_rep.add_argument("--ratings", default=RATINGS_PATH)
+    p_rep.add_argument("--anchor", default=ANCHOR, help="player to mark as the 0-Elo anchor")
     p_rep.set_defaults(func=cmd_report)
 
     args = ap.parse_args()
