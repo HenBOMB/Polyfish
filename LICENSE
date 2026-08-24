@@ -1,0 +1,22 @@
+Polyfish Licensing
+==================
+
+This repository contains multiple modules licensed under different open-source licenses:
+
+- **polyfish-ui/** (Web Interface):
+  Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0-only).
+  See `polyfish-ui/LICENSE`.
+
+- **polyfish-rs/** (Simulation Engine & Server):
+  Licensed under the Apache License, Version 2.0 (Apache-2.0).
+  See `polyfish-rs/LICENSE`.
+
+- **polyfish-mod/** (Game Interface Mod):
+  Licensed under the MIT License.
+  See `polyfish-mod/LICENSE`.
+
+- **polyfish-scraper/** (Data Scraper & Extraction Utilities):
+  Licensed under the MIT License.
+  See `polyfish-scraper/LICENSE`.
+
+Unless explicitly stated otherwise, any contribution intentionally submitted for inclusion in the work by you shall be licensed under the license governing the specific module to which the contribution applies.
