@@ -36,8 +36,16 @@ pub fn allocate_value(
     // a real city that already rules tiles, the engine's own answer is not an
     // approximation of the truth, it IS the truth, and modelling it can only
     // disagree. All-or-nothing: a half-real allocation would mix the two rules.
+    // `engine_territory` alone only ever returns what a city rules TODAY, so a
+    // BorderGrowth scenario planned from a real state used to get the exact
+    // same tiles as its natural counterpart -- every "+border" row silently
+    // reduced to "natural minus the PopGrowth bonus" (found Aug 2026: the
+    // +border territory count matched +natural's exactly, tile for tile).
+    // `extend_for_border_growth` adds the ring such a city would actually grow
+    // into, without touching the "believe reality" rule for tiles it already
+    // rules.
     if let Some(real) = engine_territory(state, cities) {
-        return real;
+        return extend_for_border_growth(state, cities, scs, real);
     }
 
     let mut claimants: HashMap<i32, Vec<usize>> = HashMap::new();
@@ -129,6 +137,53 @@ pub fn allocate_value(
         v.sort();
     }
     terr
+}
+
+/// Adds the not-yet-owned radius-2 ring to any city whose scenario plans to
+/// take BorderGrowth. Only unclaimed tiles (`owner == 0`) are eligible --
+/// real Polytopia border growth claims neutral ground, never a tile anyone
+/// (friend or foe) already rules, so a tile another real city of ours holds
+/// is left alone rather than reassigned. Contested rings between two of
+/// OUR OWN growing cities resolve to the nearer one, same tie-break as the
+/// synthetic radius model below.
+fn extend_for_border_growth(
+    state: &GameState,
+    cities: &[i32],
+    scs: &[Scenario],
+    mut real: Vec<Vec<i32>>,
+) -> Vec<Vec<i32>> {
+    if !scs.iter().any(|s| s.border_growth) {
+        return real;
+    }
+    let owned: HashSet<i32> = real.iter().flatten().copied().collect();
+    let mut candidates: HashMap<i32, Vec<usize>> = HashMap::new();
+    for (ci, &c) in cities.iter().enumerate() {
+        if !scs[ci].border_growth {
+            continue;
+        }
+        for idx in get_adjacent_indices(state, c, 2) {
+            if owned.contains(&idx) {
+                continue;
+            }
+            if state.tiles.get(&idx).is_none_or(|t| t.owner != 0) {
+                continue;
+            }
+            candidates.entry(idx).or_default().push(ci);
+        }
+    }
+    for (idx, who) in candidates {
+        let winner = who
+            .iter()
+            .copied()
+            .min_by_key(|&ci| (get_chebyshev_distance(idx, cities[ci], state.settings.size), ci))
+            .unwrap();
+        real[winner].push(idx);
+    }
+    for v in real.iter_mut() {
+        v.sort();
+        v.dedup();
+    }
+    real
 }
 
 pub fn allocate(state: &GameState, cities: &[i32], border_growth: bool) -> Vec<Vec<i32>> {
@@ -697,4 +752,100 @@ pub fn pick_for_goal<'a>(front: &'a [EmpirePlan], g: Goal) -> Option<&'a EmpireP
         };
         key(a).cmp(&key(b)).then(thrift(a).cmp(&thrift(b)))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::states::{CityState, TileState, TribeState};
+
+    /// Regression for the Aug 2026 bug: planning a BorderGrowth scenario from
+    /// a REAL state (`engine_territory` succeeds) used to hand back the exact
+    /// same tiles as the natural scenario, because `engine_territory` only
+    /// ever reports what a city rules TODAY. Every "+border" row silently
+    /// reduced to "natural minus the PopGrowth bonus" instead of the radius-2
+    /// ring it should plan into.
+    #[test]
+    fn border_growth_on_a_real_state_actually_grows_the_territory() {
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        state.settings.current_player_turn_id = 1;
+        let center = 5 * 11 + 5;
+        // A real 3x3 inner territory, same shape `still_capturable`-driven
+        // play would leave a level-1 city holding.
+        let inner: Vec<i32> = get_adjacent_indices(&state, center, 1).into_iter().chain([center]).collect();
+        for &idx in &inner {
+            let mut t = TileState::default();
+            t.terrain_type = TerrainType::Field;
+            t.owner = 1;
+            t.ruling_city_coords = Some(crate::coords::Coords::from_index(center, 11));
+            state.tiles.insert(idx, t);
+        }
+        // The rest of the 5x5 ring: unclaimed ground a BorderGrowth could
+        // actually take.
+        for idx in get_adjacent_indices(&state, center, 2) {
+            state.tiles.entry(idx).or_insert_with(|| {
+                let mut t = TileState::default();
+                t.terrain_type = TerrainType::Field;
+                t
+            });
+        }
+        let mut tribe = TribeState::default();
+        tribe.id = 1;
+        let mut city = CityState { idx: center, owner: 1, ..Default::default() };
+        city._territory = inner.clone();
+        tribe.cities.push(city);
+        state.tribes.insert(1, tribe);
+
+        let cities = [center];
+        let natural = allocate_value(&state, &cities, &[SCENARIOS[0]], 0); // sawmill natural
+        let border = allocate_value(&state, &cities, &[SCENARIOS[1]], 0); // sawmill +border
+
+        assert_eq!(natural[0].len(), inner.len(), "natural must stay exactly the real territory");
+        assert!(
+            border[0].len() > natural[0].len(),
+            "+border must grow past the real territory, got {} vs natural's {}",
+            border[0].len(),
+            natural[0].len()
+        );
+        // Every added tile must be within the radius-2 ring and previously unclaimed.
+        for &idx in &border[0] {
+            assert!(
+                get_chebyshev_distance(idx, center, 11) <= 2,
+                "tile {idx} is outside the radius-2 growth ring"
+            );
+        }
+    }
+
+    /// A scenario with no BorderGrowth must never touch tiles outside what
+    /// the city already really rules -- the "believe the state" rule stays
+    /// absolute for non-growing scenarios.
+    #[test]
+    fn natural_scenario_never_grows_a_real_territory() {
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        state.settings.current_player_turn_id = 1;
+        let center = 5 * 11 + 5;
+        let inner: Vec<i32> = get_adjacent_indices(&state, center, 1).into_iter().chain([center]).collect();
+        for &idx in &inner {
+            let mut t = TileState::default();
+            t.terrain_type = TerrainType::Field;
+            t.owner = 1;
+            t.ruling_city_coords = Some(crate::coords::Coords::from_index(center, 11));
+            state.tiles.insert(idx, t);
+        }
+        let mut tribe = TribeState::default();
+        tribe.id = 1;
+        let mut city = CityState { idx: center, owner: 1, ..Default::default() };
+        city._territory = inner.clone();
+        tribe.cities.push(city);
+        state.tribes.insert(1, tribe);
+
+        let cities = [center];
+        let mut natural = allocate_value(&state, &cities, &[SCENARIOS[0]], 0);
+        natural[0].sort();
+        let mut expected = inner.clone();
+        expected.sort();
+        assert_eq!(natural[0], expected);
+    }
 }
