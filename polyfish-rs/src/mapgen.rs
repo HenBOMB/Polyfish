@@ -1916,4 +1916,281 @@ mod tests {
             );
         }
     }
+
+    // -----------------------------------------------------------------
+    // Belief-SSOT generator ground-truth probes (belief_grid_ssot_design.md
+    // §11). These measure the constraints `ai::belief::map` derives its
+    // evidence from; the constants they print are pinned in that module.
+    // Heavy (1000+ generates each) — `#[ignore]`, run on demand.
+    // -----------------------------------------------------------------
+
+    /// Land, non-mountain, edge-legal — the generator's village-placement
+    /// predicate as an OBSERVER can evaluate it on a finished map.
+    fn probe_is_legal_site(state: &GameState, idx: i32) -> bool {
+        let size = state.settings.size;
+        let Some(tile) = state.tiles.get(&idx) else {
+            return false;
+        };
+        if matches!(tile.terrain_type, TerrainType::Water | TerrainType::Ocean) {
+            return false;
+        }
+        if tile.terrain_type == TerrainType::Mountain {
+            return false;
+        }
+        let (x, y) = get_coords(idx, size);
+        let edge_dist = x.min(size - 1 - x).min(y.min(size - 1 - y));
+        edge_dist >= 2 && edge_dist != 3
+    }
+
+    /// Every village site on a finished map: generated villages AND capitals
+    /// (mapgen writes `village_map[cap] = 2`, so capitals both block and
+    /// satisfy the spacing rule).
+    fn probe_village_sites(state: &GameState) -> Vec<i32> {
+        let mut sites: Vec<i32> = state
+            .structures
+            .iter()
+            .filter(|(_, s)| {
+                s.as_ref()
+                    .map_or(false, |s| s.structure_type == StructureType::Village)
+            })
+            .map(|(&i, _)| i)
+            .collect();
+        for (&i, t) in &state.tiles {
+            if t.capital_of > 0 && !sites.contains(&i) {
+                sites.push(i);
+            }
+        }
+        sites.sort_unstable();
+        sites
+    }
+
+    /// PROBE 12 — C1 (maximality). The post-terrain village pass runs to
+    /// saturation, so every legal tile must sit within Chebyshev 2 of a
+    /// village or capital. The whole C1 design rests on this.
+    /// Also measures `p_base`, the marginal village density on legal tiles.
+    #[test]
+    #[ignore]
+    fn maximality_holds_on_generated_drylands_maps() {
+        let tribe_pairs = [
+            (TribeType::Imperius, TribeType::Bardur),
+            (TribeType::XinXi, TribeType::Oumaji),
+            (TribeType::Kickoo, TribeType::Vengir),
+        ];
+        let mut checked = 0u64;
+        let mut violations = 0u64;
+        let mut violation_notes: Vec<String> = Vec::new();
+        let mut total_legal = 0u64;
+        let mut total_sites_on_legal = 0u64;
+
+        for &(t1, t2) in &tribe_pairs {
+            for seed in 0..1000i64 {
+                let state = generate(MapGenSettings {
+                    size: MapSize::Tiny,
+                    map_type: MapType::Drylands,
+                    tribes: vec![t1, t2],
+                    seed,
+                    version: 115,
+                });
+                let size = state.settings.size;
+                let sites = probe_village_sites(&state);
+                for idx in 0..size * size {
+                    if !probe_is_legal_site(&state, idx) {
+                        continue;
+                    }
+                    total_legal += 1;
+                    if sites.contains(&idx) {
+                        total_sites_on_legal += 1;
+                    }
+                    checked += 1;
+                    let covered = sites
+                        .iter()
+                        .any(|&v| distance(idx, v, size) <= 2);
+                    if !covered {
+                        violations += 1;
+                        if violation_notes.len() < 20 {
+                            let t = &state.tiles[&idx];
+                            violation_notes.push(format!(
+                                "{:?}/{:?} seed {seed} tile {idx} terrain {:?} climate {}",
+                                t1, t2, t.terrain_type, t.climate
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        let p_base = total_sites_on_legal as f64 / total_legal.max(1) as f64;
+        println!("PROBE12 checked={checked} violations={violations} rate={:.6}", 
+                 violations as f64 / checked.max(1) as f64);
+        println!("PROBE12 p_base (villages per legal tile) = {p_base:.6}  \
+                  legal={total_legal} sites_on_legal={total_sites_on_legal}");
+        for n in &violation_notes {
+            println!("PROBE12 violation: {n}");
+        }
+        assert_eq!(violations, 0, "C1 maximality violated; see notes above");
+    }
+
+    /// PROBE 13 — C2 (resource spawn zone). Resources spawn only within
+    /// Chebyshev 2 of a village site, nominally 3:1 inner:outer.
+    #[test]
+    #[ignore]
+    fn resources_only_within_2_of_a_village() {
+        let mut outside = 0u64;
+        let mut inner = 0u64;
+        let mut outer = 0u64;
+        let mut inner_tiles = 0u64;
+        let mut outer_tiles = 0u64;
+        let mut notes: Vec<String> = Vec::new();
+
+        for seed in 0..1000i64 {
+            let state = generate(MapGenSettings {
+                size: MapSize::Tiny,
+                map_type: MapType::Drylands,
+                tribes: vec![TribeType::Imperius, TribeType::Bardur],
+                seed,
+                version: 115,
+            });
+            let size = state.settings.size;
+            let sites = probe_village_sites(&state);
+            let zone = |idx: i32| -> u8 {
+                let d = sites
+                    .iter()
+                    .map(|&v| distance(idx, v, size))
+                    .min()
+                    .unwrap_or(99);
+                if d <= 1 {
+                    2
+                } else if d == 2 {
+                    1
+                } else {
+                    0
+                }
+            };
+            for idx in 0..size * size {
+                match zone(idx) {
+                    2 => inner_tiles += 1,
+                    1 => outer_tiles += 1,
+                    _ => {}
+                }
+            }
+            for (&idx, r) in &state.resources {
+                if r.is_none() {
+                    continue;
+                }
+                match zone(idx) {
+                    2 => inner += 1,
+                    1 => outer += 1,
+                    _ => {
+                        outside += 1;
+                        if notes.len() < 20 {
+                            notes.push(format!(
+                                "seed {seed} tile {idx} res {:?}",
+                                r.as_ref().map(|r| r.resource_type)
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        let inner_rate = inner as f64 / inner_tiles.max(1) as f64;
+        let outer_rate = outer as f64 / outer_tiles.max(1) as f64;
+        println!("PROBE13 outside={outside} inner={inner} outer={outer}");
+        println!(
+            "PROBE13 per-tile rates inner={inner_rate:.4} outer={outer_rate:.4} \
+             ratio={:.3} (nominal 3.0)",
+            inner_rate / outer_rate.max(1e-9)
+        );
+        for n in &notes {
+            println!("PROBE13 outside-zone: {n}");
+        }
+        assert_eq!(outside, 0, "resource spawned outside every village zone");
+    }
+
+    /// PROBE 14 — C3 (climate Voronoi). Measures P(affinity = seat k) as a
+    /// function of the Chebyshev distance difference to the two capitals.
+    /// The flood-fill is a round-robin over seats in index order, so seat 1
+    /// wins ties: the likelihood is NOT symmetric and a plain logistic is a
+    /// bad fit at delta = 0. Emits the empirical table `map.rs` pins.
+    #[test]
+    #[ignore]
+    fn climate_boundary_width() {
+        // (tribe order label) -> delta -> (n, # carrying SEAT-2's climate)
+        let mut tables: Vec<(String, std::collections::BTreeMap<i32, (u64, u64)>)> = Vec::new();
+
+        for (label, t1, t2) in [
+            ("Imperius(s1)/Bardur(s2)", TribeType::Imperius, TribeType::Bardur),
+            ("Bardur(s1)/Imperius(s2)", TribeType::Bardur, TribeType::Imperius),
+            ("XinXi(s1)/Oumaji(s2)", TribeType::XinXi, TribeType::Oumaji),
+        ] {
+            let mut buckets: std::collections::BTreeMap<i32, (u64, u64)> =
+                std::collections::BTreeMap::new();
+            for seed in 0..1000i64 {
+                let state = generate(MapGenSettings {
+                    size: MapSize::Tiny,
+                    map_type: MapType::Drylands,
+                    tribes: vec![t1, t2],
+                    seed,
+                    version: 115,
+                });
+                let size = state.settings.size;
+                let cap1 = state.tiles.values().find(|t| t.capital_of == 1).map(|t| t.coords.idx);
+                let cap2 = state.tiles.values().find(|t| t.capital_of == 2).map(|t| t.coords.idx);
+                let (Some(cap1), Some(cap2)) = (cap1, cap2) else { continue };
+                let c1 = classic_climate_id(t1);
+                let c2 = classic_climate_id(t2);
+                for (&idx, tile) in &state.tiles {
+                    if tile.climate != c1 && tile.climate != c2 {
+                        continue;
+                    }
+                    // delta > 0 means the tile is NEARER seat 2's capital.
+                    let delta = distance(idx, cap1, size) - distance(idx, cap2, size);
+                    let e = buckets.entry(delta.clamp(-6, 6)).or_insert((0, 0));
+                    e.0 += 1;
+                    if tile.climate == c2 {
+                        e.1 += 1;
+                    }
+                }
+            }
+            tables.push((label.to_string(), buckets));
+        }
+
+        println!("PROBE14 delta = d(t,cap_seat1) - d(t,cap_seat2); p = P(climate = seat2's)");
+        for (label, b) in &tables {
+            println!("PROBE14 --- {label}");
+            for (d, (n, hits)) in b {
+                println!("PROBE14   delta={d:+} n={n} p={:.4}", *hits as f64 / *n as f64);
+            }
+        }
+
+        // Pooled table across tribe orderings: if the asymmetry is seat-order
+        // and not tribe-identity, the three agree closely.
+        let mut pooled: std::collections::BTreeMap<i32, (u64, u64)> =
+            std::collections::BTreeMap::new();
+        for (_, b) in &tables {
+            for (d, (n, h)) in b {
+                let e = pooled.entry(*d).or_insert((0, 0));
+                e.0 += n;
+                e.1 += h;
+            }
+        }
+        println!("PROBE14 --- POOLED (the table to pin)");
+        let mut max_spread = 0.0f64;
+        for (d, (n, hits)) in &pooled {
+            let p = *hits as f64 / *n as f64;
+            let spread = tables
+                .iter()
+                .filter_map(|(_, b)| b.get(d).map(|(n, h)| *h as f64 / *n as f64))
+                .fold((1.0f64, 0.0f64), |(lo, hi), v| (lo.min(v), hi.max(v)));
+            max_spread = max_spread.max(spread.1 - spread.0);
+            println!(
+                "PROBE14   delta={d:+} n={n} p={p:.4} (per-order range {:.4}..{:.4})",
+                spread.0, spread.1
+            );
+        }
+        println!("PROBE14 max per-order spread across tribe orderings = {max_spread:.4}");
+        assert!(
+            max_spread < 0.05,
+            "climate likelihood depends on TRIBE identity, not just seat order \
+             (max spread {max_spread:.4}) - the pinned table would be wrong"
+        );
+    }
 }

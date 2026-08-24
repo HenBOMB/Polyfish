@@ -8511,3 +8511,312 @@ and play. Do not read tonight's value-calib win as license to reconsider
 this without a dedicated investigation into why discrimination specifically
 regressed alongside calibration improving — that is now the standing open
 question, not "will the labels fix eventually help."
+
+---
+
+## EXP_ELO_068 — Map belief SSOT (`MapBelief`): Stages 0 + 1a
+
+**Aug 24, 2026.** Design: `belief_grid_ssot_design.md` (implementation record in §15).
+Non-behaviour-changing by construction — nothing in production consumes the belief yet.
+This entry records the calibration, which IS an experiment.
+
+### HYPOTHESIS
+The map generator hands us three hard constraints the current `guess_villages` does not
+exploit — village-packing maximality (C1), resource spawn zones (C2), and the climate
+Voronoi (C3). A deterministic derivation from the observer's explored set should therefore
+(a) beat today's guesser's village estimate outright, and (b) improve the capital posterior
+over EXP_ELO_034's elimination-only `BeliefState`.
+
+### PREDICTION
+(a) `p_village` Brier beats the guesser's `0.3 + score/20` floor. (b) C3 lifts the capital
+posterior above the 034 bar (0.86 @ t10, 0.98 @ t20) with zero wrong collapses.
+
+### ACTUAL (arena `--belief-calib`, Tiny Drylands 1v1 macro-script, 150 seeds × 2 sides,
+### ~12 400 per-turn rows per arm; C3 weight swept over 4 arms)
+
+**(a) CONFIRMED, and by more than expected.**
+
+| Metric (unexplored tiles) | `MapBelief` | `guess_villages` | Uninformed prior |
+|---|---|---|---|
+| `p_village` Brier | **0.0224** | 0.0542 | 0.0479 |
+| Hidden villages in top 8 | **1.113** (60%) | 0.729 (41%) | — |
+
+2.4× better on Brier, +53% more hidden villages found per guess. Note the incidental
+finding: **today's guesser scores worse than an uninformed constant prior** — the
+`0.3 + score/20` floor is actively miscalibrated, not merely coarse.
+
+**(b) FALSIFIED — C3 buys ~nothing on this config.** Paired against the live `BeliefState`
+in the same games: t10 0.877 vs 0.876, t20 0.988 vs 0.984, top-1 0.773 vs 0.772. The
+mechanism is C4, which the design already stated without following through: the capital
+support after removing the observer's own quadrant is **three cells**, and elimination alone
+nearly saturates it (0.892 @ t10, 0.982 @ t20). There was almost no headroom for a
+likelihood to buy. Kept on at a weight measured to regress nothing, because the support
+grows with player count and FFA is the case where it could earn its keep — but do **not**
+cite C3 as a capital-accuracy win.
+
+**Two generator facts the design got wrong, both caught by measurement:**
+1. The climate likelihood is **not** a symmetric logistic. The affinity flood-fill is a
+   round-robin in seat order, so seat 1 wins every tie: P = **0.045** at `delta = 0`, not
+   0.5 — and that is the largest bucket (23% of tiles). Now a measured table, verified
+   identical across three tribe orderings.
+2. Per-tile climate likelihoods **cannot be multiplied**. A flat temper produced 241/2084
+   rows at confidence ≥0.9 with the wrong argmax (elimination: zero) plus four hard
+   collapses onto a wrong cell. Fixed by scaling the *mean* log-likelihood, which bounds
+   total evidence; the sweep then showed zero overconfident rows up to w = 2.
+
+**Generator probes** (`#[ignore]`, in `mapgen::tests`): maximality holds at **0 violations /
+85 551 legal tiles** over 3 000 maps (C1 is real; `p_base` = 0.1664); **0 resources outside
+a village zone** over 1 000 maps, realized inner:outer **2.69** vs the nominal 3.0.
+
+### DISPOSITION
+Stages 0 + 1a land. The village grid is the result worth building on; the capital signal is
+already solved by elimination on Tiny 1v1. **Stage 2** (rank `expand_targets` by
+`p_village`) is the natural next experiment and must be pre-registered as its own paired
+seed-770425 A/B judged on behaviour curves — §15.3 is calibration evidence, not a behaviour
+result, and aa27bb5's lesson is that belief consumers fail at the directive-selection layer.
+**Stage 1b** (the three fidelity fixes) must be measured separately from 1a; the parity
+harness is mutation-verified to catch each of them.
+
+### EXP_ELO_068b — isolating the Stage-1b fidelity fixes (Aug 24, 2026)
+
+**Question:** of `MapBelief`'s measured advantage, how much comes from the three
+fidelity fixes (Ocean-cardinal veto → `P(land)`, Mountain exclusion, resource zone
+radius 1 → 2) versus from the constraint propagation (C1/C2/C3)?
+
+**Method:** `Fidelity::LegacyBugs` runs the *identical* derivation with only those three
+rules reverted, so both arms are computed on the same states in the same games. Arena
+`--belief-calib`, Tiny Drylands 1v1 macro-script, 150 seeds × 2, **12 559 rows**.
+
+| Arm | `p_village` Brier | Hidden villages in top 8 | Guesses on impossible (Mountain) tiles |
+|---|---|---|---|
+| A — `guess_villages` (production today) | 0.0531 | 0.676 | n/a |
+| B — `MapBelief`, legacy bugs restored | 0.0246 | 1.045 | 0.349 /turn |
+| C — `MapBelief`, generator rules | **0.0217** | **1.069** | **0.136** /turn |
+
+**ISOLATED 1b DELTA (C − B): Brier −12.1%, hits@8 +2.3%, impossible-tile guesses −61%.**
+
+**The finding that matters: the fidelity fixes are the small half.** Of the total A→C
+improvement, the constraint propagation (A→B) accounts for **91% of the Brier gain and 94%
+of the hit-rate gain**; the three fidelity fixes account for 9% and 6%. Fixing the rules
+mostly stops the guesser pointing at tiles the generator could never use (−61%) and
+sharpens calibration (−12% Brier) — it does **not** materially find more villages on its
+own.
+
+The delta is front-loaded exactly where expansion targeting decides: Brier −0.005 at
+t0–t6, decaying to ~0 by t18. Impossible-tile guesses at t0: 0.69 → 0.00.
+
+**Two mechanisms explain why 1b alone is weak, both from `obscure_fog` (`states.rs`):**
+it *fabricates* fog terrain (`_prediction._terrain`, default `Field`), so (i) the Ocean
+veto sees invented `Field` neighbours and is near-vacuous on Drylands, and (ii) a hard
+Mountain check on a fog tile would read invented terrain — the exclusion can only ever be
+probabilistic, which is a Stage-2 ranking effect, not a hard-filter one. Only the
+`is_orphan` radius is a true hard-selection fix.
+
+**Disposition:** 1b is not worth a standalone behaviour A/B — it barely changes which tiles
+get guessed (+2.3% hits). Ship it together with the belief-ranked selection and attribute
+via this isolation, which is now measured. Registered as EXP_ELO_069.
+
+## EXP_ELO_069 — replace `guess_villages` with the belief-ranked path (Stage 1b + 2)
+
+**Aug 24, 2026. PRE-REGISTERED before running.** Follows EXP_ELO_068/068b.
+
+### CHANGE
+`guess_villages` now returns `MapBelief::observe(state, player).top_village_sites(state, n)`
+— same candidate pool and the same quadrant spread (which fixes the measured "88% of
+guesses in one bearing" bug), but ranked by `p_village` instead of by distance to the
+nearest unit, with the generator's real placement rules and the reconciled probability as
+confidence. Bundles Stage 1b with Stage 2 deliberately: 068b measured the 1b half in
+isolation (9% of the Brier gain, 6% of the hit-rate gain), so attribution does not depend
+on running them apart, and 1b alone changes too few picks (+2.3% hits) to justify its own
+128-game gauge.
+
+Consumers affected: `expand_targets` via `GoalCache::village_guesses` (the production
+expansion-targeting path) and `enumerate_candidates_with_belief` (aa27bb5 measured it at
+3.8% of picks — not the target, but it shares the entry point).
+
+### HYPOTHESIS
+Guesses that are 2.4× better calibrated and find +58% more hidden villages should let the
+scout reach real villages sooner, showing up as faster time-to-capture and more cities by
+t15/t25 — the "third city decides games" lever.
+
+### PREDICTION
+Judged on **behaviour curves, not the win rate** (`metrics-noise-floor`: the gauge is a
+±12pp ruler; the n=128 win-rate noise floor is 0.078). Expect: first-capture turn earlier,
+cities at t15/t25 up, SPT curve up or flat. Win rate is a tiebreak only, and a move under
+0.078 is not a result. Coherent co-movement across SPT / owned tiles / score is the real
+evidence.
+
+**Risk to watch: cost.** The belief derivation runs per `guess_villages` call where
+`GoalCache` misses. If ms/move regresses materially, that is a finding in itself and the
+fix is to thread `MapBeliefCache` rather than to revert.
+
+### ARMS
+Paired on maps by `--base-seed 770425`, identical `model.safetensors` (Aug 22 11:59,
+verified unchanged between builds). Arm A = `guess_villages` legacy; Arm B = belief-ranked.
+Frozen gauge args per `seed-770425-gauge-harness`.
+
+### ACTUAL — run 1 (seed 770425, n=128 paired, Aug 24) — **PREDICTION FALSIFIED**
+
+The change did **not** do what it was registered to do.
+
+| Predicted | Measured |
+|---|---|
+| more villages captured | **197 vs 197 — bit-identical** (1.5390625 both arms) |
+| first capture earlier | conditional first-village turn 5.09 → **5.26 (later)**, and capture rate 0.836 → **0.828** |
+| cities sooner | `t2c_2nd` 6.57→**6.83**, `t2c_3rd` 10.98→**11.55**, `t2c_4th` 16.94→**17.19** — all **slower** |
+
+Every time-to-city metric moved the wrong way, and the metric the change most directly
+targets — villages captured — did not move at all.
+
+**⚠️ Metric-reading correction (Verdi caught this).** `villages_t2c_first` is **censored**,
+not a tempo metric: a net seat that never captures is charged `max_turns` (50)
+(`self_play.rs:2915`). Its 12.46 is therefore `0.836 × 5.09 + 0.164 × 50`, *not* "the first
+village falls on turn 12.5". The **actual first-village turn is 5.09**
+(`villages_t2c_first_cond`), which is normal. The same censoring applies to
+`villages_t2c_p50/p80/all` and `ruins_t2c_*` — those large numbers (44, 48) are dominated by
+never-reached games, so **never read the uncensored-looking `t2c` families as tempo**; pair
+each with its `_cond` and `_rate` companions. The A/B's direction is unchanged (both the
+conditional turn and the capture rate moved the wrong way), but the magnitude was overstated
+when the censored figure was read as tempo. A 2.4× better-calibrated village grid
+that finds +58% more hidden villages produced **zero** additional village captures.
+
+`anchor_net_wr` 0.3359 → 0.3594 (**+0.023**), which is **under the 0.078 noise floor at
+n=128** and is therefore not a result (`metrics-noise-floor`).
+
+**Cost:** throughput 231.3 → 191.3 moves/sec, **−17.3%**. The belief derivation runs on
+every `GoalCache` miss. This was pre-registered as a risk; it is real.
+
+A separate cluster *did* move together — `avg_cap_cities` +25.7%, `avg_captured_tiles`
++10.3%, `avg_score` +5.2%, net seat `p1_avg` +9.2%, `avg_builds` +9.4%, `hub_starved_frac`
+−4.6%, `avg_spt_t30` +11.2% — i.e. mid/late-game strength, not expansion tempo. That is not
+the registered hypothesis and has no noise estimate behind it, so a replication at a
+different base seed was run before reading anything into it (below).
+
+**Why the expansion hypothesis probably fails, mechanically:** `expand_targets` only
+consults a guess when *real* capturable targets number fewer than `EXPAND_TARGET_MIN` (2)
+**and** the tribe is under `COMMIT_CITY_TARGET` cities. Better guesses only matter inside
+that narrow window, and even then the scout still has to walk there. This is §13 of the
+design doc restated — "a better belief is more and better *options*", and aa27bb5's verdict
+that macro selection starves for **evaluation**, not options. The belief is measurably a
+better map; it is not, on this evidence, a better decision.
+
+### ACTUAL — run 2, replication at base seed 880533 (n=128 paired, Aug 24)
+
+Run 1's "mid/late-game strength cluster" was **noise**, and the replication says so plainly:
+across 15 tracked metrics the two independent seeds agree on sign **7 / disagree 7** —
+coin-flip. Specifically dead: `avg_cap_cities` (+0.219 → −0.047), `avg_builds`
+(+1.35 → −1.80), `hub_starved_frac` (−0.036 → +0.062), `avg_spt_t30` (+1.43 → −1.79),
+`avg_moves` (+10.4 → −19.7). Not reading anything into that cluster was the right call.
+
+**What DID replicate — and it is a small regression in exactly the thing the change targets:**
+
+| Metric | run 1 Δ | run 2 Δ | direction |
+|---|---|---|---|
+| first-village turn (`_cond`) | +0.171 | +0.044 | **slower** |
+| `villages_first_rate` | −0.008 | −0.047 | **fewer seats ever capture** |
+| `t2c_2nd_turn` | +0.256 | +0.215 | **slower 2nd city** |
+| `avg_cap_villages` | +0.000 | −0.102 | flat / **fewer** |
+
+Also replicated, in the other direction: net-seat score `p1_avg` **+392 / +364** (~+9%, the
+most consistent number in either run) and `avg_captured_tiles` **+2.76 / +2.47**.
+`anchor_net_wr` +0.023 / +0.031 — consistent in sign but **both under the 0.078 floor**, and
+pooled (n=256, floor ≈0.055) +0.027 is still under. Not a result.
+
+### DIAGNOSIS — the ranking change traded tempo for accuracy, and expansion needs tempo
+
+`top_village_sites` sorts by `p_village` **descending, with distance only as a tie-break**;
+the legacy picker sorted by `(distance, idx)` — nearest first. So a high-probability site
+six tiles away now outranks a decent one three tiles away. The scout walks farther, reaches
+villages later (replicated), and picks up more territory on the way (`avg_captured_tiles`
++2.5, `p1_avg` +9%) — a coherent mechanism that explains both halves of the result.
+
+§10 of the design doc says Stage 2 should "rank guesses by `p_village` rather than
+nearest-anchor". Taken literally, that instruction is what caused the regression: a better
+*estimate* of where villages are is not the same as a better *target*, because the target
+has to be walked to. Accuracy and reachability are different objectives and the ranking
+collapsed them into one.
+
+**Cost, replicated:** throughput −17.3% (231 → 191 moves/sec).
+
+### DISPOSITION
+Do not keep the swap as-is: a replicated small expansion regression plus a −17% generation
+cost, for a win-rate move under noise. **Revert `guess_villages` to the legacy path**,
+keeping `MapBelief` and everything validated in EXP_ELO_068/068b intact.
+
+Next hypothesis (EXP_ELO_070, not yet run): rank by **expected value per turn of travel** —
+`p_village` discounted by Chebyshev distance to the nearest anchor — rather than by
+`p_village` alone. That keeps the calibration win while restoring the tempo the legacy
+ordering had, and it is a one-line change to the comparator. Fix the throughput with
+`MapBeliefCache` in the same change.
+
+## EXP_ELO_070 — belief PRUNES, distance DECIDES
+
+**Aug 24, 2026.** Verdi's call after EXP_ELO_069: sort candidate villages by distance to our
+units, not by how sure we are they are there. `top_village_sites` now takes the
+`BELIEF_POOL = 8` most plausible sites by `p_village`, then orders **those** nearest-first
+(the legacy ordering), keeping the quadrant spread.
+
+Arms paired on maps, run at **both** gauge seeds (770425 and 880533), n=128 each,
+`model.safetensors` unchanged throughout. A = legacy, B = EXP_ELO_069's probability-ordered
+arm, C = this.
+
+### ACTUAL — the fix worked on what it targeted, and the swap still loses overall
+
+**Repaired (C beats B, and matches or beats legacy):**
+
+| Metric | A legacy | B prob-order | C dist-order |
+|---|---|---|---|
+| `t2c_2nd_turn` (lower better) | 6.554 | 6.790 | **6.530** |
+| `villages_first_rate` (higher better) | 0.840 | 0.813 | **0.844** |
+
+Ordering by distance did exactly what Verdi predicted: it recovered the 2nd-city tempo and
+the first-village rate that probability-ordering had cost.
+
+**Not repaired — and both replicated across the two seeds:**
+
+| Metric | A legacy | B prob-order | C dist-order |
+|---|---|---|---|
+| first-village turn (`_cond`, lower better) | 5.167 | 5.274 | **5.323** |
+| `avg_cap_villages` (higher better) | 1.535 | 1.484 | **1.469** |
+
+C reaches its first village *later than either* other arm and captures the fewest villages.
+
+**Residual mechanism: the pruning itself is the cost.** `BELIEF_POOL = 8` keeps the eight
+most *probable* sites, which can discard a nearer, less-probable one that legacy would have
+walked to first. Ordering by distance only helps among what survived the cut. As
+`BELIEF_POOL → ∞` the arm converges back to legacy — which means, for this consumer, the
+belief's entire contribution *is* the pruning, and the pruning is what hurts.
+
+`anchor_net_wr` pooled over n=256/arm: A 0.324, B 0.352, C 0.328 — every pairwise gap is
+under the ~0.055 floor at that n. No win-rate signal in any arm.
+
+One replicated positive worth noting: `avg_spt_t10` +0.30 / +0.38 (~+4% stars per turn at
+t10), the most consistent non-null in arm C, alongside `avg_score` −47 / −84. Economy up,
+score down, villages down — not a coherent win.
+
+### DISPOSITION — stop tuning this consumer
+
+Two experiments, two different ranking rules, both lose on villages captured. The design
+doc's §13 called this before either ran: *"a better belief is more and better options...
+if the only consumer ends up being directive selection at heuristic-leaf strength, expect
+another null"*, and aa27bb5's verdict was that macro selection starves for **evaluation**,
+not options. `expand_targets` only consults a guess when real capturable targets number
+fewer than two, and nearest-legal-unexplored is already a strong heuristic for that narrow
+case — the belief's accuracy has nowhere to convert.
+
+Recommend reverting `guess_villages` to legacy again and NOT trying a third comparator.
+`MapBelief` keeps its independently-validated value (EXP_ELO_068/068b) and remains the right
+substrate for a Stage-4 network input channel, where the network — not a hand-written
+top-N — decides what to do with the distribution.
+
+**Also measured:** a thread-local memo on `MapBelief::observe` is *counterproductive on the
+search hot path* — simulated captures move `BeliefKey` at every tree node, so it misses
+almost always and pays two key hashes per miss: **−42% throughput vs −17%** for a plain
+derivation. Dropped from the hot path. A root-computed belief held for the whole tree
+(i.e. inside `GoalCache`) is the only caching shape that can work here.
+
+**Bug found and fixed en route:** `BeliefKey` as specified in the design doc (§4) is counts
+only — explored/villages/cities. That is sufficient within one game, where the explored set
+only grows, but collides across games, silently serving a wrong belief from any cross-state
+cache. It now carries an order-independent hash of the actual sets. Caught by
+`thread_local_memo_agrees_with_a_fresh_derivation`.

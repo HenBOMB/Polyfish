@@ -9,6 +9,7 @@
 //! (village sites, terrain, capital suspects) used where MCTS needs a fast
 //! stand-in for hidden state rather than this module's tracked posterior.
 
+pub mod map;
 pub mod prediction;
 
 use crate::moves::Move;
@@ -729,8 +730,133 @@ impl CalibHarness {
             .iter()
             .fold((0u32, 0u32), |(w, u), e| if e.witnessed { (w + 1, u) } else { (w, u + 1) });
 
+        // --- MapBelief (SSOT) metrics, logged beside the BeliefState ones so
+        // the Stage-0 gate reads straight off these rows: does the derived
+        // grid beat today's guesser, and does C3 hold the EXP_ELO_034 capital
+        // baseline (0.86 @ t10, 0.98 @ t20, zero wrong collapses)?
+        let mb = map::MapBelief::observe(state, observer);
+        // Stage-1b isolation: the SAME derivation with only the three legacy
+        // fidelity bugs restored, so their delta is measured in these games.
+        let mb_bug = map::MapBelief::observe_with(state, observer, map::Fidelity::LegacyBugs);
+        let size = state.settings.size;
+        let truth_village = |i: i32| {
+            matches!(
+                state.structures.get(&i),
+                Some(Some(s)) if s.structure_type == crate::types::StructureType::Village
+            )
+        };
+        let legacy: std::collections::HashMap<i32, f32> =
+            prediction::legacy_village_sites(state, observer, 8)
+                .into_iter()
+                .map(|g| (g.tile, g.confidence))
+                .collect();
+
+        let (mut n, mut brier, mut brier_prior, mut brier_legacy) = (0f64, 0f64, 0f64, 0f64);
+        let mut brier_bug = 0f64;
+        let mut truth_hidden_villages = 0u32;
+        for i in 0..size * size {
+            if track.explored.contains(&i) {
+                continue;
+            }
+            let y = if truth_village(i) {
+                truth_hidden_villages += 1;
+                1.0
+            } else {
+                0.0
+            };
+            let p = mb.p_village(i) as f64;
+            brier += (p - y) * (p - y);
+            let pb = mb_bug.p_village(i) as f64;
+            brier_bug += (pb - y) * (pb - y);
+            brier_prior += (map::P_BASE as f64 - y) * (map::P_BASE as f64 - y);
+            let l = legacy.get(&i).copied().unwrap_or(map::P_BASE) as f64;
+            brier_legacy += (l - y) * (l - y);
+            n += 1.0;
+        }
+        let norm = |v: f64| if n > 0.0 { v / n } else { f64::NAN };
+
+        // Decision-relevant view: of the k tiles each method would actually
+        // point a settler at, how many really hold a village?
+        let k = 8usize;
+        let mut ranked: Vec<(i32, f32)> = (0..size * size)
+            .filter(|i| !track.explored.contains(i))
+            .map(|i| (i, mb.p_village(i)))
+            .collect();
+        ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+        let hits_belief = ranked
+            .iter()
+            .take(k)
+            .filter(|(i, p)| *p > 0.0 && truth_village(*i))
+            .count();
+        let hits_legacy = legacy.keys().filter(|i| truth_village(**i)).count();
+
+        let mut ranked_bug: Vec<(i32, f32)> = (0..size * size)
+            .filter(|i| !track.explored.contains(i))
+            .map(|i| (i, mb_bug.p_village(i)))
+            .collect();
+        ranked_bug.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+        let hits_bug = ranked_bug
+            .iter()
+            .take(k)
+            .filter(|(i, p)| *p > 0.0 && truth_village(*i))
+            .count();
+
+        // How often each arm points at a tile the generator could never have
+        // placed a village on (a revealed Mountain is the clearest case).
+        let impossible = |b: &map::MapBelief| {
+            (0..size * size)
+                .filter(|i| !track.explored.contains(i))
+                .filter(|&i| b.p_village(i) > map::P_BASE)
+                .filter(|&i| {
+                    state.tiles.get(&i).map_or(false, |t| {
+                        t.terrain_type == crate::types::TerrainType::Mountain
+                    })
+                })
+                .count()
+        };
+
+        // Affinity against the immutable generator ground truth.
+        let opp_climate = state
+            .tribes
+            .get(&opp)
+            .map(|t| crate::types::classic_climate_id(t.tribe_type))
+            .unwrap_or(0);
+        let (mut aff_n, mut aff_hit) = (0u32, 0u32);
+        for i in 0..size * size {
+            if track.explored.contains(&i) {
+                continue;
+            }
+            let Some(tile) = state.tiles.get(&i) else { continue };
+            if tile.climate == 0 {
+                continue;
+            }
+            aff_n += 1;
+            if (mb.p_opponent_affinity(i) > 0.5) == (tile.climate == opp_climate) {
+                aff_hit += 1;
+            }
+        }
+
+        let mb_top = mb.capital_top(3);
+
         self.rows.push(serde_json::json!({
             "turn": turn,
+            "mb_village_brier": norm(brier),
+            "mb_village_brier_prior": norm(brier_prior),
+            "mb_village_brier_legacy": norm(brier_legacy),
+            "mb_village_hits_at_8": hits_belief,
+            "mb_bug_village_brier": norm(brier_bug),
+            "mb_bug_village_hits_at_8": hits_bug,
+            "mb_impossible_mountain": impossible(&mb),
+            "mb_bug_impossible_mountain": impossible(&mb_bug),
+            "mb_village_hits_legacy": hits_legacy,
+            "mb_truth_hidden_villages": truth_hidden_villages,
+            "mb_cap_top1_hit": mb_top.first().map(|(c, _)| *c == truth_capital).unwrap_or(false),
+            "mb_cap_truth_p": mb.p_capital(truth_capital),
+            "mb_cap_conf": mb.capital_confidence(),
+            "mb_cap_live": mb.capital_live(),
+            "mb_cap_confirmed": mb.capital_map().filter(|_| mb.capital_confidence() >= 1.0),
+            "mb_affinity_acc": if aff_n > 0 { aff_hit as f64 / aff_n as f64 } else { f64::NAN },
+            "mb_affinity_n": aff_n,
             "observer": observer,
             "cap_top": top.iter().map(|(c, p)| serde_json::json!([c, p])).collect::<Vec<_>>(),
             "cap_top1_hit": top.first().map(|(c, _)| *c == truth_capital).unwrap_or(false),

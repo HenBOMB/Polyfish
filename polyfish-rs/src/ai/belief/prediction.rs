@@ -87,7 +87,29 @@ pub fn explored_tile_count(state: &GameState, player: PlayerId) -> usize {
 }
 
 /// Returns up to `max_sites`, mutually ≥3 apart.
+/// Sites likely to hold an undiscovered village.
+///
+/// EXP_ELO_070: the belief PRUNES and distance DECIDES. EXP_ELO_069's first
+/// attempt ordered by probability and lost expansion tempo — the scout was sent
+/// to likelier-but-farther sites. Now the belief supplies the candidate pool and
+/// the nearest of those wins, which is how the legacy picker ordered.
 pub fn guess_villages(state: &GameState, player: PlayerId, max_sites: usize) -> Vec<VillageGuess> {
+    // NOT `observe_cached`: the memo thrashes inside search, where hypothetical
+    // captures move the key on every node, so it measured -42% throughput
+    // against -17% for a plain derivation. A root-computed belief held for the
+    // whole tree is the design's answer; `GoalCache` is where that belongs.
+    crate::ai::belief::map::MapBelief::observe(state, player).top_village_sites(state, max_sites)
+}
+
+/// The village guesser exactly as it shipped before `ai::belief::map` existed,
+/// bugs and all. `MapBelief::top_village_sites_legacy` is the only caller;
+/// `guess_villages_parity_holds_on_a_state_corpus` pins it byte-for-byte
+/// against this so the SSOT migration cannot drift production behaviour.
+pub(crate) fn legacy_village_sites(
+    state: &GameState,
+    player: PlayerId,
+    max_sites: usize,
+) -> Vec<VillageGuess> {
     let size = state.settings.size as i32;
     let Some(tribe) = state.tribes.get(&player) else {
         return Vec::new();
@@ -470,6 +492,11 @@ mod tests {
     /// changing WHICH tile got picked (that's still generator geometry only).
     #[test]
     fn resource_evidence_raises_confidence_without_changing_the_pick() {
+        // Pins the legacy contract: confidence is the `0.3 + score/20` floor
+        // and evidence deliberately never moves the pick. Bound explicitly so
+        // this keeps testing the legacy path if the entry point is ever
+        // re-pointed at the belief (see the belief counterpart below).
+        let guess_villages = legacy_village_sites;
         let mut state = GameState::default();
         let size = 11;
         state.settings.size = size;
@@ -513,6 +540,65 @@ mod tests {
             "resource evidence must raise confidence: {} vs baseline {}",
             with_evidence[0].confidence,
             baseline[0].confidence
+        );
+    }
+
+    /// The belief counterpart, tested directly against `MapBelief` since the
+    /// entry point routes to legacy. The durable invariant holds — a resource
+    /// must raise confidence in a village nearby — while the legacy contract
+    /// above deliberately does not let evidence move the pick.
+    #[test]
+    fn resource_evidence_raises_belief_confidence() {
+        let size = 11;
+        let mut state = GameState::default();
+        state.settings.size = size;
+        for i in 0..(size * size) {
+            let mut tile = TileState::default();
+            tile.coords = crate::coords::Coords::from_index(i, size);
+            tile.terrain_type = TerrainType::Field;
+            state.tiles.insert(i, tile);
+        }
+        let pov_id = 1;
+        state.settings.current_player_turn_id = pov_id;
+        let mut t1 = TribeState::default();
+        t1.id = pov_id;
+        t1.tribe_type = TribeType::Imperius;
+        t1.cities.push(crate::states::CityState { idx: 60, ..Default::default() });
+        state.tribes.insert(pov_id, t1);
+        state.tiles.get_mut(&60).unwrap().explorers.insert(pov_id);
+
+        let belief_sites = |st: &GameState| {
+            crate::ai::belief::map::MapBelief::observe(st, pov_id).top_village_sites(st, 1)
+        };
+        let baseline = belief_sites(&state);
+        assert_eq!(baseline.len(), 1);
+
+        // An explored ORPHAN resource: >2 from the capital, so the generator's
+        // spawn-zone rule leaves it unexplained by any known site.
+        let res_idx = 2 * size + 2;
+        assert!(
+            crate::functions::get_chebyshev_distance(res_idx, 60, size) > 2,
+            "fixture error: the resource must be outside the capital's spawn zone"
+        );
+        state.tiles.get_mut(&res_idx).unwrap().explorers.insert(pov_id);
+        state.resources.insert(
+            res_idx,
+            Some(crate::states::ResourceState { resource_type: crate::types::ResourceType::Game }),
+        );
+
+        let with_evidence = belief_sites(&state);
+        assert_eq!(with_evidence.len(), 1);
+        assert!(
+            with_evidence[0].confidence > baseline[0].confidence,
+            "resource evidence must raise belief confidence: {} vs {}",
+            with_evidence[0].confidence,
+            baseline[0].confidence
+        );
+        // And it must point INTO the resource's spawn zone.
+        assert!(
+            crate::functions::get_chebyshev_distance(with_evidence[0].tile, res_idx, size) <= 2,
+            "pick {} is outside the orphan resource's spawn zone",
+            with_evidence[0].tile
         );
     }
 
