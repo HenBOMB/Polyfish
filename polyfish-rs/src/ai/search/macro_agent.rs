@@ -9,9 +9,10 @@ use crate::ai::eval_server::Evaluator;
 use crate::ai::macro_exec::{self, TurnCounters};
 use crate::ai::oracle_macro::{
     LaneState, MacroGoal, OrderKind, Stance, StanceCommit, tech_discipline_active,
-    expand_target_valid, pick_save_lane, compute_macro_goal, compute_goal_aux,
+    pick_save_lane, compute_macro_goal, compute_goal_aux,
     observe_lane_state, commit_macro_goal,
 };
+use crate::ai::search::unit_goals::goal_outcome;
 use crate::game::Game;
 use crate::moves::{EndTurnMove, Move};
 use crate::states::{GameState, PlayerId};
@@ -330,11 +331,25 @@ pub fn enumerate_candidates_with_belief(
             }
         }
     }
-    // Real capturable/retakeable targets only — drops generator-guessed sites.
+    // Drops only CONFIRMED-bad Expand targets (explored and no longer
+    // capturable/retakeable) -- never a merely-unexplored guess. Used to
+    // require `expand_target_valid` (visibility) to PASS, which strips
+    // every fog guess uniformly since none of them can pass a visibility
+    // check yet; that made this candidate indistinguishable from "guessing
+    // is bad" rather than "this specific guess is bad", and the tree
+    // couldn't reliably choose between it and Base at 2-3 own-turns of
+    // leaf depth (EXP_ELO_034b-038's own verdict: directive selection
+    // starves for evaluation, not options). `goal_outcome` returning
+    // `Some(false)` requires the tile to have actually been explored and
+    // disconfirmed -- same predicate `reconcile_unit_goals` uses to retire
+    // a per-unit goal, so a target only leaves here once the per-unit
+    // layer would drop it too (Verdi's Aug 2026 call: a live guess should
+    // never be the reason a unit — or the tribe's own directive — goes
+    // idle).
     let real: Vec<(OrderKind, i32)> = base
         .orders
         .iter()
-        .filter(|(kind, idx)| *kind != OrderKind::Expand || expand_target_valid(state, *idx, pov))
+        .filter(|(kind, idx)| *kind != OrderKind::Expand || goal_outcome(state, *idx, pov) != Some(false))
         .cloned()
         .collect();
     if real != base.orders {
@@ -609,6 +624,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn real_filter_never_strips_a_merely_unexplored_guess() {
+        // Target 60 is tracked (server-side full state) but not in this
+        // player's `explorers` -- unexplored under FOW, standing in for a
+        // fog-guessed village site. RealFilter must not be offered:
+        // stripping a guess nobody's disconfirmed yet is exactly the
+        // "search gambles on a coin flip" case this predicate now refuses
+        // to construct (Verdi's Aug 2026 call).
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        state.tiles.insert(60, crate::states::TileState::default());
+        let base = MacroGoal { orders: vec![(OrderKind::Expand, 60)], ..Default::default() };
+        let cands = enumerate_candidates_with_belief(&state, 1, base, TurnCounters::default(), 8, None);
+        assert!(
+            !cands.iter().any(|(_, c)| *c == CandidateClass::RealFilter),
+            "RealFilter offered for a merely-unexplored target"
+        );
+        // Same target, now explored and confirmed empty (no structure) --
+        // a genuinely bad guess. RealFilter should still fire here.
+        let mut tile = crate::states::TileState::default();
+        tile.explorers.insert(1);
+        state.tiles.insert(60, tile);
+        let base = MacroGoal { orders: vec![(OrderKind::Expand, 60)], ..Default::default() };
+        let cands = enumerate_candidates_with_belief(&state, 1, base, TurnCounters::default(), 8, None);
+        assert!(
+            cands.iter().any(|(g, c)| *c == CandidateClass::RealFilter && !g.orders.contains(&(OrderKind::Expand, 60))),
+            "RealFilter didn't drop a confirmed-empty target"
+        );
     }
 
     #[test]

@@ -124,12 +124,57 @@ pub(crate) fn goal_outcome(state: &GameState, target: i32, player: PlayerId) -> 
     None
 }
 
+/// Matches every still-idle unit against `candidates`, filtered down to
+/// live, unclaimed Expand targets (`goal_outcome` == still pursuing, not
+/// already held by another unit's active goal). Shared by both assignment
+/// passes below so "unclaimed → idle → greedy match" has one definition.
+fn assign_from_candidates(
+    state: &GameState,
+    player: PlayerId,
+    tribe: &crate::states::TribeState,
+    store: &mut UnitGoalStore,
+    status: &mut FxHashMap<u32, GoalStatus>,
+    candidates: &[i32],
+) {
+    let live: Vec<i32> =
+        candidates.iter().copied().filter(|t| goal_outcome(state, *t, player).is_none()).collect();
+    if live.is_empty() {
+        return;
+    }
+    let claimed = store.active_targets();
+    let unclaimed: Vec<i32> = live.into_iter().filter(|t| !claimed.contains(t)).collect();
+    if unclaimed.is_empty() {
+        return;
+    }
+    let idle_units: Vec<&crate::states::UnitState> =
+        tribe.units.iter().filter(|u| store.active(u.id).is_none()).collect();
+    if idle_units.is_empty() {
+        return;
+    }
+    for (id, target) in assign_expand_targets_by_id(state, player, &idle_units, &unclaimed) {
+        store.assign(id, UnitGoal { kind: OrderKind::Expand, target });
+        status.insert(id, GoalStatus::Assigned);
+    }
+}
+
 /// Runs once per real ply (never inside a rollout — see the design doc's
-/// Fork 2). Three passes over `tribe.units` in deterministic Vec order:
-/// prune dead/converted-away units, advance completed/invalidated goals,
-/// assign idle units to unclaimed Expand targets from this turn's
-/// `MacroGoal`. Pure bookkeeping — callers read `store.active(id)` for
-/// pricing; this function doesn't touch reward itself.
+/// Fork 2). Prunes dead/converted-away units, advances completed/invalidated
+/// goals, then assigns idle units in two passes: first against this turn's
+/// committed `MacroGoal.orders`, then — if anyone is still idle — directly
+/// against the scripted layer's own `expand_targets` (Verdi's Aug 2026 call:
+/// a unit can never be goal-less while anything is paintable, full stop, not
+/// contingent on which candidate the tree's noisy leaf eval happened to
+/// commit to; see EXP_ELO_034b-038's own verdict that directive selection
+/// "starves for evaluation, not options" at this search depth). The second
+/// pass is what makes that a guarantee instead of a bet: `RealFilter` can
+/// strip a fog-guessed target out of `goal.orders` on one turn and not the
+/// next, and a unit shouldn't sit idle in between just because the search's
+/// pick flipped. Pure bookkeeping — callers read `store.active(id)` for
+/// pricing; this function doesn't touch reward itself. Honest scope: this
+/// still can't paint anything once expansion is over and no Expand target
+/// exists at all (`expand_targets` returns empty past `COMMIT_CITY_TARGET`
+/// with no real structures left) — full "never idle" needs the Scout/Defend
+/// per-unit goal kinds the design doc names as future work.
 ///
 /// Returns each live unit's `GoalStatus` this ply, for observability
 /// (`POLYFISH_PLY_TRACE`) -- a unit completed/invalidated and immediately
@@ -174,38 +219,13 @@ pub fn reconcile_unit_goals(
         }
     }
 
-    // `goal.orders` legitimately keeps an ACHIEVED target listed all turn
-    // (it needs to keep paying the flat completion bonus, target-keyed, in
-    // `goal_potential`) -- but that doesn't mean it should be offered for
-    // FRESH per-unit assignment. Without this filter, the unit that just
-    // captured it gets immediately reassigned right back to the tile it's
-    // already standing on (distance 0 always wins the greedy match),
-    // stranding it there for the rest of the turn instead of freeing it up
-    // for a genuinely new target. Same predicate `goal_outcome` uses to
-    // decide whether an ALREADY-assigned goal should advance.
-    let expand_targets: Vec<i32> = goal
-        .orders
-        .iter()
-        .filter(|(k, _)| *k == OrderKind::Expand)
-        .map(|(_, t)| *t)
-        .filter(|t| goal_outcome(state, *t, player).is_none())
-        .collect();
-    if expand_targets.is_empty() {
-        return status;
-    }
-    let claimed = store.active_targets();
-    let unclaimed: Vec<i32> = expand_targets.into_iter().filter(|t| !claimed.contains(t)).collect();
-    if unclaimed.is_empty() {
-        return status;
-    }
-    let idle_units: Vec<&crate::states::UnitState> = tribe.units.iter().filter(|u| store.active(u.id).is_none()).collect();
-    if idle_units.is_empty() {
-        return status;
-    }
+    let from_orders: Vec<i32> =
+        goal.orders.iter().filter(|(k, _)| *k == OrderKind::Expand).map(|(_, t)| *t).collect();
+    assign_from_candidates(state, player, tribe, store, &mut status, &from_orders);
 
-    for (id, target) in assign_expand_targets_by_id(state, player, &idle_units, &unclaimed) {
-        store.assign(id, UnitGoal { kind: OrderKind::Expand, target });
-        status.insert(id, GoalStatus::Assigned);
+    if tribe.units.iter().any(|u| store.active(u.id).is_none()) {
+        let scripted = crate::ai::oracle_macro::expand_targets(state, player, None);
+        assign_from_candidates(state, player, tribe, store, &mut status, &scripted);
     }
     status
 }
@@ -339,6 +359,29 @@ mod tests {
         store.assign(99, UnitGoal { kind: OrderKind::Expand, target: 5 });
         reconcile_unit_goals(&state, 1, &empty_goal(), &mut store);
         assert_eq!(store.active(99), None);
+    }
+
+    #[test]
+    fn reconcile_never_leaves_a_unit_goalless_while_a_real_target_exists_outside_orders() {
+        // Two units, two real (visible, capturable) villages -- but the
+        // committed MacroGoal only names one of them, standing in for
+        // RealFilter dropping the other or any other thin/stale directive.
+        // The invariant: no unit sits Idle while the scripted layer's own
+        // expand_targets() still has something paintable, independent of
+        // what the search happened to commit to.
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        add_visible_village(&mut state, 5);
+        add_visible_village(&mut state, 80);
+        let mut tribe = TribeState::default();
+        tribe.units.push(UnitState { id: 1, ..unit_at(0) });
+        tribe.units.push(UnitState { id: 2, ..unit_at(10) });
+        state.tribes.insert(1, tribe);
+
+        let mut store = UnitGoalStore::default();
+        let status = reconcile_unit_goals(&state, 1, &expand_goal(5), &mut store);
+        assert_ne!(status.get(&1), Some(&GoalStatus::Idle));
+        assert_ne!(status.get(&2), Some(&GoalStatus::Idle));
     }
 
     #[test]
