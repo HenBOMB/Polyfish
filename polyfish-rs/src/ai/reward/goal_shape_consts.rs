@@ -173,6 +173,15 @@ pub const SHAPE_GOAL_COMPLETION: f32 = 75.0;
 /// enemy already took, since retaking it is riskier than a free one.
 pub const SHAPE_GOAL_RETAKE_W: f32 = 0.75;
 
+/// Cuts the pull toward a Ruin while you haven't found your first village
+/// yet (Verdi's call, Aug 2026, first fit -- dial against measured play): a
+/// Ruin is a one-time reward, a Village is a permanent second city, so a
+/// close Ruin shouldn't outbid the search for your first village just
+/// because it's closer. Back to full strength once you have one. Only
+/// discounts the approach pull, same as the retake weight above -- the
+/// completion bonus for actually capturing either one is unaffected.
+pub const SHAPE_GOAL_RUIN_W: f32 = 0.35;
+
 /// Gives a second unit converging on a contested expansion target (one an
 /// enemy is standing on) half the normal reward, so it gets help but not a mob.
 pub const SHAPE_GOAL_CONTEST_SECOND: f32 = 0.5;

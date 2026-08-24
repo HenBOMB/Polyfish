@@ -312,6 +312,7 @@ fn goal_potential_inner(
                     weight = SHAPE_GOAL_RETAKE_W;
                 }
             }
+            weight *= ruin_pull_discount(state, tribe, *idx);
             approach_targets.push(*idx);
             target_weight.insert(*idx, weight);
         }
@@ -405,11 +406,11 @@ fn goal_potential_inner(
                         // would leak FOW, same reasoning as the goal.orders
                         // pre-loop above.
                         state.tiles.get(&t).map_or(1.0, |tile| {
-                            if tile.explorers.contains(&player) && tile.owner != 0 && tile.owner != player {
+                            (if tile.explorers.contains(&player) && tile.owner != 0 && tile.owner != player {
                                 SHAPE_GOAL_RETAKE_W
                             } else {
                                 1.0
-                            }
+                            }) * ruin_pull_discount(state, tribe, t)
                         })
                     })
                 };

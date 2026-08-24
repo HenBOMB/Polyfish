@@ -1108,3 +1108,51 @@ use crate::types::UnitType;
              got breakdown {bd:?}"
         );
     }
+
+    /// Verdi's call (Aug 2026): a Ruin is a one-time reward, a Village a
+    /// permanent second city, so a close Ruin shouldn't outbid the search
+    /// for a first village just because it's nearer. The discount must be
+    /// live before any village is found and lift exactly once one is.
+    #[test]
+    fn ruin_pull_is_discounted_before_the_first_village_and_at_parity_after() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        use crate::states::{CityState, StructureState};
+        use crate::types::StructureType;
+
+        const RUIN_IDX: i32 = 60;
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        let mut tile = TileState::default();
+        tile.explorers.insert(1);
+        state.tiles.insert(RUIN_IDX, tile);
+        state.structures.insert(
+            RUIN_IDX,
+            Some(StructureState { structure_type: StructureType::Ruin, level: 0, founded: 0 }),
+        );
+        let mut t1 = TribeState::default();
+        t1.units.push(UnitState { id: 1, owner: 1, ..unit_at(50, UnitType::Warrior) });
+        t1.cities.push(CityState { idx: 999, owner: 1, ..Default::default() }); // capital only
+        state.tribes.insert(1, t1);
+
+        let goal =
+            MacroGoal { orders: vec![(OrderKind::Expand, RUIN_IDX)], stance: Stance::Grow, save_target: None };
+        let approach = |s: &GameState| -> f32 {
+            let (_, bd) = goal_potential_breakdown(s, 1, &goal, None, None, None);
+            bd.iter().filter(|(l, _)| *l == "expand_approach").map(|(_, v)| v).sum()
+        };
+
+        let no_village = approach(&state);
+        // A second city -- a village found -- lifts the discount.
+        state.tribes.get_mut(&1).unwrap().cities.push(CityState { idx: 998, owner: 1, ..Default::default() });
+        let with_village = approach(&state);
+
+        assert!(
+            no_village > 0.0 && with_village > 0.0,
+            "sanity: the Ruin must actually be pulling in both states"
+        );
+        assert!(
+            (no_village - SHAPE_GOAL_RUIN_W * with_village).abs() < 1e-3,
+            "before the first village, Ruin pull must be exactly SHAPE_GOAL_RUIN_W of its \
+             full-parity value: no_village={no_village} with_village={with_village}"
+        );
+    }
