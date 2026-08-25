@@ -189,3 +189,11 @@ pub const SHAPE_GOAL_BODY: f32 = 75.0;
 /// The largest the early-game unit-count cap above can grow to as your city
 /// count rises.
 pub const BODY_CAP_MAX: usize = 3;
+
+/// Verdi (Aug 2026): a per-held-unit penalty while a tech goal is known,
+/// nothing needs defending, and Expand coverage is already saturated (every
+/// live target has a unit converging on it) — a new unit under those three
+/// conditions is a star not going toward the plan, not genuine need. Sized
+/// above SHAPE_GOAL_RIDER/SHAPE_GOAL_BODY so it wins the tradeoff outright
+/// rather than merely offsetting them.
+pub const SHAPE_GOAL_UNIT_OPPORTUNITY_COST: f32 = 120.0;

@@ -500,6 +500,42 @@ fn goal_potential_inner(
             }
         }
     }
+    // Verdi (Aug 2026): opportunity cost of an extra unit. Real-trajectory
+    // only (needs an accurate assigned-vs-live-target count from the store,
+    // same reasoning as SHAPE_CITY_TRAIN_BLOCKED above). Fires only when
+    // nothing needs defending (no Defend order — the frontline-safety
+    // carve-out: a real threat zeroes this out entirely, not just discounts
+    // it), a lane/save tech goal is known, and every live Expand target
+    // already has a unit converging on it. Scales with total unit count, so
+    // it prices ONLY the Train/Summon delta (every other move type leaves
+    // unit count unchanged) and compounds if several are trained the same
+    // turn.
+    if let (Some(store), Some(a)) = (unit_goals, aux) {
+        let has_tech_goal = a.lane_next_tech.is_some() || a.save_next_tech.is_some();
+        let no_threat = !goal.orders.iter().any(|(k, _)| *k == OrderKind::Defend);
+        if has_tech_goal && no_threat {
+            let live_targets = goal
+                .orders
+                .iter()
+                .filter(|(k, _)| *k == OrderKind::Expand)
+                .filter(|(_, idx)| {
+                    !state.tiles.get(idx).map_or(false, |t| t.owner == player)
+                        || crate::functions::get_city_at(state, *idx).is_none()
+                })
+                .count();
+            let assigned = tribe
+                .units
+                .iter()
+                .filter(|u| store.active(u.id).map_or(false, |g| g.kind == OrderKind::Expand))
+                .count();
+            if assigned >= live_targets {
+                acc.sub(
+                    "unit_train_opportunity_cost",
+                    SHAPE_GOAL_UNIT_OPPORTUNITY_COST * tribe.units.len() as f32,
+                );
+            }
+        }
+    }
     // EXP_ELO_040: Defend orders — coverage leash, not garrison pinning.
     // Pay per assigned covering unit (full in 1-turn strike reach, half in
     // the 2-turn ring) scaled by live urgency; pay tile-holding only while

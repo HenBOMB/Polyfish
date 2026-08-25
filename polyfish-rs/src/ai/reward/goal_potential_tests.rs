@@ -1135,6 +1135,104 @@ use crate::types::UnitType;
              vacated {phi_vacated}"
         );
     }
+    /// One idle unit (`A_ID`), an owned city, and `expand_targets` painted
+    /// as Village sites -- `assign_first_target` optionally locks the first
+    /// one to A. `goal_potential_breakdown` (label presence, not a whole-Φ
+    /// diff) is what actually isolates `unit_train_opportunity_cost`, so
+    /// this fixture just needs to be a legal board, not a term-free one.
+    fn opportunity_cost_board(
+        expand_targets: &[i32],
+        assign_first_target: bool,
+    ) -> (GameState, crate::ai::oracle_macro::MacroGoal, crate::ai::search::unit_goals::UnitGoalStore) {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        use crate::ai::search::unit_goals::{UnitGoal, UnitGoalStore};
+        let mut state = defense_board(60);
+        for &t in expand_targets {
+            add_visible_village(&mut state, t);
+        }
+        const A_ID: u32 = 1;
+        let mut unit_a = unit_at(90, UnitType::Warrior); // far from any target, off the city
+        unit_a.id = A_ID;
+        unit_a.owner = 1;
+        state.tribes.get_mut(&1).unwrap().units.push(unit_a);
+        let mut store = UnitGoalStore::default();
+        if assign_first_target {
+            if let Some(&first) = expand_targets.first() {
+                store.assign(A_ID, UnitGoal { kind: OrderKind::Expand, target: first });
+            }
+        }
+        let orders = expand_targets.iter().map(|&t| (OrderKind::Expand, t)).collect();
+        let goal = MacroGoal { orders, stance: Stance::Unlock, save_target: None };
+        (state, goal, store)
+    }
+    fn with_tech_goal() -> crate::ai::oracle_macro::GoalAux {
+        crate::ai::oracle_macro::GoalAux {
+            lane_next_tech: Some(crate::types::TechnologyType::Smithery),
+            ..Default::default()
+        }
+    }
+    fn opportunity_cost_term(
+        state: &GameState,
+        goal: &crate::ai::oracle_macro::MacroGoal,
+        aux: Option<&crate::ai::oracle_macro::GoalAux>,
+        unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
+    ) -> Option<f32> {
+        let (_, bd) = goal_potential_breakdown(state, 1, goal, aux, None, unit_goals);
+        bd.into_iter().find(|(label, _)| *label == "unit_train_opportunity_cost").map(|(_, v)| v)
+    }
+    /// The core case: no threat, one live Expand target already covered by
+    /// its unit, a tech goal known -- one held unit costs exactly
+    /// `SHAPE_GOAL_UNIT_OPPORTUNITY_COST`.
+    #[test]
+    fn unit_opportunity_cost_fires_when_covered_unthreatened_and_a_tech_goal_is_known() {
+        let (state, goal, store) = opportunity_cost_board(&[48], true);
+        let aux = with_tech_goal();
+        let term = opportunity_cost_term(&state, &goal, Some(&aux), Some(&store));
+        assert!(
+            term.is_some_and(|v| (v + SHAPE_GOAL_UNIT_OPPORTUNITY_COST).abs() < 1e-3),
+            "expected -{SHAPE_GOAL_UNIT_OPPORTUNITY_COST} for the one held unit, got {term:?}"
+        );
+    }
+    /// A live Defend order -- even an inert one, no real threat data behind
+    /// it -- is the frontline-safety carve-out: it must zero the term out
+    /// entirely, not merely discount it.
+    #[test]
+    fn unit_opportunity_cost_is_off_when_a_defend_order_is_live() {
+        use crate::ai::oracle_macro::OrderKind;
+        let (state, mut goal, store) = opportunity_cost_board(&[48], true);
+        goal.orders.push((OrderKind::Defend, 60));
+        let aux = with_tech_goal();
+        let term = opportunity_cost_term(&state, &goal, Some(&aux), Some(&store));
+        assert!(term.is_none(), "a live Defend order must suppress the term entirely: {term:?}");
+    }
+    /// Two live Expand targets, only one covered -- expansion is NOT yet
+    /// saturated, so holding a unit is genuinely useful and must be free.
+    #[test]
+    fn unit_opportunity_cost_is_off_when_expand_coverage_is_short() {
+        let (state, goal, store) = opportunity_cost_board(&[48, 100], true);
+        let aux = with_tech_goal();
+        let term = opportunity_cost_term(&state, &goal, Some(&aux), Some(&store));
+        assert!(term.is_none(), "an uncovered Expand target means coverage is short: {term:?}");
+    }
+    /// No `lane_next_tech`/`save_next_tech` known -- nothing to bank stars
+    /// toward, so the opportunity-cost premise does not apply.
+    #[test]
+    fn unit_opportunity_cost_is_off_without_a_known_tech_goal() {
+        use crate::ai::oracle_macro::GoalAux;
+        let (state, goal, store) = opportunity_cost_board(&[48], true);
+        let aux = GoalAux::default();
+        let term = opportunity_cost_term(&state, &goal, Some(&aux), Some(&store));
+        assert!(term.is_none(), "no known tech goal: {term:?}");
+    }
+    /// Legacy/rollout path (`unit_goals: None`) must be completely
+    /// untouched, same scope as `SHAPE_CITY_TRAIN_BLOCKED`.
+    #[test]
+    fn unit_opportunity_cost_is_invisible_without_a_unit_goal_store() {
+        let (state, goal, _store) = opportunity_cost_board(&[48], true);
+        let aux = with_tech_goal();
+        let term = opportunity_cost_term(&state, &goal, Some(&aux), None);
+        assert!(term.is_none(), "without a unit-goal store the term must not fire: {term:?}");
+    }
 
     /// Aug 2026 regression: a Ruin's "free unit" reward summons the new unit
     /// ONTO the tile, and if the capturing unit is already standing there,
