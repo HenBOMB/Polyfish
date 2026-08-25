@@ -267,8 +267,25 @@ pub fn rank_plies(
     } else {
         None
     };
+    // MapBelief is a pure function of the explored set (see its module doc)
+    // — safe to compute once here and reuse across every candidate's
+    // phi_post below, same reasoning as `threats` above and the same
+    // EXP_ELO_061-class cost this avoids paying per-candidate.
+    let belief = if lambda != 0.0 {
+        Some(crate::ai::belief::map::MapBelief::observe(&game.state, player))
+    } else {
+        None
+    };
     let phi_pre = if lambda != 0.0 {
-        reward::goal_potential_with_unit_goals(&game.state, player, goal, Some(aux), threats.as_deref(), unit_goals)
+        reward::goal_potential_with_belief(
+            &game.state,
+            player,
+            goal,
+            Some(aux),
+            threats.as_deref(),
+            unit_goals,
+            belief.as_ref(),
+        )
     } else {
         0.0
     };
@@ -286,13 +303,14 @@ pub fn rank_plies(
             let mut s = scoring::score_move_with_unit_goals(game, m.as_ref(), unit_goals);
             if lambda != 0.0 && m.move_type() != MoveType::EndTurn {
                 if let Some(undo) = game.simulate_move(m.as_ref()) {
-                    let phi_post = reward::goal_potential_with_unit_goals(
+                    let phi_post = reward::goal_potential_with_belief(
                         &game.state,
                         player,
                         goal,
                         Some(aux),
                         threats.as_deref(),
                         unit_goals,
+                        belief.as_ref(),
                     );
                     if let Some(path) = probe_path {
                         let phi_post_no_aux = reward::goal_potential_with_threats(

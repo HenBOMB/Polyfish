@@ -236,7 +236,11 @@ pub fn completion_stranded(state: &GameState, player: i32) -> i32 {
 /// unit, always less than the `SHAPE_GOAL_SPT` jump a level-up banks, so
 /// levelling up (which resets progress to overflow) is never self-defeating.
 /// Paying a flat amount per pop point would recreate exactly that trap.
-pub fn completion_progress(state: &GameState, player: i32) -> f32 {
+pub fn completion_progress(
+    state: &GameState,
+    player: i32,
+    belief: Option<&crate::ai::belief::map::MapBelief>,
+) -> f32 {
     let Some(tribe) = state.tribes.get(&player) else {
         return 0.0;
     };
@@ -244,8 +248,37 @@ pub fn completion_progress(state: &GameState, player: i32) -> f32 {
         .cities
         .iter()
         .filter(|c| c.progress > 0 && city_completable(state, player, c))
-        .map(|c| c.progress as f32 / (c.level + 1).max(1) as f32)
+        .map(|c| {
+            let base = c.progress as f32 / (c.level + 1).max(1) as f32;
+            base * city_completion_weight(state, belief, c)
+        })
         .sum()
+}
+
+/// How much finishing THIS city's next level is worth, beyond raw progress:
+/// a frontier-facing city's reward pick is worth more than a backline
+/// city's, and that gap matters most while the reward menu is still ahead
+/// of it (low level), not already spent. 1.0 (neutral, legacy) without a
+/// belief to weigh against.
+fn city_completion_weight(
+    state: &GameState,
+    belief: Option<&crate::ai::belief::map::MapBelief>,
+    city: &crate::states::CityState,
+) -> f32 {
+    let Some(belief) = belief else {
+        return 1.0;
+    };
+    let avg = super::goal_shape_consts::avg_frontier_in_reach(
+        state,
+        belief,
+        city.idx,
+        super::goal_shape_consts::COMPLETION_FRONTIER_RANGE,
+    );
+    let frontier_factor = 1.0
+        + super::goal_shape_consts::COMPLETION_FRONTIER_W
+            * (avg - super::goal_shape_consts::FRONTIER_W_FOG).max(0.0);
+    let level_factor = super::goal_shape_consts::COMPLETION_LEVEL_DECAY.powi(city.level.max(0));
+    frontier_factor * level_factor
 }
 
 /// v6: a city is threatened when a visible enemy unit stands within

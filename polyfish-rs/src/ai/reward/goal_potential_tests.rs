@@ -1177,7 +1177,7 @@ use crate::types::UnitType;
         aux: Option<&crate::ai::oracle_macro::GoalAux>,
         unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
     ) -> Option<f32> {
-        let (_, bd) = goal_potential_breakdown(state, 1, goal, aux, None, unit_goals);
+        let (_, bd) = goal_potential_breakdown(state, 1, goal, aux, None, unit_goals, None);
         bd.into_iter().find(|(label, _)| *label == "unit_train_opportunity_cost").map(|(_, v)| v)
     }
     /// The core case: no threat, one live Expand target already covered by
@@ -1266,7 +1266,7 @@ use crate::types::UnitType;
         store.assign(CAPTURER_ID, UnitGoal { kind: OrderKind::Expand, target: RUIN_IDX });
 
         let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
-        let (_, bd) = goal_potential_breakdown(&state, 1, &goal, None, None, Some(&store));
+        let (_, bd) = goal_potential_breakdown(&state, 1, &goal, None, None, Some(&store), None);
         let complete: f32 =
             bd.iter().filter(|(l, _)| *l == "unit_goal_complete").map(|(_, v)| v).sum();
         assert!(
@@ -1304,7 +1304,7 @@ use crate::types::UnitType;
         let goal =
             MacroGoal { orders: vec![(OrderKind::Expand, RUIN_IDX)], stance: Stance::Grow, save_target: None };
         let approach = |s: &GameState| -> f32 {
-            let (_, bd) = goal_potential_breakdown(s, 1, &goal, None, None, None);
+            let (_, bd) = goal_potential_breakdown(s, 1, &goal, None, None, None, None);
             bd.iter().filter(|(l, _)| *l == "expand_approach").map(|(_, v)| v).sum()
         };
 
@@ -1321,5 +1321,228 @@ use crate::types::UnitType;
             (no_village - SHAPE_GOAL_RUIN_W * with_village).abs() < 1e-3,
             "before the first village, Ruin pull must be exactly SHAPE_GOAL_RUIN_W of its \
              full-parity value: no_village={no_village} with_village={with_village}"
+        );
+    }
+
+    // ---- Frontier weighting (Verdi, Aug 2026): enemy > village > fog -----
+
+    /// Two-tribe board, three EXPLORED tiles with fully deterministic
+    /// `MapBelief` reads (no posterior/Voronoi guessing involved): an empty
+    /// tile (`p_village=0`), a sighted village (`p_village=1`), and a tile
+    /// whose climate matches the opponent's (`p_opponent_affinity=1`).
+    /// Locks in the user's stated ordering directly against the formula.
+    #[test]
+    fn frontier_weight_orders_enemy_above_village_above_fog() {
+        use crate::ai::belief::map::MapBelief;
+        use crate::types::{classic_climate_id, StructureType, TribeType};
+
+        const EMPTY_IDX: i32 = 10;
+        const VILLAGE_IDX: i32 = 20;
+        const ENEMY_IDX: i32 = 30;
+
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        for &idx in &[EMPTY_IDX, VILLAGE_IDX, ENEMY_IDX] {
+            let mut tile = TileState::default();
+            tile.terrain_type = crate::types::TerrainType::Field;
+            tile.explorers.insert(1);
+            // `climate_of` treats the literal 0 default as "unassigned" and
+            // falls back to the posterior guess (see `ctx::climate_of`) --
+            // every tile needs a real, non-zero climate id for the direct,
+            // fully-deterministic explored-tile branch of `fill_affinity`
+            // to apply, own-tribe's climate standing in for "not enemy".
+            tile.climate = classic_climate_id(TribeType::XinXi);
+            state.tiles.insert(idx, tile);
+        }
+        state.structures.insert(
+            VILLAGE_IDX,
+            Some(crate::states::StructureState {
+                structure_type: StructureType::Village,
+                level: 0,
+                founded: 0,
+            }),
+        );
+        state.tiles.get_mut(&ENEMY_IDX).unwrap().climate = classic_climate_id(TribeType::Imperius);
+
+        let mut t1 = TribeState::default();
+        t1.cities.push(crate::states::CityState { idx: 999, owner: 1, ..Default::default() });
+        state.tribes.insert(1, t1);
+        let mut t2 = TribeState::default();
+        t2.tribe_type = TribeType::Imperius;
+        state.tribes.insert(2, t2);
+
+        let belief = MapBelief::observe(&state, 1);
+        let fog = frontier_weight(&belief, EMPTY_IDX);
+        let village = frontier_weight(&belief, VILLAGE_IDX);
+        let enemy = frontier_weight(&belief, ENEMY_IDX);
+
+        assert!((fog - FRONTIER_W_FOG).abs() < 1e-5, "empty explored tile must read pure fog baseline, got {fog}");
+        assert!((village - (FRONTIER_W_FOG + FRONTIER_W_VILLAGE)).abs() < 1e-5, "sighted village must read fog+village, got {village}");
+        assert!((enemy - (FRONTIER_W_FOG + FRONTIER_W_ENEMY)).abs() < 1e-5, "enemy-climate tile must read fog+enemy, got {enemy}");
+        assert!(enemy > village, "enemy ({enemy}) must outrank village ({village})");
+        assert!(village > fog, "village ({village}) must outrank plain fog ({fog})");
+    }
+
+    /// With every tile in the scan radius already explored, there is
+    /// nothing left to weigh — the fallback must be the neutral fog
+    /// baseline, not zero (zero would make an all-lit city's completion
+    /// weight collapse to nothing rather than staying neutral).
+    #[test]
+    fn avg_frontier_in_reach_falls_back_to_fog_baseline_when_fully_explored() {
+        use crate::ai::belief::map::MapBelief;
+
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        for i in 0..121 {
+            let mut tile = TileState::default();
+            tile.terrain_type = crate::types::TerrainType::Field;
+            tile.explorers.insert(1);
+            state.tiles.insert(i, tile);
+        }
+        let mut t1 = TribeState::default();
+        t1.cities.push(crate::states::CityState { idx: 60, owner: 1, ..Default::default() });
+        state.tribes.insert(1, t1);
+        state.tribes.insert(2, TribeState::default());
+
+        let belief = MapBelief::observe(&state, 1);
+        let avg = avg_frontier_in_reach(&state, &belief, 60, EXPLORER_WALK_RANGE);
+        assert!((avg - FRONTIER_W_FOG).abs() < 1e-5, "fully-lit neighborhood must read fog baseline, got {avg}");
+    }
+
+    /// The explorer term is a no-op improvement without a belief (legacy
+    /// corner-only pricing, unchanged) and adds a non-negative lift with
+    /// one, since every dark tile's frontier weight is >= FRONTIER_W_FOG.
+    #[test]
+    fn explorer_term_gets_nonnegative_lift_from_a_belief_but_not_without_one() {
+        use crate::ai::belief::map::MapBelief;
+        use crate::types::CityRewardType;
+
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        // Sparse exploration: only the city's own tile is lit, so most of
+        // the map (including the scan neighborhood) is dark.
+        let mut city_tile = TileState::default();
+        city_tile.terrain_type = crate::types::TerrainType::Field;
+        city_tile.explorers.insert(1);
+        state.tiles.insert(60, city_tile);
+        for i in 0..121 {
+            if i == 60 {
+                continue;
+            }
+            let mut tile = TileState::default();
+            tile.terrain_type = crate::types::TerrainType::Field;
+            state.tiles.insert(i, tile);
+        }
+        let mut t1 = TribeState::default();
+        t1.cities.push(crate::states::CityState {
+            idx: 60,
+            owner: 1,
+            rewards: vec![CityRewardType::Explorer],
+            ..Default::default()
+        });
+        state.tribes.insert(1, t1);
+        state.tribes.insert(2, TribeState::default());
+
+        let goal = crate::ai::oracle_macro::MacroGoal {
+            orders: vec![],
+            stance: crate::ai::oracle_macro::Stance::Grow,
+            save_target: None,
+        };
+        let no_belief = |s: &GameState| -> f32 {
+            let (_, bd) = goal_potential_breakdown(s, 1, &goal, None, None, None, None);
+            bd.iter().filter(|(l, _)| *l == "explorer").map(|(_, v)| v).sum()
+        };
+        let belief = MapBelief::observe(&state, 1);
+        let with_belief = |s: &GameState| -> f32 {
+            let (_, bd) = goal_potential_breakdown(s, 1, &goal, None, None, None, Some(&belief));
+            bd.iter().filter(|(l, _)| *l == "explorer").map(|(_, v)| v).sum()
+        };
+
+        let base = no_belief(&state);
+        let lifted = with_belief(&state);
+        assert!(base > 0.0, "sanity: the legacy explorer term must already be paying, got {base}");
+        assert!(
+            lifted >= base - 1e-4,
+            "a belief must never REDUCE the explorer term below the legacy baseline: base={base} lifted={lifted}"
+        );
+    }
+
+    /// A level-0 city facing enemy-weighted darkness must price higher
+    /// completion progress than an identical level-0 city facing only
+    /// plain fog — the "which city gets to level up" lever. One state, one
+    /// belief: a real (sighted) enemy capital at one end of the map and the
+    /// observer's own spawn at the other, so `p_opponent_climate`'s
+    /// distance-based geometry (see `ctx::p_opponent_climate`) does the
+    /// differentiating instead of hand-set tile fields.
+    #[test]
+    fn completion_progress_favors_a_frontier_facing_city_over_a_backline_one() {
+        use crate::ai::belief::map::MapBelief;
+
+        const MY_CAP: i32 = 5; // (5, 0)
+        const ENEMY_CAP: i32 = 115; // (5, 10) -- opposite edge
+        const FRONTIER_CITY: i32 = 104; // (5, 9) -- next to the enemy capital
+        const BACKLINE_CITY: i32 = 16; // (5, 1) -- next to my own capital
+
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        for i in 0..121 {
+            let mut tile = TileState::default();
+            tile.terrain_type = crate::types::TerrainType::Field;
+            state.tiles.insert(i, tile);
+        }
+        // Sighted enemy capital: explored, capital_of set, distinct from own.
+        state.tiles.get_mut(&ENEMY_CAP).unwrap().explorers.insert(1);
+        state.tiles.get_mut(&ENEMY_CAP).unwrap().capital_of = 2;
+        // The two cities' own tiles are lit; their neighborhoods stay dark.
+        state.tiles.get_mut(&FRONTIER_CITY).unwrap().explorers.insert(1);
+        state.tiles.get_mut(&BACKLINE_CITY).unwrap().explorers.insert(1);
+
+        let mut t1 = TribeState::default();
+        t1.starting_tile_coords = Coords::from_index(MY_CAP, 11);
+        t1.cities.push(crate::states::CityState {
+            idx: FRONTIER_CITY,
+            owner: 1,
+            level: 0,
+            progress: 1,
+            ..Default::default()
+        });
+        t1.cities.push(crate::states::CityState {
+            idx: BACKLINE_CITY,
+            owner: 1,
+            level: 0,
+            progress: 1,
+            ..Default::default()
+        });
+        state.tribes.insert(1, t1);
+        state.tribes.insert(2, TribeState::default());
+
+        let belief = MapBelief::observe(&state, 1);
+        assert_eq!(belief.capital_map(), Some(ENEMY_CAP), "sanity: enemy capital must be confirmed sighted");
+
+        let frontier_avg = avg_frontier_in_reach(&state, &belief, FRONTIER_CITY, EXPLORER_WALK_RANGE);
+        let backline_avg = avg_frontier_in_reach(&state, &belief, BACKLINE_CITY, EXPLORER_WALK_RANGE);
+        assert!(
+            frontier_avg > backline_avg,
+            "frontier neighborhood's avg weight ({frontier_avg}) must exceed the backline one's ({backline_avg})"
+        );
+
+        // completion_progress must reflect the same ordering end to end.
+        let mut only_frontier = state.clone();
+        only_frontier.tribes.get_mut(&1).unwrap().cities.retain(|c| c.idx == FRONTIER_CITY);
+        let mut only_backline = state.clone();
+        only_backline.tribes.get_mut(&1).unwrap().cities.retain(|c| c.idx == BACKLINE_CITY);
+        let frontier_progress = completion_progress(&only_frontier, 1, Some(&belief));
+        let backline_progress = completion_progress(&only_backline, 1, Some(&belief));
+        assert!(
+            frontier_progress > backline_progress,
+            "frontier city's completion progress ({frontier_progress}) must exceed the backline one's ({backline_progress})"
+        );
+        // frontier_factor = 1 + W*max(0, avg-FOG) is never below 1.0, so a
+        // belief can only lift completion progress, never reduce it below
+        // the no-belief baseline.
+        let neutral = completion_progress(&only_backline, 1, None);
+        assert!(
+            backline_progress >= neutral - 1e-4,
+            "a belief must never price BELOW the no-belief baseline: neutral={neutral} backline={backline_progress}"
         );
     }

@@ -216,6 +216,7 @@ fn main() -> anyhow::Result<()> {
     };
     let aux = compute_goal_aux(&game.state, args.player, &goal, techs_bought, tier3_bought, None);
     let gate = tech_discipline_active(&game.state, args.player, &goal);
+    let belief = polyfish::ai::belief::map::MapBelief::observe(&game.state, args.player);
 
     let ranked = polyfish::ai::macro_exec::rank_plies(
         &mut game,
@@ -237,8 +238,15 @@ fn main() -> anyhow::Result<()> {
         args.top.min(ranked.len())
     );
 
-    let (phi_pre, bd_pre) =
-        goal_potential_breakdown(&game.state, args.player, &goal, Some(&aux), None, Some(&store));
+    let (phi_pre, bd_pre) = goal_potential_breakdown(
+        &game.state,
+        args.player,
+        &goal,
+        Some(&aux),
+        None,
+        Some(&store),
+        Some(&belief),
+    );
     let pre_agg: HashMap<&'static str, f32> = aggregate(&bd_pre).into_iter().collect();
 
     for (rank, (score, mv)) in ranked.iter().take(args.top).enumerate() {
@@ -264,6 +272,7 @@ fn main() -> anyhow::Result<()> {
             Some(&aux),
             None,
             Some(&store),
+            Some(&belief),
         );
         undo(&mut game.state);
         let post_agg: HashMap<&'static str, f32> = aggregate(&bd_post).into_iter().collect();

@@ -69,6 +69,13 @@ pub const EXPLORER_WALK_RANGE: i32 = 5;
 /// Caps how many hidden map corners can count toward the explorer bonus at
 /// once.
 pub const EXPLORER_CORNER_CAP: usize = 2;
+/// Scales the frontier-weighted bonus on top of the flat Explorer pick —
+/// how much a city's dark neighborhood leans enemy/village vs plain fog.
+/// First-fit (Verdi, Aug 2026): sized so a maximally enemy-facing
+/// neighborhood (avg weight ~= FRONTIER_W_FOG + FRONTIER_W_ENEMY) lands
+/// near the old max lighthouse-in-reach bonus (2 * 230 = 460); dial against
+/// measured dq once real games are in.
+pub const SHAPE_GOAL_EXPLORER_FRONTIER: f32 = 80.0;
 /// Rewards placing pop-boosting buildings (Windmill, Sawmill, Forge) next to
 /// more than one matching structure — each extra neighbor pays more.
 pub const SHAPE_GOAL_YIELD_ADJ: f32 = 100.0;
@@ -197,3 +204,84 @@ pub const BODY_CAP_MAX: usize = 3;
 /// above SHAPE_GOAL_RIDER/SHAPE_GOAL_BODY so it wins the tradeoff outright
 /// rather than merely offsetting them.
 pub const SHAPE_GOAL_UNIT_OPPORTUNITY_COST: f32 = 120.0;
+
+// ---- Frontier weighting (Verdi, Aug 2026) --------------------------------
+// What "forward" means, in one place: enemy-facing unexplored ground is the
+// hardest information to get any other way (can't be walked to safely),
+// a possible village site is worth more than plain fog (economic upside),
+// and plain fog is still worth something over already-explored ground.
+// Consumed by both the explorer term (goal_potential.rs) and the per-city
+// completion weighting (economy_completion.rs) via `frontier_weight` below
+// — one definition, not two drifting copies.
+pub const FRONTIER_W_FOG: f32 = 1.0;
+pub const FRONTIER_W_VILLAGE: f32 = 2.0;
+pub const FRONTIER_W_ENEMY: f32 = 6.0;
+
+/// P(this tile is worth revealing), tiered fog < village < enemy territory.
+/// `belief` is a pure function of currently-explored tiles (`MapBelief`), so
+/// this is itself pure — safe to hoist once per ply, same as `threats`.
+pub fn frontier_weight(belief: &crate::ai::belief::map::MapBelief, idx: i32) -> f32 {
+    FRONTIER_W_FOG
+        + FRONTIER_W_VILLAGE * belief.p_village(idx)
+        + FRONTIER_W_ENEMY * belief.p_opponent_affinity(idx)
+}
+
+/// Chebyshev radius `avg_frontier_in_reach` scans around a city — same
+/// range the explorer term reasons over, so "which city should level up"
+/// and "what's an explorer pick from there worth" read the same ground.
+pub const COMPLETION_FRONTIER_RANGE: i32 = EXPLORER_WALK_RANGE;
+
+/// Mean tile in a frontier-facing neighborhood pulls `city_completion_weight`
+/// up to roughly `1 + this * (FRONTIER_W_ENEMY)`; first-fit (Verdi, Aug 2026)
+/// at a modest lift so completion progress still dominated by raw pop, not
+/// overridden by geography.
+pub const COMPLETION_FRONTIER_W: f32 = 0.15;
+
+/// Per-level decay on the frontier lift: a level-0 city's first upgrade
+/// (still holding its whole reward menu, Explorer included) matters most;
+/// by level 3+ the menu is mostly spent and raw SPT should dominate again.
+/// First-fit — Verdi's asked-for ordering rules are still TBD.
+pub const COMPLETION_LEVEL_DECAY: f32 = 0.6;
+
+/// Mean `frontier_weight` over still-dark tiles within `radius` of `center`
+/// — the same neighborhood scan the explorer term and the per-city
+/// completion weight both key off. Plain grid lookups against `belief`'s
+/// dense arrays, no pathfinding: bounded by `(2*radius+1)^2` and cheap
+/// enough to run on every gated ply (see `goal_potential_with_belief`'s
+/// hoisting doc). Returns `FRONTIER_W_FOG` (the fully-lit baseline) if
+/// nothing in range is still dark.
+pub fn avg_frontier_in_reach(
+    state: &crate::states::GameState,
+    belief: &crate::ai::belief::map::MapBelief,
+    center: i32,
+    radius: i32,
+) -> f32 {
+    let width = state.settings.size;
+    if width <= 0 {
+        return FRONTIER_W_FOG;
+    }
+    let (cx, cy) = (center % width, center / width);
+    let mut sum = 0.0f32;
+    let mut n = 0u32;
+    for y in (cy - radius).max(0)..=(cy + radius).min(width - 1) {
+        for x in (cx - radius).max(0)..=(cx + radius).min(width - 1) {
+            if (x - cx).abs().max((y - cy).abs()) > radius {
+                continue;
+            }
+            let idx = y * width + x;
+            let dark = !state
+                .tiles
+                .get(&idx)
+                .map_or(true, |t| t.explorers.contains(&belief.observer));
+            if dark {
+                sum += frontier_weight(belief, idx);
+                n += 1;
+            }
+        }
+    }
+    if n == 0 {
+        FRONTIER_W_FOG
+    } else {
+        sum / n as f32
+    }
+}

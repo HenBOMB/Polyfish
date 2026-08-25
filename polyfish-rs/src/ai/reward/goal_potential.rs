@@ -52,7 +52,27 @@ pub fn goal_potential_with_unit_goals(
     threats: Option<&[(crate::states::UnitState, f32)]>,
     unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
 ) -> f32 {
-    goal_potential_inner(state, player, goal, aux, threats, unit_goals, &mut None)
+    goal_potential_with_belief(state, player, goal, aux, threats, unit_goals, None)
+}
+
+/// Same as [`goal_potential_with_unit_goals`], but additionally weights the
+/// explorer and per-city completion terms by `MapBelief`'s frontier signal
+/// (enemy-facing ground > possible-village ground > plain fog) instead of
+/// treating all dark ground the same. `None` is byte-for-byte the legacy
+/// corner-count/uniform-progress behavior. `belief` is a pure function of
+/// the explored set (`MapBelief::observe`), so it is safe to compute once
+/// per ply and reuse across every candidate's phi_post the same way
+/// `threats` already is — see `macro_exec::rank_plies`.
+pub fn goal_potential_with_belief(
+    state: &GameState,
+    player: i32,
+    goal: &crate::ai::oracle_macro::MacroGoal,
+    aux: Option<&crate::ai::oracle_macro::GoalAux>,
+    threats: Option<&[(crate::states::UnitState, f32)]>,
+    unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
+    belief: Option<&crate::ai::belief::map::MapBelief>,
+) -> f32 {
+    goal_potential_inner(state, player, goal, aux, threats, unit_goals, belief, &mut None)
 }
 
 /// Aug 2026 (reward_lab): same computation as [`goal_potential_with_unit_goals`],
@@ -72,10 +92,12 @@ pub fn goal_potential_breakdown(
     aux: Option<&crate::ai::oracle_macro::GoalAux>,
     threats: Option<&[(crate::states::UnitState, f32)]>,
     unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
+    belief: Option<&crate::ai::belief::map::MapBelief>,
 ) -> (f32, Vec<(&'static str, f32)>) {
     let mut bd = Vec::new();
     let mut sink = Some(&mut bd);
-    let phi = goal_potential_inner(state, player, goal, aux, threats, unit_goals, &mut sink);
+    let phi =
+        goal_potential_inner(state, player, goal, aux, threats, unit_goals, belief, &mut sink);
     (phi, bd)
 }
 
@@ -124,6 +146,7 @@ fn goal_potential_inner(
     aux: Option<&crate::ai::oracle_macro::GoalAux>,
     threats: Option<&[(crate::states::UnitState, f32)]>,
     unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
+    belief: Option<&crate::ai::belief::map::MapBelief>,
     breakdown: &mut Option<&mut Vec<(&'static str, f32)>>,
 ) -> f32 {
     use crate::ai::oracle_macro::{OrderKind, Stance};
@@ -170,7 +193,10 @@ fn goal_potential_inner(
     // distraction. The stranded TAX stays off ARM for the v6 reason: combat
     // spending shouldn't be penalised for levels it never planned to finish.
     if matches!(goal.stance, Stance::Grow | Stance::Save | Stance::Arm) {
-        acc.add("completion_progress", SHAPE_GOAL_COMPLETION * completion_progress(state, player));
+        acc.add(
+            "completion_progress",
+            SHAPE_GOAL_COMPLETION * completion_progress(state, player, belief),
+        );
     }
     // EXP_ELO_050: the cost of losing a city, priced into the potential
     // itself rather than attached to a Defend order. Two consequences that
@@ -715,6 +741,16 @@ fn goal_potential_inner(
                         .min(EXPLORER_CORNER_CAP);
                     let mut bonus = SHAPE_GOAL_EXPLORER
                         + SHAPE_GOAL_EXPLORER_LIGHTHOUSE * dark_in_reach as f32;
+                    // Frontier weighting (Verdi, Aug 2026): favors a city
+                    // whose dark neighborhood leans enemy-facing over one
+                    // that mostly reveals ground a walking unit could get
+                    // for free. `belief` is hoisted per-ply (see
+                    // `goal_potential_with_belief`'s doc); without one this
+                    // is a no-op and behavior is byte-identical to legacy.
+                    if let Some(belief) = belief {
+                        let avg = avg_frontier_in_reach(state, belief, city, EXPLORER_WALK_RANGE);
+                        bonus += SHAPE_GOAL_EXPLORER_FRONTIER * (avg - FRONTIER_W_FOG).max(0.0);
+                    }
                     // v8: the capital's first reward is a constant, not a
                     // choice — discount it so Workshop's whole-game compounding
                     // can win the one slot where it is worth the most.

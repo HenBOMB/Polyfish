@@ -577,12 +577,68 @@ pub fn defend_plan(
     attack_targets: &[i32],
 ) -> DefendPlan {
     let size = state.settings.size;
-    let sieger: Option<UnitState> = threat
-        .attackers
-        .iter()
-        .filter_map(|&i| get_true_unit_at(state, i))
-        .max_by(|a, b| a.health.total_cmp(&b.health))
-        .cloned();
+    let garrison = get_true_unit_at(state, threat.city).filter(|u| u.owner == player);
+
+    // Verdi (Aug 2026): an unsieged, garrisoned city can be hit by EVERY
+    // listed attacker in the same enemy turn (sequential melee strikes,
+    // not just its single strongest attacker) -- `threat.strike` already
+    // sums that correctly. The old model asked "can I kill the strongest
+    // attacker" and reported safe whenever that alone was true, even when
+    // several smaller attackers combined already exceed the garrison's
+    // health (confirmed: a 6hp garrison facing 4 attackers summing to 16
+    // damage read shortfall=0.0 because one attacker's own health, 10, was
+    // coverable). Greedily eliminate the biggest damage contributors first
+    // -- most incoming damage removed per kill -- until what's left drops
+    // under the garrison's HP; that's the set that must die this turn.
+    // Sieged/open cities keep the single-strongest-unit framing: there is
+    // no "garrison HP" to protect, only a siege to break or an entry to
+    // deter.
+    // (units that must die this turn, the kill-damage threshold they set).
+    // Garrisoned: empty `must_kill` is a real, deliberate zero -- the
+    // garrison already outlasts the total incoming strike on its own, and
+    // nothing needs preparing. Sieged/open: no garrison HP to protect,
+    // keep the original single-strongest-unit framing (siege-break /
+    // entry-deterrence), so it never floors at zero on a real threat.
+    let (must_kill, need_damage): (Vec<UnitState>, f32) = if let Some(g) = garrison.as_ref() {
+        let mut contribs: Vec<(UnitState, f32)> = threat
+            .attackers
+            .iter()
+            .filter_map(|&i| get_true_unit_at(state, i))
+            .map(|u| {
+                let dmg = hypo_damage(state, &probe(&u), g, threat.city);
+                (u.clone(), dmg)
+            })
+            .collect();
+        contribs.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let mut remaining = threat.strike;
+        let mut out = Vec::new();
+        for (u, dmg) in contribs {
+            // Same bar `at_risk` already uses (`RISK_MARGIN`): one hit
+            // leaving the garrison below a second hit is a threat worth
+            // preparing for, not a nuisance. Keeps this branch identical
+            // to the legacy single-attacker behavior at or above the
+            // margin (see this function's doc comment) and only changes
+            // outcomes for genuinely weak pokes or multi-attacker overload.
+            if remaining < RISK_MARGIN * g.health {
+                break;
+            }
+            remaining -= dmg;
+            out.push(u);
+        }
+        let need = out.iter().map(|u| u.health).sum();
+        (out, need)
+    } else {
+        let sieger: Vec<UnitState> = threat
+            .attackers
+            .iter()
+            .filter_map(|&i| get_true_unit_at(state, i))
+            .max_by(|a, b| a.health.total_cmp(&b.health))
+            .cloned()
+            .into_iter()
+            .collect();
+        (sieger, threat.need_damage)
+    };
+
     let mut cands: Vec<(i32, f32, f32, i32)> = Vec::new(); // (tile, sat, dmg, dist)
     if let Some(tribe) = state.tribes.get(&player) {
         for u in &tribe.units {
@@ -603,9 +659,14 @@ pub fn defend_plan(
             } else {
                 continue;
             };
-            let dmg = sieger
-                .as_ref()
-                .map_or(0.0, |s| hypo_damage(state, &pu, s, threat.city));
+            // Credited against whichever must-kill attacker this unit hits
+            // hardest -- a simplification (kill damage isn't truly fungible
+            // across different targets) but a strict improvement over
+            // pricing against one fixed attacker only.
+            let dmg = must_kill
+                .iter()
+                .map(|s| hypo_damage(state, &pu, s, threat.city))
+                .fold(0.0f32, f32::max);
             cands.push((u.coords.idx, sat, dmg, d));
         }
     }
@@ -620,7 +681,7 @@ pub fn defend_plan(
         let mut picked = Vec::new();
         let mut got = 0.0f32;
         for &(tile, sat, dmg, _) in &cands {
-            if got >= threat.need_damage || picked.len() >= MAX_ASSIGN {
+            if got >= need_damage || picked.len() >= MAX_ASSIGN {
                 break;
             }
             if skip_garrison && tile == threat.city {
@@ -635,10 +696,10 @@ pub fn defend_plan(
     let has_garrison = assigned.iter().any(|&(t, _)| t == threat.city);
     // Load-bearing test: rebuild the plan without the garrison — if the
     // rest of the roster can meet the kill damage alone, the tile is free.
-    let hold_needed = has_garrison && fill(true).1 < threat.need_damage;
+    let hold_needed = has_garrison && fill(true).1 < need_damage;
     DefendPlan {
         city: threat.city,
-        shortfall: (threat.need_damage - got).max(0.0),
+        shortfall: (need_damage - got).max(0.0),
         hold_needed,
         assigned,
     }
@@ -1040,6 +1101,74 @@ pub(crate) mod tests {
         let plan = defend_plan(&state, 1, &r[0], &[]);
         assert!(plan.shortfall == 0.0);
         assert!(!plan.hold_needed);
+    }
+
+    /// Verdi (Aug 2026): `must_kill`'s break condition is `RISK_MARGIN`
+    /// (0.8), the same bar `at_risk` already uses ("one hit leaving the
+    /// garrison below a second hit is a threat, not a nuisance") -- not
+    /// bare survival. A Warrior's hit on a full-health Rider garrison (5
+    /// dmg vs 10hp) sits below that margin and needs no kill; a
+    /// Swordsman's (9 dmg) sits at/above it and does. Both sides of the
+    /// boundary, on the same garrison, confirmed via `city_risks`' own
+    /// `strike` field rather than assumed (see this fix's commit history:
+    /// a naive bare-survival version broke three existing defense-pricing
+    /// tests by inverting hold-vs-vacate incentives).
+    #[test]
+    fn must_kill_break_uses_the_risk_margin_not_bare_survival() {
+        let below = {
+            let mut state = board(60);
+            state.tribes.get_mut(&1).unwrap().units.push(unit_at(60, UnitType::Rider, 1));
+            state.tribes.get_mut(&2).unwrap().units.push(unit_at(59, UnitType::Warrior, 2));
+            let r = city_risks(&state, 1);
+            assert!(r[0].strike < 0.8 * 10.0, "fixture sanity: must sit below the margin");
+            defend_plan(&state, 1, &r[0], &[])
+        };
+        assert_eq!(below.shortfall, 0.0, "a strike below the margin needs no kill: {below:?}");
+        assert!(!below.hold_needed, "nothing is being asked of the garrison here: {below:?}");
+
+        let above = {
+            let mut state = board(60);
+            state.tribes.get_mut(&1).unwrap().units.push(unit_at(60, UnitType::Rider, 1));
+            state.tribes.get_mut(&2).unwrap().units.push(unit_at(59, UnitType::Swordsman, 2));
+            let r = city_risks(&state, 1);
+            assert!(r[0].strike >= 0.8 * 10.0, "fixture sanity: must sit at/above the margin");
+            defend_plan(&state, 1, &r[0], &[])
+        };
+        assert!(above.hold_needed, "a strike at/above the margin must be treated as load-bearing: {above:?}");
+    }
+
+    /// The confirmed EXP_ELO seed-020 regression, reproduced directly: a
+    /// 6hp garrison facing four attackers whose combined strike (16) far
+    /// exceeds it must NOT report shortfall=0 just because covering the
+    /// single strongest attacker's own health (10) is affordable -- the
+    /// other three still land unopposed. `need_damage` must reflect enough
+    /// eliminated attackers to bring total incoming back under the
+    /// garrison's health, not one attacker's raw health.
+    #[test]
+    fn shortfall_reflects_cumulative_multi_attacker_damage_not_one_attackers_health() {
+        let mut state = board(49);
+        let mut garrison = unit_at(49, UnitType::Warrior, 1);
+        garrison.health = 6.0;
+        let garrison_hp = garrison.health;
+        state.tribes.get_mut(&1).unwrap().units.push(garrison);
+        // A lone unit that could cover the garrison's own retaliation, but
+        // nowhere near enough against four attackers at once.
+        state.tribes.get_mut(&1).unwrap().units.push(unit_at(39, UnitType::Warrior, 1));
+        for idx in [37, 38, 48, 60] {
+            state.tribes.get_mut(&2).unwrap().units.push(unit_at(idx, UnitType::Warrior, 2));
+        }
+        let r = city_risks(&state, 1);
+        let risk = r.iter().find(|c| c.city == 49).expect("city 49 must be at risk");
+        assert!(risk.attackers.len() >= 3, "fixture must present multiple attackers: {risk:?}");
+        assert!(
+            risk.strike > garrison_hp,
+            "fixture sanity: combined strike must exceed garrison hp"
+        );
+        let plan = defend_plan(&state, 1, risk, &[]);
+        assert!(
+            plan.shortfall > 0.0,
+            "four attackers summing well past the garrison's hp must not read as fully covered: {plan:?}"
+        );
     }
 
     /// EXP_ELO_042: latch (on enemy city), strict comparative rule, and
