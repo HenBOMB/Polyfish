@@ -80,6 +80,16 @@ fn potential_partner_count(
 /// Never bank for a batch further out than this many turns of income; beyond
 /// it the plan is a hoard, not a plan.
 pub const SAVE_MAX_TURNS: i32 = 3;
+/// Wider horizon granted when a birth tech fed into the save lane's own T1
+/// doctrine chain — a birth-tech-confirmed plan, not a speculative one, so
+/// more patience is warranted. Sized against seed 1787500020 (Verdi, Aug
+/// 2026): a SpamGiants-tell XinXi tribe at 1 city/turn 2 (2 stars, 2 spt)
+/// needs an 18-star chained Mining->Smithery+Forge plan — affordable only
+/// within `stars + spt * 8` — while `SAVE_MAX_TURNS` (3 turns, an 8-star
+/// window here) leaves it unreachable through the exact ply that bought an
+/// off-lane tech instead. Not yet re-measured against a wider run; revisit
+/// if it proves too generous.
+pub const SAVE_MAX_TURNS_COMMITTED: i32 = 8;
 /// Placements a single batch may bank for. The plan is "the tech and the
 /// first hubs", not "one hub in every city I will ever own".
 pub const SAVE_MAX_PLACEMENTS: i32 = 2;
@@ -166,6 +176,37 @@ pub fn tech_chain_cost(tribe: &crate::states::TribeState, tech: TechnologyType) 
         cur = get_technology_setting(t).requires;
     }
     total
+}
+
+/// SSOT for how many turns of income a save lane's reachability check may
+/// look ahead — shared by `pick_save_lane`'s own filter and
+/// `compute_macro_goal_cached`'s outer re-check so the two can never drift
+/// apart the way `recommended_techs` and `lane.rs` once did.
+///
+/// Deliberately does NOT route through `lane::tribe_lane_prior` — that
+/// function picks exactly one lane by `LANE_ORDER` list position when
+/// several birth techs match, which is a real ambiguity: seed 1787500020's
+/// XinXi spawned with BOTH Climbing and Hunting, and `tribe_lane_prior`
+/// returns ArcherLine (first in list order), silently discarding the
+/// SpamGiants tell entirely even though `select_lane`'s live terrain census
+/// independently confirms SpamGiants is what this map actually supports.
+/// This asks the narrower question a save plan needs instead: did ANY birth
+/// tech feed into THIS tech's own doctrine chain? True for Smithery here
+/// (Climbing -> SpamGiants) regardless of which lane wins the tie-break.
+pub fn save_horizon_turns(state: &GameState, player: PlayerId, tech: TechnologyType) -> i32 {
+    use crate::ai::search::lane::{lane_techs, LANE_ORDER};
+    let Some(tribe) = state.tribes.get(&player) else { return SAVE_MAX_TURNS };
+    let spawn_tech: Vec<TechnologyType> = tribe
+        .tech_vanilla
+        .iter()
+        .filter(|t| t.discovered && t.discovered_turn == 0)
+        .map(|t| t.tech_type)
+        .collect();
+    let committed = LANE_ORDER.iter().any(|&lane| {
+        let techs = lane_techs(lane);
+        techs.contains(&tech) && techs.iter().any(|t| spawn_tech.contains(t))
+    });
+    if committed { SAVE_MAX_TURNS_COMMITTED } else { SAVE_MAX_TURNS }
 }
 
 /// v7: cost of the CHEAPEST territory-upgrade lane worth banking for — the
@@ -259,7 +300,8 @@ pub fn pick_save_lane(
         // next one instead of leaving the seat with no plan at all — which is
         // what took Bardur to 0.22 hubs and 18/32 wins.
         let spt = crate::functions::get_tribe_spt(state, tribe);
-        if plan.cost > tribe.stars + spt * SAVE_MAX_TURNS {
+        let horizon = save_horizon_turns(state, player, tech);
+        if plan.cost > tribe.stars + spt * horizon {
             continue;
         }
         // Pareto: star-per-turn yield ON THIS MAP, from `rules::eco_plan`'s
@@ -411,9 +453,32 @@ pub fn recommended_techs(state: &GameState, player: PlayerId) -> Vec<TechnologyT
     };
 
     if tribe.cities.len() < 2 {
+        use crate::rules::eco_plan::Lane as EcoLane;
         use crate::types::{ResourceType as R, TerrainType as T};
-        let (mut forest, mut mountain, mut field, mut water) = (0i32, 0i32, 0i32, 0i32);
-        let (mut game_r, mut fruit, mut crop, mut metal, mut fish) = (0i32, 0i32, 0i32, 0i32, 0i32);
+        // Verdi's Aug 2026 call: rank a line by what it would actually pay,
+        // not by counting nearby tiles with hand-picked multipliers -- the
+        // multiplier census scored Farm over Mine on real Metal-rich terrain
+        // (seed 1787500020: 25.5 vs 17, from raw crop+fruit outnumbering
+        // metal) purely because the weights don't know what a hub needs.
+        // `eco_plan_best_city` (the same SSOT `bin/eco_plan --verify` checks
+        // against, and `lane.rs`'s `spam_viable`) already models real hub
+        // adjacency; SPT is its own primary ranking key
+        // (`.max_by(spt).then(giants)`), so line rank and in-tree tech-fit
+        // pricing can't disagree about what a lane is worth the way the old
+        // census and `evaluate_tech_utility` briefly could.
+        //
+        // Water has no `eco_plan::Lane` -- kept on the original raw census
+        // (nearby water tiles + fish), the same formula this branch always
+        // used for it.
+        // `eco_plan_best_city` prices a city's WHOLE economy under a lane's
+        // structural assumptions, so it never comes back exactly zero even
+        // for a lane with nothing to feed it (a plain city still earns some
+        // baseline SPT) -- unlike the old per-tile census, which was
+        // naturally zero when a resource was simply absent. Gate each lane
+        // on raw presence first, so "nothing here" still reads as zero
+        // instead of every lane clearing the `> 0.0` cut by default.
+        let (mut forest, mut mountain, mut metal, mut crop, mut fruit, mut water, mut fish) =
+            (0i32, 0i32, 0i32, 0i32, 0i32, 0i32, 0i32);
         for (idx, tile) in state.tiles.iter() {
             if !tile.explorers.contains(&player) {
                 continue;
@@ -421,31 +486,35 @@ pub fn recommended_techs(state: &GameState, player: PlayerId) -> Vec<TechnologyT
             match tile.terrain_type {
                 T::Forest => forest += 1,
                 T::Mountain => mountain += 1,
-                T::Field => field += 1,
                 T::Water | T::Ocean => water += 1,
                 _ => {}
             }
             if let Some(Some(r)) = state.resources.get(idx) {
                 match r.resource_type {
-                    R::Game => game_r += 1,
-                    R::Fruit => fruit += 1,
-                    R::Crop => crop += 1,
                     R::Metal => metal += 1,
+                    R::Crop => crop += 1,
+                    R::Fruit => fruit += 1,
                     R::Fish => fish += 1,
                     _ => {}
                 }
             }
         }
-        let census: [i32; 4] = [
-            forest + 2 * game_r,
-            mountain + 2 * metal,
-            field / 2 + 2 * (fruit + crop),
-            water / 2 + 2 * fish,
+        let eco_score = |lane: EcoLane, present: bool| -> f32 {
+            if !present {
+                return 0.0;
+            }
+            eco_plan_best_city(state, player, lane).map_or(0.0, |p| p.spt as f32)
+        };
+        let census: [f32; 4] = [
+            eco_score(EcoLane::Forest, forest > 0),
+            eco_score(EcoLane::Mine, mountain > 0 || metal > 0),
+            eco_score(EcoLane::Farm, crop > 0 || fruit > 0),
+            water as f32 / 2.0 + 2.0 * fish as f32,
         ];
         let mut ranked: Vec<(f32, usize)> = census
             .into_iter()
             .zip(0..4)
-            .map(|(score, i)| (discount_unverified(state, tribe, i, score as f32), i))
+            .map(|(score, i)| (discount_unverified(state, tribe, i, score), i))
             .collect();
         ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
         return ranked
@@ -577,13 +646,25 @@ mod recommended_techs_eco_plan_tests {
         assert!(lane_confirmed_placeable(&state, tribe, Lane::Forest));
         assert!(!lane_confirmed_placeable(&state, tribe, Lane::Farm));
 
+        // Order between Mountain and Forest isn't the thing under test --
+        // both consumers of `recommended_techs` (`goal_potential`'s
+        // tech-fit term, `passes_stance_tech_mask`) test set membership,
+        // never order (see the doc comment above), and which of two
+        // *confirmed* lines an eco_plan SPT read ranks higher is a real
+        // economic judgment, not a bug. What must hold: Farm (the
+        // highest-raw-resource but unplaceable line) is fully displaced,
+        // not just reordered down a slot.
         let recs = recommended_techs(&state, 1);
+        let mut sorted = recs.clone();
+        sorted.sort_by_key(|t| format!("{t:?}"));
         assert_eq!(
-            recs,
-            vec![TechnologyType::Climbing, TechnologyType::Hunting],
-            "undiscounted census ranks Farm(8) > Mountain(7) > Forest(5) -- Farm would win \
-             a slot outright without the fix. Discounted: Mountain(7) > Forest(5) > \
-             Farm(4), so Farm must be fully displaced by Forest, not just reordered: {recs:?}"
+            sorted,
+            {
+                let mut v = vec![TechnologyType::Climbing, TechnologyType::Hunting];
+                v.sort_by_key(|t| format!("{t:?}"));
+                v
+            },
+            "Farm must be fully displaced by Forest, not just reordered: {recs:?}"
         );
     }
 }

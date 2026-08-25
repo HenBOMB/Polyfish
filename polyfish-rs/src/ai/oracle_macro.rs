@@ -223,7 +223,8 @@ pub fn compute_macro_goal_cached(
     };
     let save_target = raw_save_target.filter(|l| {
         let spt = crate::functions::get_tribe_spt(state, tribe);
-        tribe.stars < l.cost && tribe.stars + spt * SAVE_MAX_TURNS >= l.cost
+        let horizon = crate::ai::economy::save_horizon_turns(state, player, l.tech);
+        tribe.stars < l.cost && tribe.stars + spt * horizon >= l.cost
     });
     let stance = if orders.iter().any(|(k, _)| *k == OrderKind::Defend) {
         Stance::Arm

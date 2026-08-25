@@ -319,6 +319,47 @@ fn save_stance_targets_a_reachable_batch_and_self_terminates() {
         "SAVE is only ever set together with a named target"
     );
 }
+/// Seed 1787500020 (Verdi, Aug 2026): a tribe spawning with BOTH Climbing
+/// (SpamGiants) and Hunting (ArcherLine) turn-0 tech has
+/// `lane::tribe_lane_prior` resolve to ArcherLine — first in `LANE_ORDER`,
+/// discarding the SpamGiants tell entirely — while `select_lane`'s live
+/// terrain census independently confirms SpamGiants is what the map
+/// actually supports. `save_horizon_turns` must not inherit that
+/// tie-break: Smithery's chain (Forge/Mining) still gets the wider window
+/// because Climbing alone is enough evidence, regardless of which lane
+/// `tribe_lane_prior` happens to pick.
+#[test]
+fn save_horizon_widens_for_a_birth_tech_lane_even_when_another_lane_wins_the_prior_tiebreak() {
+    use crate::ai::economy::{save_horizon_turns, SAVE_MAX_TURNS, SAVE_MAX_TURNS_COMMITTED};
+    use crate::ai::search::lane::tribe_lane_prior;
+    use crate::types::TechnologyType as T;
+    let mut state = state_with_villages(0, &[3, 5]);
+    {
+        let t1 = state.tribes.get_mut(&1).unwrap();
+        for tech in [T::Climbing, T::Hunting] {
+            t1.tech_vanilla.push(crate::states::TechnologyState {
+                tech_type: tech,
+                discovered: true,
+                discovered_turn: 0,
+            });
+        }
+    }
+    assert_eq!(
+        tribe_lane_prior(&state, 1),
+        Some(crate::ai::search::lane::Lane::ArcherLine),
+        "sanity: the ambiguous fixture reproduces the list-order tie-break"
+    );
+    assert_eq!(
+        save_horizon_turns(&state, 1, T::Smithery),
+        SAVE_MAX_TURNS_COMMITTED,
+        "Climbing is still a real tell for the Smithery/SpamGiants chain"
+    );
+    assert_eq!(
+        save_horizon_turns(&state, 1, T::Trade),
+        SAVE_MAX_TURNS,
+        "no birth tech points at the Market/Trade lane here"
+    );
+}
 /// v7: a discretionary stance swing must hold for STANCE_SWITCH_TURNS
 /// turns, and re-running the same turn's plies must not advance the streak
 /// (the goal-setter runs every ply, the commitment counts turns).
