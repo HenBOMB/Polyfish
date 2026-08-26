@@ -62,6 +62,119 @@ fn dump_ply_decision(
     }
 }
 
+/// Micro-mcts Phase 0 (throughput/cache-hit probe, not a standing feature):
+/// how many extra synthetic single-leaf `eval_server` requests this process
+/// has issued, and how many of the probe's own hypothetical continuations
+/// failed to simulate. Always-on atomics, mirroring `RANK_PLIES_CALLS`
+/// (macro_exec.rs) -- zero cost when the probe's env var is unset, since
+/// `run_micro_probe` returns before either is touched.
+pub static MICRO_PROBE_EVALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static MICRO_PROBE_SIM_FAILURES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+fn micro_probe_sims() -> Option<usize> {
+    static SIMS: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    *SIMS.get_or_init(|| std::env::var("POLYFISH_MICRO_PROBE_SIMS").ok().and_then(|s| s.parse().ok()))
+}
+
+fn micro_probe_depth() -> usize {
+    static DEPTH: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *DEPTH.get_or_init(|| {
+        std::env::var("POLYFISH_MICRO_PROBE_DEPTH").ok().and_then(|s| s.parse().ok()).unwrap_or(1)
+    })
+}
+
+/// Micro-mcts Phase 0: measure the throughput/cache-hit cost of network-leaf
+/// evals a bounded within-turn search would generate, BEFORE building any
+/// real search tree. When `POLYFISH_MICRO_PROBE_SIMS=<n>` is set, issues `n`
+/// extra synthetic `eval_server` calls per REAL ply against up-to-`depth`-ply
+/// hypothetical continuations of the already-committed turn.
+///
+/// Real-trajectory-only and strictly read-only w.r.t. everything but its own
+/// disposable clone: never mutates `ranked`, `view`, `game`, or any of the
+/// agent's persistent state, and never changes which move is actually
+/// played. Composed `simulate_move`/undo across a turn is NOT safe (see
+/// `cross_end_turn`'s documented panic, gumbel_mcts/rounds.rs) -- this walks
+/// forward on a disposable clone instead and never calls undo, the same
+/// idiom `MacroMctsSearch::expand` already uses for rollout nodes.
+#[allow(clippy::too_many_arguments)]
+fn run_micro_probe(
+    evaluator: &crate::ai::eval_server::Evaluator,
+    view: &Game,
+    pov: PlayerId,
+    goal: &MacroGoal,
+    lane_state: &LaneState,
+    counters: TurnCounters,
+    lambda: f32,
+    unit_goals: &crate::ai::search::unit_goals::UnitGoalStore,
+    ranked: &[(f32, Box<dyn Move>)],
+) {
+    let Some(sims) = micro_probe_sims() else { return };
+    let top_n = ranked.len().min(4);
+    if top_n < 2 || matches!(ranked[0].1.move_type(), crate::types::MoveType::EndTurn) {
+        return;
+    }
+    let depth = micro_probe_depth().max(1);
+    for i in 0..sims {
+        // Vary (idx, walk_depth) jointly, not idx alone -- else most sims
+        // converge on identical leaves via deterministic continuation,
+        // self-inflating the eval cache's hit rate instead of measuring it.
+        let idx = i % top_n;
+        let walk_depth = 1 + (i / top_n) % depth;
+        let forced = ranked[idx].1.as_ref();
+        if matches!(forced.move_type(), crate::types::MoveType::EndTurn) {
+            continue;
+        }
+        let mut probe_game = view.clone();
+        if probe_game.simulate_move(forced).is_none() {
+            MICRO_PROBE_SIM_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            continue;
+        }
+        let mut probe_lane = lane_state.clone();
+        let mut probe_counters = counters;
+        probe_counters.count(forced);
+        let mut ok = true;
+        for _ in 1..walk_depth {
+            if probe_game.state.settings.current_player_turn_id != pov {
+                break;
+            }
+            // rank_view, not raw rank_plies: byte-for-byte the same per-ply
+            // sequence the real decision uses, for free.
+            let mut next = crate::ai::macro_agent::rank_view(
+                &mut probe_game,
+                pov,
+                goal,
+                &mut probe_lane,
+                &mut probe_counters,
+                lambda,
+                Some(unit_goals),
+            );
+            if next.is_empty() {
+                break;
+            }
+            let (_, mv) = next.swap_remove(0);
+            if matches!(mv.move_type(), crate::types::MoveType::EndTurn) {
+                break;
+            }
+            if probe_game.simulate_move(mv.as_ref()).is_none() {
+                ok = false;
+                break;
+            }
+            probe_counters.count(mv.as_ref());
+        }
+        if !ok {
+            continue;
+        }
+        if let Ok(feats) =
+            crate::ai::features::state_to_cpu_features_goal(&probe_game.state, pov, None, Some(goal))
+        {
+            let _ = evaluator.evaluate(vec![feats]);
+            MICRO_PROBE_EVALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        // probe_game drops here -- no undo call anywhere in this function.
+    }
+}
+
 /// UCT exploration on [0,1]-mapped values, dialed to the MEASURED root q01
 /// spread between directives (0.01–0.06, smoke probe 2026-08-12): at c=0.6
 /// (and even the HeuristicMctsAgent 0.6 precedent) the bonus is 6–30x the
@@ -737,6 +850,11 @@ pub struct MacroMctsAgent<'a> {
     /// Never threaded into rollouts (Fork 2) -- rollouts stay on the
     /// ephemeral `None` path, byte-identical to before this field existed.
     unit_goals: crate::ai::search::unit_goals::UnitGoalStore,
+    /// Micro-mcts root-advancement warm start (see `micro_mcts::
+    /// MicroTreeCarry`). Reset whenever a new turn is planned or the
+    /// predicted move didn't end up executed; otherwise carried ply to ply
+    /// within the same turn so a search's unused depth isn't discarded.
+    micro_carry: Option<crate::ai::search::micro_mcts::MicroTreeCarry>,
 }
 
 /// EXP_ELO_038: how many recent picked directives stay on the ballot.
@@ -950,6 +1068,7 @@ impl<'a> MacroMctsAgent<'a> {
             recent_goals: std::collections::VecDeque::new(),
             intra_strips: 0,
             unit_goals: crate::ai::search::unit_goals::UnitGoalStore::default(),
+            micro_carry: None,
         }
     }
 
@@ -998,6 +1117,9 @@ impl<'a> MacroMctsAgent<'a> {
         let pov = game.state.settings.current_player_turn_id;
         let key = (game.state.settings.turn, pov);
         if self.plan_key != Some(key) {
+            // A new turn invalidates any micro-mcts subtree from the last
+            // one — it was built off a different goal/lane/state entirely.
+            self.micro_carry = None;
             use crate::ai::macro_agent::{BeliefMode, CandidateClass};
             let mut view0 = game.clone_for_mcts(pov);
             let use_world =
@@ -1133,7 +1255,7 @@ impl<'a> MacroMctsAgent<'a> {
         let goal = self.turn_goal.clone().unwrap_or_default();
         let unit_status =
             crate::ai::search::unit_goals::reconcile_unit_goals(&view.state, pov, &goal, &mut self.unit_goals);
-        let ranked = crate::ai::macro_agent::rank_view(
+        let mut ranked = crate::ai::macro_agent::rank_view(
             &mut view,
             pov,
             &goal,
@@ -1141,6 +1263,50 @@ impl<'a> MacroMctsAgent<'a> {
             &mut self.counters,
             self.params.lambda,
             Some(&self.unit_goals),
+        );
+        let mut pending_micro_carry: Option<(
+            serde_json::Value,
+            crate::ai::search::micro_mcts::MicroTreeCarry,
+        )> = None;
+        if let Some(micro_params) = crate::ai::search::micro_mcts::micro_mcts_params() {
+            let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
+            let aux = crate::ai::search::goal_aux::compute_goal_aux(
+                &view.state,
+                pov,
+                &goal,
+                self.counters.techs_bought,
+                self.counters.tier3_bought,
+                Some(&self.lane_state),
+            );
+            let (pick, next_carry) = crate::ai::search::micro_mcts::micro_search_pick(
+                &view,
+                pov,
+                &goal,
+                &ranked,
+                &aux,
+                star_gate,
+                self.evaluator,
+                &micro_params,
+                self.micro_carry.take(),
+            );
+            if let Some(idx) = pick {
+                let predicted_key = ranked[idx].1.serialize();
+                ranked.swap(0, idx);
+                if let Some(carry) = next_carry {
+                    pending_micro_carry = Some((predicted_key, carry));
+                }
+            }
+        }
+        run_micro_probe(
+            self.evaluator,
+            &view,
+            pov,
+            &goal,
+            &self.lane_state,
+            self.counters,
+            self.params.lambda,
+            &self.unit_goals,
+            &ranked,
         );
         if let Some(path) = ply_trace_path() {
             let turn = game.state.settings.turn;
@@ -1178,11 +1344,17 @@ impl<'a> MacroMctsAgent<'a> {
                 })
                 .unwrap_or_default();
             let m = crate::ai::macro_agent::first_true_legal(game, ranked);
+            self.micro_carry = pending_micro_carry
+                .filter(|(key, _)| *key == m.serialize())
+                .map(|(_, carry)| carry);
             dump_ply_decision(path, turn, pov, &goal, candidates, unit_goals_trace, m.as_ref());
             self.counters.count(m.as_ref());
             return Some(m);
         }
         let m = crate::ai::macro_agent::first_true_legal(game, ranked);
+        self.micro_carry = pending_micro_carry
+            .filter(|(key, _)| *key == m.serialize())
+            .map(|(_, carry)| carry);
         self.counters.count(m.as_ref());
         Some(m)
     }

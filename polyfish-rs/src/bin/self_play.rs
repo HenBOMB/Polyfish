@@ -4996,6 +4996,41 @@ fn main() -> anyhow::Result<()> {
         rank_plies_candidates,
         rank_plies_candidates as f64 / (rank_plies_calls as f64).max(1.0)
     );
+    // Micro-mcts Phase 0 (throughput/cache-hit probe, POLYFISH_MICRO_PROBE_SIMS):
+    // zero unless that env var is set. Note the rank_plies numbers above also
+    // inflate while this probe is active -- its own continuation walk calls
+    // rank_view/rank_plies, so that's the probe's real CPU cost showing up in
+    // already-existing instrumentation, not contamination to filter out.
+    let micro_probe_evals =
+        polyfish::ai::search::macro_mcts::MICRO_PROBE_EVALS.load(std::sync::atomic::Ordering::Relaxed);
+    let micro_probe_failures = polyfish::ai::search::macro_mcts::MICRO_PROBE_SIM_FAILURES
+        .load(std::sync::atomic::Ordering::Relaxed);
+    println!(
+        "  - micro-probe evals: {} total ({:.2} per move decision), {} sim failures",
+        micro_probe_evals,
+        micro_probe_evals as f64 / (total_moves as f64).max(1.0),
+        micro_probe_failures
+    );
+    let micro_mcts_calls =
+        polyfish::ai::search::micro_mcts::MICRO_MCTS_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+    let micro_mcts_overrides = polyfish::ai::search::micro_mcts::MICRO_MCTS_OVERRIDES
+        .load(std::sync::atomic::Ordering::Relaxed);
+    println!(
+        "  - micro-mcts calls: {} total, {} overrode rank_view's top pick ({:.1}%)",
+        micro_mcts_calls,
+        micro_mcts_overrides,
+        micro_mcts_overrides as f64 / (micro_mcts_calls as f64).max(1.0) * 100.0
+    );
+    let micro_carry_attempts = polyfish::ai::search::micro_mcts::MICRO_CARRY_ATTEMPTS
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let micro_carry_hits =
+        polyfish::ai::search::micro_mcts::MICRO_CARRY_HITS.load(std::sync::atomic::Ordering::Relaxed);
+    println!(
+        "  - micro-mcts root-advancement: {} carries offered, {} candidate children spliced in ({:.2} avg per carry)",
+        micro_carry_attempts,
+        micro_carry_hits,
+        micro_carry_hits as f64 / (micro_carry_attempts as f64).max(1.0)
+    );
     polyfish::ai::search::macro_exec::dphi_probe_flush();
 
     // Deterministic teardown. Drop the evaluator handles first — these hold the

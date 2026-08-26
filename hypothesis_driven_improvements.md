@@ -8820,3 +8820,138 @@ only — explored/villages/cities. That is sufficient within one game, where the
 only grows, but collides across games, silently serving a wrong belief from any cross-state
 cache. It now carries an order-independent hash of the actual sets. Caught by
 `thread_local_memo_agrees_with_a_fresh_derivation`.
+
+## EXP_ELO_071 — micro-mcts Phase 0: throughput/cache-hit probe (measurement only, no search built yet)
+
+**Context**: a bounded within-turn "micro-mcts" was designed to fix a class of bug where
+`rank_plies`'s single-step `score_move + λ·Δφ` ranking can't see multi-step consequences
+(observed directly: a tied 6-way Build-Mine choice at ply 35 of a traced game, where the
+correct city only reveals itself a couple of plies later at the Explorer reward). Two design
+decisions locked in during the design discussion: (1) real-trajectory-only, never inside
+macro-mcts's own internal rollouts; (2) leaf value must be the trained network's value head
+via `eval_server`, not the heuristic `goal_potential` — a Φ-based leaf would keep search
+bound to the same brittle hand-authored heuristic it's meant to escape and couldn't improve
+via training. This entry is Phase 0 only: measure the throughput/cache-hit cost of that
+network-eval traffic pattern before building any real MCTS selection/backprop machinery.
+
+**Hypothesis**: injecting N extra synthetic single-leaf `eval_server` requests per real ply
+(network-based, real-trajectory-only, provably byte-identical move selection) either does or
+does not meaningfully hurt self-play moves/sec, and the cache-hit-rate this new traffic gets
+from the eval-server's existing LRU tells us whether a real micro-search's leaves would
+mostly be fresh GPU work or mostly redeemable from cache.
+
+**Critical finding that reframes the baseline** (confirmed from `session.log`, not assumed):
+the actual/recent training campaign runs `leaf=heuristic sims=64 k=6 rollout_lambda=0.0
+root_prior_w=0` at 14 auto-scaled (core-count) actors — i.e. **macro-mcts's own rollouts
+generate zero eval-server traffic today** in the config that's actually in production
+(`MacroLeaf::Heuristic` is the shipped CLI default; `--macro-root-prior-w` defaults to
+`0.0`, also off — both confirmed in `run_training_loop.sh` and directly in `session.log`'s
+own startup banners). A real model is still loaded behind `eval_server` (3 metal shards,
+`Evaluator::Sharded`) even though nothing calls it under this config, so the probe's
+synthetic traffic hits a genuine loaded model, not a stub. This means the probe's added
+load is close to the *entire* eval-server load for the heuristic-leaf arm, not additive on
+top of an already-loaded pipeline — the net-leaf arm (128 GPU-tuned actors, substantial
+existing traffic) is a second, more hypothetical arm since it isn't what real training
+currently runs.
+
+**Built**: `POLYFISH_MICRO_PROBE_SIMS=<n>` / `POLYFISH_MICRO_PROBE_DEPTH=<k>`-gated hook in
+`MacroMctsAgent::select_move` (`src/ai/search/macro_mcts.rs`, `run_micro_probe`), inserted
+right after `ranked` is computed by `rank_view` and before either downstream branch consumes
+it. For each of `n` synthetic sims: forces one of `ranked`'s top-4 candidates (round-robin
+index), clones `view` into a disposable `probe_game`, `simulate_move`s it, then continues up
+to `walk_depth` plies via `rank_view` (never raw `rank_plies`, for full fidelity to the real
+per-ply sequence), builds features via `state_to_cpu_features_goal`, and calls
+`evaluator.evaluate(vec![feats])`. `(candidate_index, walk_depth)` vary jointly across sims
+(`idx = i % top_n; walk_depth = 1 + (i / top_n) % depth`) so most sims reach distinct leaves
+— cycling only the index with deterministic continuation would make most sims converge on
+identical leaves and self-inflate the measured cache-hit-rate. No undo call anywhere — the
+codebase's own documented reason (`cross_end_turn`'s panic from composed undos across a
+turn, `gumbel_mcts/rounds.rs:214-258`) rules that out; the probe uses the same
+clone-and-discard idiom `MacroMctsSearch::expand` already uses for rollout nodes. Never
+mutates `ranked`/`view`/`game`/`self.lane_state`/`self.counters`/`self.unit_goals` — reads
+`self.unit_goals` read-only into `rank_view` exactly as the real call does, never calls
+`reconcile_unit_goals`. Two new always-on atomics (`MICRO_PROBE_EVALS`,
+`MICRO_PROBE_SIM_FAILURES`, mirroring `RANK_PLIES_CALLS`'s style) plus one new print line in
+`self_play.rs` beside the existing `rank_plies calls` line. `EVAL_SERVER_STATS_AGG`
+(forwards/rows/avg_batch/cache_hit_rate/busy_frac) needed no changes — already printed
+unconditionally every run.
+
+**Expected** (back-of-envelope, to compare against measured numbers): at ~5-15 real
+plies/turn (per EXP_ELO_062), `(sims=16, depth=4)` adds roughly 16 extra evals/real-ply
+(~160-240/turn) and ~16×1.5≈24 extra `rank_view` calls/real-ply from the continuation walk;
+`(sims=32, depth=6)` roughly doubles both (~32 evals/ply, ~80 extra `rank_view` calls/ply).
+In the heuristic-leaf arm this CPU-side `rank_view`/Δφ cost (70-80% of a ply's cost per
+EXP_ELO_062) may dominate over the eval-server cost itself — a legitimate result to report,
+not noise.
+
+**Verification so far**: `cargo build` clean (only pre-existing unrelated warnings).
+`cargo test --lib --tests --bin self_play`: 296/296 lib tests pass, 0 failed, 11 ignored —
+identical counts to the pre-change baseline.
+`mcts_agent_with_unit_goals_is_deterministic` (double-runs a full in-process game from the
+same seed, asserts identical `_history`) passes unmodified, exercising the probe-off
+default path. Byte-identical-by-construction argument holds by inspection: the hook only
+touches a disposable clone and nothing downstream reads any output of it.
+
+**Arms** (Step 3, not yet run): sequential only (never concurrent, per this project's own
+OOM lesson). Production macro config (`--macro-sims 64 --macro-k 6`), seed-770425 gauge
+harness's invocation shape for a fast low-variance timing read (win-rate is irrelevant here,
+only moves/sec and the stats lines matter). Cross leaf-mode (heuristic @ 14 actors, net @
+128 actors — each keeps its own natural actor count, not forced to parity) × probe setting
+(off / 16,4 / 32,6). Record moves/sec, `avg_batch`, `cache_hit_rate`, `busy_frac`,
+`forwards`/`rows`, the new micro-probe-evals line, the (reinterpreted) rank_plies-calls line.
+
+**Actual**: heuristic-leaf arm only (the real, currently-live config; net-leaf arm not run —
+see Verdict). Production macro config (`--macro-sims 16 --macro-k 4` for a cheap first-pass
+per the plan's own allowance, `--goal-channels`, fixed `--base-seed 770425`, XinXi vs
+Imperius, `--actors 0`, 32 games/arm, sequential), `--eval-backend metal` (MPSGraph) with
+`--eval-servers 3` to match the real production shard count confirmed in Step 0:
+
+| arm | moves/sec | Δ vs baseline | forwards | cache_hit_rate | busy_frac | rank_plies calls/decision |
+|---|---|---|---|---|---|---|
+| baseline (probe off) | 125.53 | — | 0 | — | 0.000 | 13.36 |
+| sims=16, depth=4 | 61.11 | **−51.3%** | 68,310 | 0.493 | 0.809 | 31.94 (+18.6) |
+| sims=32, depth=6 | 24.84 | **−80.2%** (5.05x slower) | 92,613 | 0.690 | 0.551 | 59.02 (+45.7) |
+
+Regression *worsens*, not saturates, from the smaller to the larger probe setting — moving
+in exactly the direction a real micro-search would need to go (more sims, more depth), not
+away from it. Cache-hit-rate actually improves with depth (0.493→0.690, more path overlap
+between the joint `(idx, walk_depth)` combinations at deeper walks), but this doesn't save
+the throughput: `busy_frac` (time in eval-server GPU work) *drops* from 0.809 to 0.551 even
+as the regression gets worse, meaning the probe's own CPU-side cost — the `rank_view`/Δφ
+continuation walk, not the GPU eval calls — is the *growing* share of the cost as depth
+increases, exactly the "Δφ scoring dominates" mechanism this entry's Expected section flagged
+in advance from EXP_ELO_062.
+
+**Methodological note, worth recording since it nearly produced a false result**: the first
+pass at this A/B was run against a binary built with `--features apple`, whose release
+compile actually *failed* (`torch-sys`: no libtorch install found — `apple` pulls in
+`tch-eval`, unneeded here) while being piped through `| tail -N`, so the reported shell exit
+code was `tail`'s (0), not cargo's. This silently left a stale pre-probe binary in the scratch
+target dir in place; running it with the probe env var set produced `forwards: 0` across the
+board, which looked like "the probe fires but eval-server ignores it" but was actually "this
+binary doesn't contain the probe code at all." Caught by `strings <bin> | grep micro-probe`
+returning nothing. Fixed by building with `--features "metal accelerate metal-eval"` (skips
+`tch-eval`/libtorch entirely) and re-verifying the string is present before trusting any
+run. A second, now-superseded data point from the broken build (candle backend, 1 eval
+shard, not production-representative) showed an even worse −70.2% — not reported in the
+table above since it conflates the probe's real cost with a slow eval backend and a
+single-shard bottleneck; the metal/3-shard numbers above are the trustworthy ones.
+
+**Verdict: NEGATIVE at both tested points — go/no-go gate says no-go for this design as
+built.** Held to the EXP_ELO_062 bar (real matched A/B, not reasoned-about cost): a −51% to
+−80% throughput regression, worsening as sims/depth scale toward the target range (4-6
+plies, 16-32 sims) rather than amortizing, is a much larger and differently-shaped problem
+than EXP_ELO_062's −20-25%. Per that entry's own disposition, this doesn't get shipped
+default-off and left in place — recommend reverting the probe hook (`run_micro_probe` and
+its call site in `macro_mcts.rs`, the two new atomics, the new print line in `self_play.rs`)
+once Verdi has seen these numbers, keeping only this entry as the record. Net-leaf arm (128
+actors, substantial existing eval traffic) was not run — the heuristic-leaf result alone
+already answers the go/no-go question, and per this project's "size the run to the question"
+convention, doubling the matrix to confirm a regression would almost certainly be worse under
+more contention isn't a good use of a run. Real options going forward, all in Verdi's court:
+(a) batch the probe's N per-ply leaves into one `evaluate(vec![...])` call instead of N
+sequential ones — the walks are already independent, this was flagged as a future lever
+during design and directly targets the now-confirmed-dominant CPU-side cost by cutting
+redundant `rank_view` calls, not just the eval-server round-trips; (b) shrink sims/depth
+well below the tested range; (c) shelve network-leaf micro-search at this map/turn scale
+pending a fundamentally cheaper leaf-evaluation mechanism.
