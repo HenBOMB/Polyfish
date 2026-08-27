@@ -9261,3 +9261,56 @@ either way):
 - **<40%**: win/loss labels make net-leaf worse under this regime —
   investigate before concluding anything else (don't just discard the
   reading as noise below 072's own floor).
+
+### ACTUAL
+
+**Interim reading, iteration 15 (Aug 27).** Both instruments run against the
+isolated `checkpoints/gauge_1787792549_iter15.safetensors` (a scratch
+directory holding this checkpoint as `model.safetensors` for the
+calibration dump, since that binary hardcodes the `model.safetensors`
+filename and the live training loop was still writing to the worktree's
+own copy — arena reads explicit checkpoint paths so it ran directly in the
+worktree without disturbing training). Note: mid-run, the training process,
+the calibration dump, and the arena run were all killed simultaneously by
+the same environmental "teardown of process-scoped services after host
+exited" event seen during EXP_ELO_072 (confirmed via `log show`) — the
+iter15 checkpoint and `model.safetensors` were both already fully written
+and intact (verified by md5), so training resumed cleanly from iteration 16
+via `--resume 1787792549` with no lost work, and both instruments were
+simply re-run from scratch.
+
+Calibration (`--dump-value-calib --wl-labels`, 60 games, base_seed 1787400000):
+| | wl_labels+detach @ 15 | 072's detach=on @ 15 (no wl_labels) |
+|---|---|---|
+| n | 22465 | 23544 |
+| r2(root_value, final_outcome) | 0.5085 | 0.4247 |
+| r2(score_ratio) [scoreboard] | 0.2492 | 0.2909 |
+| net edge over scoreboard | **+0.2593** | +0.1339 |
+| saturation \|root_value\|>0.8 | 68.0% | 47.0% |
+| turn[30,40) r2 | 0.9997 (n=104) | 0.7844 (n=986) |
+
+Discrimination (arena, EXP_ELO_069's exact harness, 256 games,
+base_seed 1787300000, Imperius, net-asym leaf vs heuristic leaf):
+| | wl_labels+detach @ 15 | 072's detach=on @ 15 (no wl_labels) |
+|---|---|---|
+| net-asym win rate | **43.8%** (112/256) | 46.5% (119/256) |
+
+**Reading this honestly:** calibration edge nearly doubled (+0.259 vs
++0.134) — win/loss labels are bimodal and easier to fit than the score-
+ratio-blended target, and the 68% saturation rate (vs 47%) is consistent
+with a value head that's learned to push harder toward the endpoints
+rather than genuinely discriminating better. Arena win rate did not move
+with it — if anything it's fractionally lower than 072's own iter15
+reading, and squarely inside the same losing/flat band this lineage keeps
+landing in (30.9%-46.5% across every prior net-leaf reading except 072's
+own iter40). This is the calibration/discrimination decoupling pattern
+appearing a fifth time (046, 060/067, 069, 072, now here) — and the most
+mechanically legible instance yet, since win/loss labels' bimodal target
+is an obvious, direct explanation for the calibration jump without any
+implied gain in search-usable signal.
+
+**Disposition (interim): not yet conclusive — following the pre-registered
+escalation path, training continues to iteration 40** (already resumed in
+the background) before judging Step 2. 072's own iter15→iter40 arc moved
++3.9pp (46.5%→50.4%) on the SAME kind of ambiguous interim reading, so a
+flat-looking iter15 here does not by itself predict a flat iter40.
