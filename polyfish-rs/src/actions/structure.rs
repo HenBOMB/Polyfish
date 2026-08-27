@@ -11,11 +11,15 @@ use crate::types::{
     UnitType,
 };
 
-/// Helper to generate the next seed using xxHash32, matching the game's deterministic RNG
-fn next_rng_xxhash(current_seed: &mut i64, initial_seed: i64) -> i64 {
-    let next = crate::hash::get_hash(initial_seed as u32, &[*current_seed as i32]);
-    *current_seed = next as i64;
-    *current_seed
+/// Deterministic index draw for a ruin reward pick, keyed on the map's fixed
+/// `initial_seed` and the ruin's own tile — NOT on `settings.seed`, which
+/// drifts with every RNG draw made earlier in the game and would otherwise
+/// make the same ruin roll differently depending on capture order/timing.
+/// `salt` distinguishes multiple sequential picks for one capture (e.g. the
+/// reward-type pick vs. an in-reward tech pick) so they don't correlate.
+fn ruin_rng_pick(initial_seed: i64, tile_idx: i32, salt: i32, len: usize) -> usize {
+    let h = crate::hash::get_hash(initial_seed as u32, &[tile_idx, salt]);
+    (h as usize) % len
 }
 
 /// Create a structure at a tile
@@ -325,14 +329,7 @@ pub fn capture_ruin(
 ) -> UndoCallback {
     let pov_id = state.settings.current_player_turn_id;
     let mut undos: Vec<UndoCallback> = Vec::new();
-
-    // 0. Setup RNG
-    let original_seed = state.settings.seed;
-    let mut current_seed = original_seed;
-
-    undos.push(Box::new(move |s: &mut GameState| {
-        s.settings.seed = original_seed;
-    }));
+    let initial_seed = state.initial_seed;
 
     // Destroy ruins
     undos.push(destroy_structure(state, tile_idx));
@@ -361,10 +358,7 @@ pub fn capture_ruin(
                         let picked = if let Some(tech) = tech_hint {
                             tech
                         } else {
-                            let mut seed = state.settings.seed;
-                            let r = next_rng_xxhash(&mut seed, state.initial_seed);
-                            state.settings.seed = seed;
-                            let index = (r as usize) % researchable.len();
+                            let index = ruin_rng_pick(initial_seed, tile_idx, 1, researchable.len());
                             researchable[index]
                         };
 
@@ -523,11 +517,7 @@ pub fn capture_ruin(
 
         if !researchable.is_empty() {
             possible_rewards.push(Box::new(move |s: &mut GameState| -> UndoCallback {
-                let mut seed = s.settings.seed;
-                let r = next_rng_xxhash(&mut seed, s.initial_seed);
-                s.settings.seed = seed;
-
-                let index = (r as usize) % researchable.len();
+                let index = ruin_rng_pick(s.initial_seed, tile_idx, 1, researchable.len());
                 let picked = researchable[index];
 
                 if s.settings._verbose {
@@ -768,14 +758,132 @@ pub fn capture_ruin(
 
     // Pick one reward using Seed RNG
     if !possible_rewards.is_empty() {
-        let r = next_rng_xxhash(&mut current_seed, state.initial_seed);
-        let index = (r as usize) % possible_rewards.len();
-
+        let index = ruin_rng_pick(initial_seed, tile_idx, 0, possible_rewards.len());
         let reward_fn = possible_rewards.remove(index);
-
-        state.settings.seed = current_seed;
         undos.push(reward_fn(state));
     }
 
     chain_undos(undos)
+}
+
+#[cfg(test)]
+mod ruin_reward_tests {
+    use super::*;
+    use crate::coords::Coords;
+    use crate::states::{CityState, TechnologyState, TileState, TribeState};
+    use crate::types::TechnologyType;
+
+    /// Base fixture: one tribe with a capital and partial tech (so FreeTech,
+    /// PopGrowth, and Explorer are all eligible rewards), plus a Ruin on
+    /// every tile in `ruin_tiles`. FOW defaults on with no explorers set, so
+    /// every ruin has fog nearby and Explorer stays in the candidate list.
+    fn base_state(initial_seed: i64, ruin_tiles: &[i32]) -> GameState {
+        let mut state = GameState::default();
+        state.initial_seed = initial_seed;
+        state.settings.size = 11;
+        state.settings.current_player_turn_id = 1;
+        state.settings._verbose = true;
+
+        let mut tribe = TribeState::default();
+        tribe.id = 1;
+        tribe.tribe_type = TribeType::Imperius;
+        tribe.tech_vanilla = vec![TechnologyState {
+            tech_type: TechnologyType::Basic,
+            discovered: true,
+            discovered_turn: 0,
+        }];
+
+        // Capital at tile 0, away from every ruin tile so destroy_structure
+        // and reward summons never touch it.
+        let cap_idx = 0;
+        state.tiles.insert(
+            cap_idx,
+            TileState {
+                coords: Coords::from_index(cap_idx, 11),
+                terrain_type: TerrainType::Field,
+                capital_of: 1,
+                owner: 1,
+                ..Default::default()
+            },
+        );
+        tribe.cities.push(CityState {
+            owner: 1,
+            idx: cap_idx,
+            ..Default::default()
+        });
+        state.tribes.insert(1, tribe);
+
+        for &idx in ruin_tiles {
+            state.tiles.insert(
+                idx,
+                TileState {
+                    coords: Coords::from_index(idx, 11),
+                    terrain_type: TerrainType::Field,
+                    ..Default::default()
+                },
+            );
+            state.structures.insert(
+                idx,
+                Some(StructureState {
+                    structure_type: StructureType::Ruin,
+                    ..Default::default()
+                }),
+            );
+        }
+        state
+    }
+
+    /// The reward index draw must depend only on (initial_seed, tile_idx),
+    /// not on `settings.seed` — which drifts across a game's history and
+    /// previously made the same ruin roll differently depending on how much
+    /// unrelated RNG two otherwise-identical runs had already consumed.
+    #[test]
+    fn capture_ruin_reward_is_stable_across_drifted_settings_seed() {
+        let tile_idx = 42;
+        let drifted_seeds: [i64; 5] = [0, 1, 999, 123_456_789, -777];
+
+        let mut reference = base_state(7, &[tile_idx]);
+        reference.settings.seed = 5000;
+        let _ = capture_ruin(&mut reference, tile_idx, None, None, None);
+        let reference_messages = reference._messages.clone();
+        assert!(
+            !reference_messages.is_empty(),
+            "expected a reward message to be pushed"
+        );
+
+        for &drifted_seed in &drifted_seeds {
+            let mut state = base_state(7, &[tile_idx]);
+            state.settings.seed = drifted_seed;
+            let _ = capture_ruin(&mut state, tile_idx, None, None, None);
+            assert_eq!(
+                state._messages, reference_messages,
+                "ruin reward diverged with settings.seed={} (expected same as reference)",
+                drifted_seed
+            );
+        }
+    }
+
+    /// Guard against over-correction: distinct tiles on the same map
+    /// (same initial_seed) must still be able to roll different rewards.
+    #[test]
+    fn capture_ruin_reward_varies_by_tile() {
+        let tile_indices: [i32; 6] = [1, 2, 3, 4, 5, 6];
+        let mut state = base_state(7, &tile_indices);
+        state.settings.seed = 999_999;
+
+        let mut outcomes = Vec::new();
+        for &idx in &tile_indices {
+            let before = state._messages.len();
+            let _ = capture_ruin(&mut state, idx, None, None, None);
+            let msg = state._messages[before..].join("|");
+            outcomes.push(msg);
+        }
+
+        let all_same = outcomes.windows(2).all(|w| w[0] == w[1]);
+        assert!(
+            !all_same,
+            "expected varying rewards across tiles, got identical outcomes: {:?}",
+            outcomes
+        );
+    }
 }
