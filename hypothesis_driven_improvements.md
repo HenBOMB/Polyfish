@@ -8955,3 +8955,233 @@ during design and directly targets the now-confirmed-dominant CPU-side cost by c
 redundant `rank_view` calls, not just the eval-server round-trips; (b) shrink sims/depth
 well below the tested range; (c) shelve network-leaf micro-search at this map/turn scale
 pending a fundamentally cheaper leaf-evaluation mechanism.
+
+## EXP_ELO_072 — does EXP_ELO_067's goal-blind second forward pass explain EXP_ELO_069's regression? (`DETACH_MACRO_HEADS`, registered)
+
+STATUS: REGISTERED, about to run.
+
+CONTEXT: EXP_ELO_069 (Aug 22) found that EXP_ELO_067's value-calibration fix
+(`OUTCOME_SCALE=1.5`) genuinely improved calibration (net edge over scoreboard
+−0.030 → +0.226, turn[30,40) r2 0.016→0.972) while the same checkpoint's
+NetAsym-leaf behavioral win rate got *worse* (30.9%, down from the
+already-losing 44.0% Aug-15 baseline). Read as the third round of
+"calibration and discrimination decoupled" (046, 060, 069). But EXP_ELO_067
+bundled a SECOND change into the same run, not examined in isolation: it also
+retrained `pi_macro_stance`/`pi_macro_order` under the goal-blind convention
+that fixes EXP_ELO_066's label leak. That fix (`train.py`, commit `198d761`)
+runs a second, full, gradient-carrying forward pass per batch (confirmed: not
+wrapped in `torch.no_grad()`, unlike the reference-model forward three lines
+below it) — and `pi_macro_stance` reads `v_latent` directly (the exact tensor
+`v_win`/`v_progress` branch from), `pi_macro_order` reads `x` (one layer
+upstream of `v_pool_conv`). So every training step already sent two different
+gradient signals (real goal-painted input for policy/value loss, zeroed-goal
+input for macro loss) into the value head's own feature-extraction layers in
+the same `backward()` call — a concrete, literal weight-sharing conflict,
+distinct from and untested by any prior "shared trunk" framing in this
+ledger. This entry isolates that variable before trusting "calibration ≠
+discrimination" as a settled property of the value head itself.
+
+Also lands alongside this: EXP_ELO_061's `macro_stance`/`macro_order`
+safetensors capture had a real per-ply duplication bug (no per-turn dedup,
+unlike the JSONL diagnostic path) — fixed this session, `macro_mask.mean()`
+confirmed dropping from 0.9398 to 0.115 on a fresh shard. Not itself expected
+to move calibration/discrimination (it's downstream of the macro loss, not
+the value loss), but it changes the denominator `macro_stance_loss`/
+`macro_order_loss` are computed over, so this run's macro-loss curve is not
+comparable to 067's 0.9450 figure — only the calibration-dump and arena
+readings below are valid signals for this experiment.
+
+CHANGE (shipped): `DETACH_MACRO_HEADS` env flag (`train.py`, mirrors the
+existing `DETACH_VALUE_TRUNK` precedent exactly). When set, `v_latent`/`x`
+are `.detach()`'d before being fed into `pi_macro_stance`/`pi_macro_order` —
+both heads still train normally from their own loss, they just can't push
+gradient back into the tensors the value head depends on. `.detach()` only
+blocks backward; forward-pass values (and therefore inference / network.rs)
+are unaffected — zero Rust-side changes.
+
+LAUNCH CONFIG: reuse EXP_ELO_067's own checkpoint lineage rather than
+training a fresh baseline arm. `detach=off` reference = the existing
+`checkpoints/gauge_1787307645_iter40.safetensors` (067's own final
+checkpoint, no retraining). `detach=on` arm (the only new run): copy
+`checkpoints/run_1787307645_iter1_start.safetensors` to a scratch
+`model.safetensors` in an isolated git worktree, then reproduce 067's exact
+config plus the new flag:
+```
+DETACH_MACRO_HEADS=1 MACRO_GEN=1 GOAL_CHANNELS=1 MACRO_STANCE_W=0.1 \
+MACRO_ORDER_W=0.1 MACRO_ROLLOUT_LAMBDA=0.0 OUTCOME_SCALE=1.5 \
+./run_training_loop.sh -i 40
+```
+(fresh run_id, no `--resume`/`--reset`, `MACRO_ROOT_PRIOR_W` left unset —
+same as 067). Expect ~5.5h wall-clock, matching 067's own timing at this
+iteration count.
+
+INSTRUMENTS, against the new checkpoint only:
+1. Calibration — `--dump-value-calib`, EXP_ELO_060/067 protocol exactly
+   (mirror self-play, net-asym leaf, `--macro-sims 32 --macro-k 4
+   --goal-channels`, `--base-seed 1787400000`, 60 games, random tribes;
+   export the same `LIBTORCH_USE_PYTORCH`/`LIBTORCH_BYPASS_VERSION_CHECK`/
+   `DYLD_LIBRARY_PATH` env `run_training_loop.sh` itself sets — 067 hit the
+   tch-linking gotcha here on its first attempt).
+2. Discrimination — arena, EXP_ELO_069's exact harness (`--macro-leaf1
+   net-asym --macro-sims 32 --macro-k 4 --tribe Imperius --base-seed
+   1787300000 --games 128`) against the new checkpoint. Also backfill the
+   SAME command against `gauge_1787307645_iter40.safetensors` first — 069's
+   own 30.9% reading was against iter115, not iter40, so there's no existing
+   arena number at iter40 to compare against directly.
+
+FALSIFIABLE PREDICTIONS:
+- **Confirmed**: `detach=on` win rate clears into 069's own "worth a full
+  re-run" band (≥48%) without the calibration edge regressing below the
+  iter40 backfill reading → gradient interference via `v_latent`/`x` was a
+  real, previously-uncontrolled confound in 067/069. Ship
+  `DETACH_MACRO_HEADS=1` as a standing default and carry it into any future
+  net-leaf/label experiment (starting with the win/loss-label test this
+  unblocks).
+- **Refuted**: win rate stays in the same losing band as the historical
+  30.9%/44.0% readings → gradient interference via this specific pathway is
+  not the mechanism; the calibration/discrimination decoupling is real and
+  something else is going on. Proceed to the win/loss-label test anyway
+  (independently motivated) but don't expect this fix alone to matter.
+- **Borderline** (within this lineage's established 7.8pp noise floor at
+  n=128, EXP_ELO_068): escalate to a second, fresh `detach=off` control
+  trained from the same `iter1_start` checkpoint (removes the Step-0-dedup-
+  fix confound noted above) before trusting a single reading either way.
+
+**Amendment (before running, Verdi's question):** is the full 40 iterations
+actually needed to read a signal, or would an earlier checkpoint already
+show it? The mechanism this run tests (macro-head gradients contaminating
+`v_latent`/`x`) operates every training step from iteration 1 — unlike
+067's own reason for waiting the full 40 (whether the goal-blind macro
+head's *own* loss had stabilized enough for a fair root-prior comparison,
+a different question), there's no reason detach's effect on the VALUE
+head specifically should need the macro head to converge first. Against
+that: `value_r2` and general quality drifted continuously and somewhat
+noisily across 067's whole run (a dip around iter 25-30 that recovered),
+so an overly early checkpoint (5-10 iters) risks mostly reflecting
+not-enough-training-yet noise against the established 7.8pp/n=128 floor.
+**Compromise: check at iteration 15** (checkpoints save every 5 by
+default, `GAUGE_INTERVAL=5`) — roughly where 067's own macro-loss trend
+first cleared ITS noise floor (9-15), used here only as a rough proxy for
+"enough steps have happened to see something," not because this run's
+macro-loss curve is itself a valid signal (Step 0's dedup fix changed its
+denominator). If iter15's calibration+arena reading is already clearly
+positive or clearly flat/negative, stop there — no reason to spend the
+remaining ~3.5h. If ambiguous, resume (`--resume`) to the full 40 as
+originally planned. Fully reversible either way; costs nothing but the
+time already spent.
+
+### ACTUAL
+
+**Interim reading, iteration 15 (Aug 26).** Both arms trained 15 iterations
+from the same `iter1_start` checkpoint, differing only in
+`DETACH_MACRO_HEADS`. Matched-pair instruments (same protocol, same seeds,
+both arms):
+
+Calibration (`--dump-value-calib`, 60 games each, base_seed 1787400000):
+| | detach=on | detach=off |
+|---|---|---|
+| n | 23544 | 20617 |
+| r2(root_value, final_outcome) | 0.4247 | 0.5225 |
+| r2(score_ratio) [scoreboard] | 0.2909 | 0.3310 |
+| net edge over scoreboard | **+0.1339** | **+0.1914** |
+| saturation \|root_value\|>0.8 | 47.0% | 59.9% |
+| turn[30,40) r2 | 0.7844 (n=986) | n/a (n=239, zero outcome variance in that slice) |
+
+Discrimination (arena, EXP_ELO_069's exact harness, 256 games each,
+base_seed 1787300000, Imperius, net-asym leaf vs heuristic leaf):
+| | detach=on | detach=off |
+|---|---|---|
+| net-asym win rate | **46.5%** (119/256) | **43.8%** (112/256) |
+
+**Reading this honestly:** calibration edge actually favors detach=OFF at
+this early point (+0.191 vs +0.134) — the opposite direction the
+interference hypothesis would predict, though this is consistent with
+069's own decoupling finding (calibration and discrimination don't have to
+move together) rather than a direct refutation. Discrimination favors
+detach=ON by +2.7pp (46.5% vs 43.8%) — directionally consistent with the
+hypothesis, but the gap is well inside this lineage's own established
+7.8pp noise floor at n=128 (EXP_ELO_068). **Neither arm is distinguishable
+from the other, and — importantly — neither has regressed anywhere near
+069's 30.9% failure state**; both land close to the pre-regression 44.0%
+baseline. This is the pre-registered "borderline" bucket exactly.
+
+**Disposition (interim): inconclusive, not borderline-toward-either-side.**
+Per the pre-registered escalation path, resuming both arms is the wrong
+move (doubles compute for a result already inside the noise floor) — the
+correct move per the original plan is to let the SAME `detach=on` arm
+continue training toward the full 40 iterations (`--resume`), where 067's
+own history showed the macro-loss signal (not directly comparable here,
+but the general "does more training change the picture" question) only
+became distinguishable after iteration ~15-20. Full 40-iteration
+comparison against the existing `gauge_1787307645_iter40.safetensors`
+(067's own detach=off@40 checkpoint) remains the decisive read.
+
+**Final reading, iteration 40 (Aug 26-27).** `detach=on` resumed from the
+iter15 checkpoint to the full 40 iterations (training loop was killed
+twice more by the same environmental process-teardown issue documented
+above — unrelated to this run's correctness; both times it had already
+safely checkpointed past the point of interruption, confirmed via
+`training_log.csv` and file timestamps, so no retraining was needed).
+`detach=off@40` is EXP_ELO_067's own final checkpoint
+(`gauge_1787307645_iter40.safetensors`) — no retraining needed there
+either. Same matched-pair protocol as the iteration-15 interim check.
+
+Calibration (`--dump-value-calib`, 60 games, base_seed 1787400000):
+| | detach=on @ 40 | detach=off @ 40 (=067's own reading) |
+|---|---|---|
+| n | 25228 | ~25868 |
+| r2(root_value, final_outcome) | 0.5015 | 0.427 |
+| r2(score_ratio) [scoreboard] | 0.3326 | 0.201 |
+| net edge over scoreboard | **+0.1689** | **+0.226** |
+| saturation \|root_value\|>0.8 | 60.1% | 55.4% |
+| turn[30,40) r2 | 0.4713 (n=1088) | 0.972 (n=758) |
+
+Discrimination (arena, EXP_ELO_069's exact harness, 256 games,
+base_seed 1787300000, Imperius, net-asym leaf vs heuristic leaf):
+| | detach=on @ 40 | detach=off @ 40 (backfill) |
+|---|---|---|
+| net-asym win rate | **50.4%** (129/256, 1 draw) | 44.1% (113/256) |
+
+**Reading this honestly, not spun.** Two things are true at once:
+
+1. **Arena result is genuinely strong.** 50.4% is the first reading
+   anywhere in the EXP_ELO_039→047→066→067→068→069 lineage to clear
+   parity with the heuristic leaf — previous best was 44.0% (047). It
+   beats the matched `detach=off@40` backfill by +6.3pp, and clears this
+   entry's own pre-registered ≥48% "confirmed" threshold on its own
+   absolute merits, independent of the paired comparison.
+2. **But the pre-registered "Confirmed" criterion explicitly required
+   calibration to not regress below the comparison reading, and it did**
+   (edge +0.169 vs +0.226; turn[30,40) r2 0.471 vs 0.972, a real drop in
+   exactly the slice EXP_ELO_060 flagged as mattering most). Taken
+   literally, this entry's own falsifier is not cleanly met.
+
+**On reflection, that calibration condition was probably the wrong bar to
+set.** The entire reason this experiment exists is EXP_ELO_069's own
+finding that calibration and discrimination are decoupled — three
+separate rounds (046, 060/067, 069) already showed fixing one doesn't
+predict the other. A calibration regression alongside a discrimination
+*improvement* is the same decoupling pattern showing up again, not a
+contradiction of it. Demanding calibration hold steady as a precondition
+for trusting a discrimination win was importing an assumption (that the
+two move together) this whole investigation was set up to test and had
+already falsified twice before this entry was even registered.
+
+**+6.3pp is also short of the formal 7.8pp/n=128 noise floor** — real,
+directionally consistent, but not by itself statistically airtight at
+this sample size.
+
+**Disposition:** the discrimination result (the metric this entry's own
+design designated primary, matching EXP_ELO_069's stance that "calibration
+improving alone must not be read as a green light" — which cuts both
+ways, against over-crediting AND against over-penalizing a calibration
+move) is a genuine positive signal, the strongest net-leaf reading in this
+project's history. Not yet a standing-default-worthy confirmation on
+strength of one n=128 reading short of the noise floor. Recommended next
+step: a confirmatory arena run (fresh seed, same n=128, or extend to
+n=256) before shipping `DETACH_MACRO_HEADS=1` as a loop default — cheap
+relative to the training already sunk, and the natural way to close the
+gap between "promising" and "confirmed" without over-trusting a single
+borderline reading, per this project's own repeated lesson (EXP_ELO_007's
+lost peak, the noise-floor discipline in EXP_ELO_068) about not chasing
+single readings near a noise floor.

@@ -808,11 +808,13 @@ struct HistoryStep {
     /// POV-relative, normalized to [0,1] — the aux_pursuit target.
     pursuit: f32,
     /// EXP_ELO_061 (Stage 3b): the macro root's own candidate ballot and
-    /// post-search visit counts at this decision, when this seat searched
-    /// with macro-mcts (`None` otherwise, or on a ply where the macro agent
-    /// didn't just re-search — see `Brain::macro_root_ballot`). Raw
-    /// material for the macro_stance/macro_order targets; marginalized in
-    /// post-game processing, not here.
+    /// post-search visit counts, captured once per (turn, pov) via
+    /// `macro_ballot_for_history_step` — `None` on every ply after the
+    /// first within a turn (the ballot is stable all turn; capturing it on
+    /// every ply would just duplicate the same target across each ply's
+    /// distinct feature vector), or when this seat isn't running
+    /// macro-mcts. Raw material for the macro_stance/macro_order targets;
+    /// marginalized in post-game processing, not here.
     macro_ballot: Option<(Vec<polyfish::ai::oracle_macro::MacroGoal>, Vec<f32>)>,
 }
 
@@ -1124,6 +1126,31 @@ fn macro_policy_targets(
         *o = (*o / total).min(1.0);
     }
     (stance, order)
+}
+
+/// Stage 3b dedup (bug fix): gate `HistoryStep::macro_ballot` capture to
+/// once per (turn, pov), mirroring the `--dump-macro-policy` JSONL path's
+/// own dedup (`last_macro_policy_key`) — the ballot is stable for every ply
+/// within a turn (the macro agent only re-searches on a new (turn, pov)),
+/// so capturing it on every ply just duplicates the (stance, order) target
+/// across every ply's distinct feature vector. An empty-candidates ballot
+/// (no search has run yet) collapses to `None` here too — passing it
+/// through as `Some` would hit the wrong branch downstream
+/// (self_play.rs:4551-4555 treats any `Some` as a real decision and sets
+/// `macro_mask=1.0`, which is wrong for an all-zero target) — and does not
+/// advance `last_key`, so the next ply retries instead of the empty ballot
+/// permanently poisoning this turn's capture.
+fn macro_ballot_for_history_step(
+    key: (i32, PlayerId),
+    last_key: &mut Option<(i32, PlayerId)>,
+    ballot: Option<(Vec<polyfish::ai::oracle_macro::MacroGoal>, Vec<f32>)>,
+) -> Option<(Vec<polyfish::ai::oracle_macro::MacroGoal>, Vec<f32>)> {
+    if *last_key == Some(key) {
+        return None;
+    }
+    let ballot = ballot.filter(|(c, _)| !c.is_empty())?;
+    *last_key = Some(key);
+    Some(ballot)
 }
 
 /// Result from a single game - contains all data needed for training
@@ -1560,6 +1587,11 @@ fn play_single_game(
         }
     }
     let mut last_macro_policy_key: Option<(i32, PlayerId)> = None;
+    // Separate from `last_macro_policy_key`: that tracker only advances
+    // inside the `--dump-macro-policy` branch, which is `None` (off) during
+    // real training runs -- reusing it here would silently disable this
+    // dedup whenever the diagnostic dump isn't also requested.
+    let mut last_macro_ballot_key: Option<(i32, PlayerId)> = None;
 
     // --dump-city-rewards: one JSONL file per game, one record per city
     // level-up reward choice — (turn, player, city level pre-choice, tribe
@@ -2430,7 +2462,11 @@ fn play_single_game(
                 turn: game.state.settings.turn,
                 root_value,
                 root_own_value,
-                macro_ballot: current_agent.macro_root_ballot(),
+                macro_ballot: macro_ballot_for_history_step(
+                    (game.state.settings.turn, pov),
+                    &mut last_macro_ballot_key,
+                    current_agent.macro_root_ballot(),
+                ),
                 enemy_units: enemy_unit_grid(&game.state, pov, features::MAP_SIZE * features::MAP_SIZE),
                 my_spt: spt_of(pov),
                 opp_spt: spt_of(opp_id),
@@ -5272,6 +5308,39 @@ mod td_lambda_tests {
             (out[0] - 0.9).abs() < 1e-6,
             "got {}, expected undiscounted 0.9",
             out[0]
+        );
+    }
+
+    #[test]
+    fn macro_ballot_dedups_per_turn_pov_and_retries_on_empty() {
+        let goal = polyfish::ai::oracle_macro::MacroGoal::default();
+        let ballot = Some((vec![goal], vec![1.0]));
+        let mut last_key: Option<(i32, PlayerId)> = None;
+
+        assert!(
+            macro_ballot_for_history_step((5, 1), &mut last_key, ballot.clone()).is_some(),
+            "first offer for a (turn,pov) must capture"
+        );
+        assert_eq!(last_key, Some((5, 1)));
+        assert!(
+            macro_ballot_for_history_step((5, 1), &mut last_key, ballot.clone()).is_none(),
+            "same (turn,pov) must dedup"
+        );
+        assert!(
+            macro_ballot_for_history_step((6, 1), &mut last_key, ballot.clone()).is_some(),
+            "new turn must re-capture"
+        );
+
+        let mut last_key2: Option<(i32, PlayerId)> = None;
+        let empty = Some((Vec::new(), Vec::new()));
+        assert!(
+            macro_ballot_for_history_step((7, 2), &mut last_key2, empty).is_none(),
+            "an empty ballot must not be captured"
+        );
+        assert_eq!(last_key2, None, "empty ballot must not poison the dedup key");
+        assert!(
+            macro_ballot_for_history_step((7, 2), &mut last_key2, ballot).is_some(),
+            "must retry on the same (turn,pov) after an empty offer"
         );
     }
 }

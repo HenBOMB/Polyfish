@@ -39,6 +39,19 @@ VALUE_LOSS_WEIGHT = float(os.environ.get("VALUE_LOSS_WEIGHT", "3.0"))
 # Forward-pass values are identical either way, so this is training-only and
 # needs no change on the Rust/candle inference side.
 DETACH_VALUE_TRUNK = os.environ.get("DETACH_VALUE_TRUNK", "0") == "1"
+# EXP_ELO_072: cut macro_stance/macro_order's gradient from reshaping the
+# value head's OWN feature-extraction layers. pi_macro_stance reads
+# v_latent -- the same tensor v_win/v_progress branch from -- and
+# pi_macro_order reads x, the shared trunk v_pool_conv also consumes.
+# Neither path is touched by DETACH_VALUE_TRUNK (that only cuts the value
+# head's own input, not the macro heads' consumption of value-relevant
+# tensors). Since EXP_ELO_066's goal-blind fix, both heads are read off a
+# SECOND, full, gradient-carrying forward pass per batch (not wrapped in
+# torch.no_grad(), confirmed) -- so every step already sends two different
+# gradient signals into these shared layers before this flag exists.
+# Detach only blocks backward; forward values are identical either way, so
+# network.rs needs zero changes, exactly the DETACH_VALUE_TRUNK precedent.
+DETACH_MACRO_HEADS = os.environ.get("DETACH_MACRO_HEADS", "0") == "1"
 # Random rot90/flip per batch (D4 dihedral): 8x effective spatial data.
 # Geometrically valid (no feature plane, player scalar, or rule is
 # orientation-dependent) but OFF by default: enabling it MID-RUN on the
@@ -287,8 +300,12 @@ class PolyZeroNet(nn.Module):
         # EXP_ELO_061: reads v_latent (stance) / x (order) -- the SAME
         # trunk tensors network.rs's mirror reads (v_latent there too,
         # `shared` there == x here), post cross-attention either way.
-        values['macro_stance'] = torch.softmax(self.pi_macro_stance(v_latent), dim=1)
-        values['macro_order'] = torch.sigmoid(self.pi_macro_order(x).flatten(1))
+        # EXP_ELO_072: optionally detached (see DETACH_MACRO_HEADS above) so
+        # these heads' loss can't reshape the tensors the value head reads.
+        stance_input = v_latent.detach() if DETACH_MACRO_HEADS else v_latent
+        order_input = x.detach() if DETACH_MACRO_HEADS else x
+        values['macro_stance'] = torch.softmax(self.pi_macro_stance(stance_input), dim=1)
+        values['macro_order'] = torch.sigmoid(self.pi_macro_order(order_input).flatten(1))
 
         return policy, values, aux
 
