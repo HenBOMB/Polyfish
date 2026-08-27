@@ -9314,3 +9314,71 @@ escalation path, training continues to iteration 40** (already resumed in
 the background) before judging Step 2. 072's own iter15→iter40 arc moved
 +3.9pp (46.5%→50.4%) on the SAME kind of ambiguous interim reading, so a
 flat-looking iter15 here does not by itself predict a flat iter40.
+
+**Final reading, iteration 40 (Aug 27).** Same checkpoint lineage
+(`gauge_1787792549_iter40.safetensors`), same matched-pair protocol. (Two
+more environmental process-teardown kills hit during this stretch — one
+after training had already fully completed all 40 iterations and was only
+mid-way through the loop's own trailing gauge-arena step, confirmed via
+`training_log.csv`'s complete 40-row record; one mid-instrument-run on the
+first calibration+arena attempt at iter40. Both re-runs used the intact,
+unaffected checkpoint — no retraining needed either time.)
+
+Calibration (`--dump-value-calib --wl-labels`, 60 games, base_seed 1787400000):
+| | wl_labels+detach @ 40 | 072's detach=on @ 40 (no wl_labels) |
+|---|---|---|
+| n | 23085 | 25228 |
+| r2(root_value, final_outcome) | 0.6150 | 0.5015 |
+| r2(score_ratio) [scoreboard] | 0.2541 | 0.3326 |
+| net edge over scoreboard | **+0.3609** | +0.1689 |
+| saturation \|root_value\|>0.8 | 73.1% | 60.1% |
+| turn[30,40) r2 | 0.9975 (n=627) | 0.4713 (n=1088) |
+
+Discrimination (arena, 256 games, base_seed 1787300000, Imperius, net-asym
+leaf vs heuristic leaf):
+| | wl_labels+detach @ 40 | 072's detach=on @ 40 (no wl_labels) |
+|---|---|---|
+| net-asym win rate | **48.8%** (125/256) | 50.4% (129/256, 1 draw) |
+
+**Reading this honestly.** Two things, again both true at once:
+
+1. **Win rate clears this entry's own pre-registered ≥48% bar** — 48.8%,
+   the second-best net-leaf reading in this project's entire history
+   (behind only 072's own 50.4%), and both readings now cluster in the
+   same strong band, ~7pp above every prior net-leaf reading before
+   `DETACH_MACRO_HEADS=1` existed (30.9%-46.5% across 039-069).
+2. **But it does NOT beat 072's own detach-only reading** — 48.8% vs
+   50.4%, a −1.6pp gap, comfortably inside the noise floor, so "did WL
+   labels help on top of detach" reads as **flat, not additive** — the
+   two levers do not compound; adding `WL_LABELS=1` to an already-detached
+   run lands in the same place `DETACH_MACRO_HEADS=1` reaches alone.
+3. **Calibration edge (+0.361) is the highest ever recorded in this
+   entire lineage** — more than double 072's own detach-only reading
+   (+0.169), and saturation climbed again (73.1% vs 60.1%). This is the
+   sharpest version yet of the same story from the iteration-15 interim
+   read: win/loss labels make the value head's own self-consistency
+   number look dramatically better (bimodal target, trivially fit at the
+   extremes) with **no corresponding discrimination gain** — if anything
+   a slightly worse one. This is now the single clearest piece of evidence
+   in the whole ledger that this project's calibration metric, on its
+   own, should not be trusted as a proxy for search-usable value quality
+   when the label scheme itself is what's changing — a stronger version
+   of the 046/060-067/069/072 decoupling finding, since here the metric
+   moved by the largest margin ever recorded while performance moved
+   backward.
+
+**Disposition:** `WL_LABELS=1` is not disqualified (net-leaf quality does
+not regress, and clears the falsifier's absolute bar), but it earns no
+seat as an addition to the standing default — it doesn't improve on
+`DETACH_MACRO_HEADS=1` alone, and its most dramatic-looking effect (the
++0.36 calibration edge) is now the clearest demonstrated instance of why
+calibration should never be read as a green light by itself. **Recommendation:
+ship `DETACH_MACRO_HEADS=1` alone as the standing default** (per 072,
+still itself short of the 128-seed noise floor and worth a confirmatory
+run before a hard commit); do not add `WL_LABELS=1` to it — it adds
+training-loop complexity and a misleading calibration signal for no
+measured discrimination benefit. T2's original goal (a working net-leaf
+macro-mcts) has, for the first time, cleared parity with the heuristic
+leaf twice in a row under two different but overlapping configurations —
+worth a confirmatory run (fresh seed or larger n) on `DETACH_MACRO_HEADS=1`
+alone before either shipping it as default or moving to T3 distillation.
