@@ -69,6 +69,8 @@ polyfish-rs/worker/manifest.env
 # Telemetry JSON
 polyfish-rs/.*.json
 polyfish-rs/*.json
+# Curated eval fixture, not telemetry -- keep tracked.
+!polyfish-rs/eval_seeds.json
 polyfish-rs/.current_run
 turnstates_*/
 decision_traces_*/

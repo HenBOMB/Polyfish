@@ -194,6 +194,13 @@ struct Args {
     #[arg(long, default_value_t = 0)]
     base_seed: u64,
 
+    /// JSON file with a fixed `{"seeds": [...]}` list (see
+    /// eval_seeds.json) — seed pair idx uses seeds[idx] instead of
+    /// base_seed + idx. Errors if --games exceeds the list length rather
+    /// than wrapping. Unset: --base-seed behavior is unchanged.
+    #[arg(long)]
+    seed_file: Option<String>,
+
     /// EXP_ELO_028: drive config 1's goal channels with the Stage-1 scripted
     /// goal-setter (orders + stance + star gate) each ply. Gumbel backend1
     /// only. For probing goal-conditioned nets; a net trained without goal
@@ -1351,6 +1358,35 @@ fn backend_from_arg(arg: SearchBackendArg, k: usize) -> SearchBackend {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct SeedFile {
+    seeds: Vec<i64>,
+}
+
+/// Loads a fixed seed list (see eval_seeds.json). Errors rather than
+/// silently wrapping if it's shorter than the seed-pair count requested.
+fn load_seed_file(path: &str, needed: usize) -> anyhow::Result<Vec<i64>> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("reading --seed-file {path}: {e}"))?;
+    let parsed: SeedFile = serde_json::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("parsing --seed-file {path}: {e}"))?;
+    anyhow::ensure!(
+        parsed.seeds.len() >= needed,
+        "--seed-file {path} has {} seeds but {needed} seed pairs (--games) were requested",
+        parsed.seeds.len()
+    );
+    Ok(parsed.seeds)
+}
+
+/// Seed-pair index i's map seed: `seed_list[i]` when a fixed list is given,
+/// else the legacy `base_seed + i` derivation.
+fn seed_for_game(i: usize, base_seed: u64, seed_list: Option<&[i64]>) -> i64 {
+    match seed_list {
+        Some(list) => list[i],
+        None => (base_seed + i as u64) as i64,
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
@@ -1565,6 +1601,12 @@ fn main() -> anyhow::Result<()> {
             .as_secs()
     };
 
+    let seed_list: Option<Vec<i64>> = args
+        .seed_file
+        .as_ref()
+        .map(|path| load_seed_file(path, args.games))
+        .transpose()?;
+
     let total_games = args.games * 2;
 
     // EXP_ELO_061: the 4x-oversubscription default assumes workers park
@@ -1668,13 +1710,14 @@ fn main() -> anyhow::Result<()> {
             let results_mutex = &results_mutex;
             let completed = &completed;
             let skipped = &skipped;
+            let seed_list = &seed_list;
             scope.spawn(move || {
                 loop {
                     let idx = job_counter.fetch_add(1, Ordering::Relaxed);
                     if idx >= total_games {
                         break;
                     }
-                    let seed = (base_seed + (idx / 2) as u64) as i64;
+                    let seed = seed_for_game(idx / 2, base_seed, seed_list.as_deref());
                     let swap = idx % 2 == 1;
 
                     // Catches ordinary game-logic panics on this thread. A
@@ -1937,4 +1980,38 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+// NOTE: `arena` has `test = false` in Cargo.toml (like most src/bin/ tools),
+// so this module doesn't run under `cargo test` — it's kept in sync with
+// self_play.rs's identical seed_selection_tests for when that changes.
+#[cfg(test)]
+mod seed_selection_tests {
+    use super::*;
+
+    #[test]
+    fn no_seed_file_derives_base_seed_plus_i_unchanged() {
+        for i in 0..5usize {
+            assert_eq!(seed_for_game(i, 1787300000, None), (1787300000u64 + i as u64) as i64);
+        }
+    }
+
+    #[test]
+    fn seed_file_uses_exact_listed_seeds_not_the_derived_sequence() {
+        let list = vec![42i64, 9001, 7, 123456789];
+        for (i, &expected) in list.iter().enumerate() {
+            let got = seed_for_game(i, 1787300000, Some(&list));
+            assert_eq!(got, expected);
+            assert_ne!(got, (1787300000u64 + i as u64) as i64);
+        }
+    }
+
+    #[test]
+    fn seed_file_shorter_than_game_count_errors_loudly() {
+        let tmp = std::env::temp_dir().join(format!("polyfish_arena_seed_file_test_{}.json", std::process::id()));
+        std::fs::write(&tmp, r#"{"seeds": [1, 2, 3]}"#).unwrap();
+        let result = load_seed_file(tmp.to_str().unwrap(), 4);
+        std::fs::remove_file(&tmp).ok();
+        assert!(result.is_err(), "requesting more seed pairs than seeds must error, not wrap");
+    }
 }

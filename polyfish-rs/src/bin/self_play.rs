@@ -3014,6 +3014,35 @@ fn group_recap(flat: Vec<(i32, i32, serde_json::Value)>) -> Vec<ReplayTurn> {
     turns
 }
 
+#[derive(serde::Deserialize)]
+struct SeedFile {
+    seeds: Vec<i64>,
+}
+
+/// Loads a fixed seed list (see eval_seeds.json). Errors rather than
+/// silently wrapping if it's shorter than the game count requested.
+fn load_seed_file(path: &str, needed: usize) -> anyhow::Result<Vec<i64>> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("reading --seed-file {path}: {e}"))?;
+    let parsed: SeedFile = serde_json::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("parsing --seed-file {path}: {e}"))?;
+    anyhow::ensure!(
+        parsed.seeds.len() >= needed,
+        "--seed-file {path} has {} seeds but {needed} games were requested",
+        parsed.seeds.len()
+    );
+    Ok(parsed.seeds)
+}
+
+/// Game i's map seed: `seed_list[i]` when a fixed list is given, else the
+/// legacy `base_seed + i` derivation.
+fn seed_for_game(i: usize, base_seed: u64, seed_list: Option<&[i64]>) -> i64 {
+    match seed_list {
+        Some(list) => list[i],
+        None => (base_seed + i as u64) as i64,
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     use clap::Parser;
 
@@ -3203,6 +3232,13 @@ fn main() -> anyhow::Result<()> {
         /// behavioral effects these runs are usually measuring (EXP_GATE_001).
         #[arg(long, default_value_t = 0)]
         base_seed: u64,
+
+        /// JSON file with a fixed `{"seeds": [...]}` list (see
+        /// eval_seeds.json) — game i plays seeds[i] instead of base_seed + i.
+        /// Errors if --num-games exceeds the list length rather than
+        /// wrapping. Unset: --base-seed behavior is unchanged.
+        #[arg(long)]
+        seed_file: Option<String>,
 
         /// Current training iteration (for curriculum learning)
         #[arg(long, default_value_t = 1)]
@@ -3526,6 +3562,12 @@ fn main() -> anyhow::Result<()> {
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs()
     };
 
+    let seed_list: Option<Vec<i64>> = args
+        .seed_file
+        .as_ref()
+        .map(|path| load_seed_file(path, args.num_games))
+        .transpose()?;
+
     // Pool of tribes to draw from when tribe1/tribe2 aren't pinned via CLI args.
     // Each game in this run independently samples its own pair from this pool
     // (see `pick_tribes` below), rather than the whole run sharing one fixed pair.
@@ -3708,6 +3750,7 @@ fn main() -> anyhow::Result<()> {
             let eval2 = &eval2;
             let args = &args;
             let all_tribes = &all_tribes;
+            let seed_list = &seed_list;
             scope.spawn(move || {
                 loop {
                     let i = job_counter.fetch_add(1, Ordering::Relaxed);
@@ -3715,7 +3758,7 @@ fn main() -> anyhow::Result<()> {
                         break;
                     }
 
-                    let seed = (base_seed + i as u64) as i64;
+                    let seed = seed_for_game(i, base_seed, seed_list.as_deref());
                     let swap_players = i % 2 == 1; // Swap every other game
                     let (p1_net, p2_net, p1_eval, p2_eval) = if swap_players {
                         (&**network2, &**network1, eval2, eval1)
@@ -5505,5 +5548,48 @@ mod aux_target_tests {
         assert_eq!(spt_target(cp.get(&1), 9, 99, 98), (99, 98));
         // Unknown player -> final fallback.
         assert_eq!(spt_target(cp.get(&7), 0, 1, 2), (1, 2));
+    }
+}
+
+#[cfg(test)]
+mod seed_selection_tests {
+    use super::*;
+
+    #[test]
+    fn no_seed_file_derives_base_seed_plus_i_unchanged() {
+        for i in 0..5usize {
+            assert_eq!(seed_for_game(i, 1787300000, None), (1787300000u64 + i as u64) as i64);
+        }
+    }
+
+    #[test]
+    fn seed_file_uses_exact_listed_seeds_not_the_derived_sequence() {
+        let list = vec![42i64, 9001, 7, 123456789];
+        for (i, &expected) in list.iter().enumerate() {
+            let got = seed_for_game(i, 1787300000, Some(&list));
+            assert_eq!(got, expected);
+            // Distinct from what base_seed + i would have produced, so this
+            // is actually exercising the fixed list, not coincidentally
+            // matching the legacy derivation.
+            assert_ne!(got, (1787300000u64 + i as u64) as i64);
+        }
+    }
+
+    #[test]
+    fn seed_file_shorter_than_game_count_errors_loudly() {
+        let tmp = std::env::temp_dir().join(format!("polyfish_seed_file_test_{}.json", std::process::id()));
+        std::fs::write(&tmp, r#"{"seeds": [1, 2, 3]}"#).unwrap();
+        let result = load_seed_file(tmp.to_str().unwrap(), 4);
+        std::fs::remove_file(&tmp).ok();
+        assert!(result.is_err(), "requesting more games than seeds must error, not wrap");
+    }
+
+    #[test]
+    fn seed_file_loads_seeds_in_file_order() {
+        let tmp = std::env::temp_dir().join(format!("polyfish_seed_file_test_ok_{}.json", std::process::id()));
+        std::fs::write(&tmp, r#"{"seeds": [10, 20, 30]}"#).unwrap();
+        let result = load_seed_file(tmp.to_str().unwrap(), 3).unwrap();
+        std::fs::remove_file(&tmp).ok();
+        assert_eq!(result, vec![10, 20, 30]);
     }
 }
