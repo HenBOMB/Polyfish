@@ -15,6 +15,9 @@ ITERATIONS=500
 NUM_GAMES=64
 export MCTS_ITERS=64
 export DETACH_VALUE_TRUNK=1
+# EXP_ELO_072: first net-leaf macro-mcts reading ever to clear parity with
+# the heuristic leaf (50.4% vs 44.1% backfill, matched-pair at iter40).
+export DETACH_MACRO_HEADS=1
 # 128 actors measured best on an M3 Max with metal (~578 moves/s @ 128 games+).
 # Throughput scales with concurrent games; small NUM_GAMES (-g) is a real limiter, not this knob.
 # See expert_boost_throughput.md for details.
