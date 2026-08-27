@@ -3529,7 +3529,11 @@ fn main() -> anyhow::Result<()> {
         /// zero-capture ones — <base>.replay.json (watcher-loadable) plus
         /// <base>.decisions.json. Same machinery as --dump-failed-dir, no
         /// capture filter. Forces fresh root builds (tree reuse off) and
-        /// writes a lot: use with a handful of games.
+        /// writes a lot: use with a handful of games. For macro-mcts games,
+        /// also defaults --dump-macro-policy and POLYFISH_PLY_TRACE to this
+        /// same directory when neither is set explicitly (see below) — the
+        /// whole point of "dump everything for this game" is to not have to
+        /// remember three separate flags to actually get everything.
         #[arg(long)]
         dump_games_dir: Option<String>,
 
@@ -3597,7 +3601,28 @@ fn main() -> anyhow::Result<()> {
         dump_macro_policy: Option<String>,
     }
 
-    let args = Args::parse();
+    let mut args = Args::parse();
+
+    // --dump-games-dir is the "give me everything for this game" flag, but
+    // its own dump (.replay.json/.decisions.json) doesn't carry the macro
+    // ballot or per-ply candidate scoring for macro-mcts games -- those are
+    // separate opt-in mechanisms (--dump-macro-policy, POLYFISH_PLY_TRACE)
+    // that silently stay off unless remembered explicitly, leaving
+    // .decisions.json's `trace` field null with no companion data anywhere.
+    // Default both to the same directory whenever --dump-games-dir is set
+    // and they weren't already pointed elsewhere.
+    if let Some(dir) = &args.dump_games_dir {
+        if args.dump_macro_policy.is_none() {
+            args.dump_macro_policy = Some(dir.clone());
+        }
+        if std::env::var("POLYFISH_PLY_TRACE").is_err() {
+            // Safety: still single-threaded here, before any actor threads
+            // or the OnceLock in `ply_trace_path()` are touched.
+            unsafe {
+                std::env::set_var("POLYFISH_PLY_TRACE", format!("{dir}/ply_trace.jsonl"));
+            }
+        }
+    }
 
     if args.anchor_frac > 0.0 && args.opponent.is_some() {
         anyhow::bail!("--anchor-frac and --opponent are mutually exclusive");
