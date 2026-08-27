@@ -9185,3 +9185,79 @@ gap between "promising" and "confirmed" without over-trusting a single
 borderline reading, per this project's own repeated lesson (EXP_ELO_007's
 lost peak, the noise-floor discipline in EXP_ELO_068) about not chasing
 single readings near a noise floor.
+
+## EXP_ELO_073 — win/loss-primary value labels under MACRO_GEN, `DETACH_MACRO_HEADS=1` carried forward (registered)
+
+STATUS: REGISTERED, about to run.
+
+CONTEXT: EXP_ELO_072 carried `DETACH_MACRO_HEADS=1` to the first net-leaf
+arena reading in this project's history to clear parity with the heuristic
+leaf (50.4% at iteration 40, vs a matched 44.1% `detach=off` backfill),
+though short of the formal 7.8pp/n=128 noise floor and with a small
+calibration regression judged, on reflection, not disqualifying (see 072's
+own disposition — calibration/discrimination decoupling is now a
+three-times-repeated finding, 046/060-067/069, and this is a fourth). Verdi
+is satisfied with that state of affairs and wants to move straight to Step 2
+of the original plan without a confirmatory re-run first: does putting the
+win/loss-primary label redesign (`--wl-labels`/`WL_LABELS`, EXP_ELO_011/025)
+under the current MACRO_GEN + goal-channels regime — something built,
+unit-tested, and never actually run since Jul 28 — change the net-leaf
+picture further, now that both known confounds (Step 0's ballot-dedup bug,
+Step 1's gradient interference) are addressed.
+
+CHANGE: no code change — `--wl-labels` already exists and is unit-tested.
+Loud flag, so it doesn't get silently rediscovered mid-run: `--wl-labels`
+makes `--outcome-scale` completely dead on that code path
+(`self_play.rs:4380-4504` — `wl_z`/`final_outcome` short-circuit to ±1 from
+the adjudicated winner; `relative_outcome`/`scaling_factor` are still
+computed but never read). Not tuning `OUTCOME_SCALE` for this run.
+
+LAUNCH CONFIG: same worktree as EXP_ELO_072
+(`/Users/verdi/Development/Polyfish-worktree-exp072`), continuing from
+Step 1's own final arm rather than a new base checkpoint — `model.safetensors`
+there already equals `checkpoints/gauge_1787745034_iter40.safetensors`
+(detach=on @ iter40, md5 `a5bb0041676bf55b22c17d48b88e1b4c`, confirmed before
+launch). Fresh run (no `--resume`/`--reset` — `init_model.py` skips
+initialization whenever `model.safetensors` already exists, confirmed in
+source, so the existing weights carry over untouched):
+```
+WL_LABELS=1 DETACH_MACRO_HEADS=1 MACRO_GEN=1 GOAL_CHANNELS=1 \
+MACRO_STANCE_W=0.1 MACRO_ORDER_W=0.1 MACRO_ROLLOUT_LAMBDA=0.0 \
+./run_training_loop.sh -i 40
+```
+
+INSTRUMENTS, against the new checkpoint only:
+1. Calibration — `--dump-value-calib --wl-labels` (dump must match the
+   label regime the checkpoint actually trained under), same 60-game
+   mirror-self-play protocol as 060/067/072, same `base-seed 1787400000`.
+2. Discrimination — arena, the same harness as 069/072 (`--macro-leaf1
+   net-asym --macro-sims 32 --macro-k 4 --tribe Imperius --base-seed
+   1787300000 --games 128`, 256 games swapped) against the new checkpoint.
+   Compared against both the historical 30.9%/44.0% pre-072 baselines and,
+   more relevantly (matched lineage, same starting checkpoint), 072's own
+   50.4% `detach=on@40` reading.
+
+**Applying 072's own amendment pattern up front this time** (checkpoints
+save every 5 iterations, `GAUGE_INTERVAL=5`): check in at iteration 15
+before committing to the full 40. The label mechanism (what value target
+each step trains against) applies from iteration 1 like 072's detach
+mechanism did, and 072's own iter15 checkpoint was in the same
+inconclusive band as its iter40 reading (46.5% vs the final 50.4% — moved,
+but not by a lot) — so an iter15 read here is a legitimate signal, not
+just noise, and can end the run early if it's already clearly flat or
+clearly negative.
+
+FALSIFIABLE PREDICTIONS (EXP_ELO_069's bracket, discrimination is primary —
+calibration and discrimination have decoupled three times already so a
+calibration move alone must not be read as confirmation or disqualification
+either way):
+- **≥48%**: real, worth carrying forward as a second independent lever
+  alongside `DETACH_MACRO_HEADS=1`; compare directly against 072's 50.4% to
+  see whether the two levers compound or just land in the same place.
+- **40-46%**: flat — win/loss labels specifically don't move net-leaf
+  quality once the two known confounds are already fixed; keep
+  `DETACH_MACRO_HEADS=1` as the standing win from this lineage and drop the
+  label change.
+- **<40%**: win/loss labels make net-leaf worse under this regime —
+  investigate before concluding anything else (don't just discard the
+  reading as noise below 072's own floor).
