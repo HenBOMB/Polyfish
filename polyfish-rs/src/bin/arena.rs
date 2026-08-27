@@ -328,6 +328,17 @@ fn tribe_of(s: &str) -> TribeType {
     }
 }
 
+/// The map-gen tribe vector for a match, indexed by seat (P1 then P2) --
+/// deliberately NOT a function of `swap`. `play_match`'s swap-conditional
+/// block decides which config (agent_p1/agent_p2) occupies which seat;
+/// this vec staying seat-fixed regardless is what gives config1/config2 a
+/// fair look at both tribes across a seed's swapped pair (config1 plays
+/// tribe1 unswapped, tribe2 swapped, and vice versa for config2) for free,
+/// the same way swap already cancels P1/P2 positional advantage.
+fn seat_tribes(tribe1: TribeType, tribe2: TribeType) -> Vec<TribeType> {
+    vec![tribe1, tribe2]
+}
+
 fn dump_turn_state(
     file: &mut std::fs::File,
     game_idx: usize,
@@ -625,20 +636,31 @@ fn play_match(
     goal_w_tree: f32,
     macro_params1: MacroParams,
     macro_params2: MacroParams,
-    args_tribe: &str,
+    tribe1: TribeType,
+    tribe2: TribeType,
     trace_tech: Option<polyfish::types::TechnologyType>,
     belief_calib: bool,
 ) -> MatchResult {
     let gen_settings = MapGenSettings {
         size: MapSize::Tiny,
         map_type: MapType::Drylands,
-        tribes: vec![tribe_of(&args_tribe), tribe_of(&args_tribe)],
+        // Seat-indexed (P1, P2), NOT config-indexed -- see `seat_tribes`.
+        // `swap` (below) only decides which config sits in which seat; it
+        // must never touch this vec, or the free config/tribe fairness the
+        // caller relies on across a seed's swapped pair breaks.
+        tribes: seat_tribes(tribe1, tribe2),
         seed,
         ..Default::default()
     };
 
     let mut game = Game::new();
     game.state = generate(gen_settings);
+    // generate() replaces the whole state (Game::new()'s own initial_seed
+    // assignment doesn't survive it) and never sets initial_seed itself, so
+    // every self-play/arena game was seeing initial_seed=0 regardless of
+    // the real map seed -- fixed here rather than in mapgen so replay-load
+    // (main.rs) keeps setting it explicitly from the recorded value.
+    game.state.initial_seed = game.state.settings.seed;
     game.state.settings.mode =
         ModeType::from_repr(gamemode).unwrap_or(ModeType::Perfection);
     game.state.settings.max_turns = max_turns;
@@ -1359,13 +1381,31 @@ fn backend_from_arg(arg: SearchBackendArg, k: usize) -> SearchBackend {
 }
 
 #[derive(serde::Deserialize)]
+struct RawSeedEntry {
+    seed: i64,
+    #[serde(default)]
+    tribe1: Option<String>,
+    #[serde(default)]
+    tribe2: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
 struct SeedFile {
-    seeds: Vec<i64>,
+    seeds: Vec<RawSeedEntry>,
+}
+
+/// One loaded --seed-file entry: a map seed plus an optional pinned tribe
+/// pair (see eval_seeds.json). `tribes` is `Some` only when both tribe1
+/// and tribe2 are present on that entry.
+#[derive(Clone, Copy)]
+struct SeedEntry {
+    seed: i64,
+    tribes: Option<(TribeType, TribeType)>,
 }
 
 /// Loads a fixed seed list (see eval_seeds.json). Errors rather than
 /// silently wrapping if it's shorter than the seed-pair count requested.
-fn load_seed_file(path: &str, needed: usize) -> anyhow::Result<Vec<i64>> {
+fn load_seed_file(path: &str, needed: usize) -> anyhow::Result<Vec<SeedEntry>> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("reading --seed-file {path}: {e}"))?;
     let parsed: SeedFile = serde_json::from_str(&text)
@@ -1375,7 +1415,21 @@ fn load_seed_file(path: &str, needed: usize) -> anyhow::Result<Vec<i64>> {
         "--seed-file {path} has {} seeds but {needed} seed pairs (--games) were requested",
         parsed.seeds.len()
     );
-    Ok(parsed.seeds)
+    parsed
+        .seeds
+        .into_iter()
+        .map(|e| {
+            let tribes = match (e.tribe1.as_deref(), e.tribe2.as_deref()) {
+                (Some(t1), Some(t2)) => Some((tribe_of(t1), tribe_of(t2))),
+                (None, None) => None,
+                _ => anyhow::bail!(
+                    "--seed-file {path}: seed {} has one of tribe1/tribe2 set but not the other",
+                    e.seed
+                ),
+            };
+            Ok(SeedEntry { seed: e.seed, tribes })
+        })
+        .collect()
 }
 
 /// Seed-pair index i's map seed: `seed_list[i]` when a fixed list is given,
@@ -1385,6 +1439,13 @@ fn seed_for_game(i: usize, base_seed: u64, seed_list: Option<&[i64]>) -> i64 {
         Some(list) => list[i],
         None => (base_seed + i as u64) as i64,
     }
+}
+
+/// Seed-pair index i's --seed-file-pinned tribe pair, if that entry
+/// specifies one. Parallel accessor to `seed_for_game` -- same indexing,
+/// but for the tribe pair instead of the map seed.
+fn tribes_for_game(i: usize, entries: Option<&[SeedEntry]>) -> Option<(TribeType, TribeType)> {
+    entries.and_then(|list| list[i].tribes)
 }
 
 fn main() -> anyhow::Result<()> {
@@ -1601,11 +1662,14 @@ fn main() -> anyhow::Result<()> {
             .as_secs()
     };
 
-    let seed_list: Option<Vec<i64>> = args
+    let seed_entries: Option<Vec<SeedEntry>> = args
         .seed_file
         .as_ref()
         .map(|path| load_seed_file(path, args.games))
         .transpose()?;
+    let seed_list: Option<Vec<i64>> = seed_entries
+        .as_ref()
+        .map(|entries| entries.iter().map(|e| e.seed).collect());
 
     let total_games = args.games * 2;
 
@@ -1711,13 +1775,23 @@ fn main() -> anyhow::Result<()> {
             let completed = &completed;
             let skipped = &skipped;
             let seed_list = &seed_list;
+            let seed_entries = &seed_entries;
             scope.spawn(move || {
                 loop {
                     let idx = job_counter.fetch_add(1, Ordering::Relaxed);
                     if idx >= total_games {
                         break;
                     }
-                    let seed = seed_for_game(idx / 2, base_seed, seed_list.as_deref());
+                    let pair_idx = idx / 2;
+                    let seed = seed_for_game(pair_idx, base_seed, seed_list.as_deref());
+                    // Seed-file per-entry tribes, falling back to --tribe
+                    // (applied to both sides) when the entry has none or
+                    // --seed-file wasn't used. Same pair for both idx=2i and
+                    // idx=2i+1 -- seat_tribes/play_match's swap-invariance
+                    // (see there) is what gives both configs both tribes
+                    // across the pair, not any flip here.
+                    let (tribe1, tribe2) = tribes_for_game(pair_idx, seed_entries.as_deref())
+                        .unwrap_or((tribe_of(tribe_name), tribe_of(tribe_name)));
                     let swap = idx % 2 == 1;
 
                     // Catches ordinary game-logic panics on this thread. A
@@ -1735,7 +1809,7 @@ fn main() -> anyhow::Result<()> {
                             seed, swap, args.max_turns, args.gamemode, dump_stats_dir,
                             idx, dump_turn_states, args.macro_commit, args.macro_star_gate,
                             args.goal_script, args.goal_w_tree, macro_params1, macro_params2,
-                            tribe_name, trace_tech, args.belief_calib,
+                            tribe1, tribe2, trace_tech, args.belief_calib,
                         )
                     }));
 
@@ -2009,9 +2083,57 @@ mod seed_selection_tests {
     #[test]
     fn seed_file_shorter_than_game_count_errors_loudly() {
         let tmp = std::env::temp_dir().join(format!("polyfish_arena_seed_file_test_{}.json", std::process::id()));
-        std::fs::write(&tmp, r#"{"seeds": [1, 2, 3]}"#).unwrap();
+        std::fs::write(&tmp, r#"{"seeds": [{"seed": 1}, {"seed": 2}, {"seed": 3}]}"#).unwrap();
         let result = load_seed_file(tmp.to_str().unwrap(), 4);
         std::fs::remove_file(&tmp).ok();
         assert!(result.is_err(), "requesting more seed pairs than seeds must error, not wrap");
+    }
+
+    #[test]
+    fn seed_file_loads_seeds_in_file_order() {
+        let tmp = std::env::temp_dir().join(format!("polyfish_arena_seed_file_test_ok_{}.json", std::process::id()));
+        std::fs::write(&tmp, r#"{"seeds": [{"seed": 10}, {"seed": 20}, {"seed": 30}]}"#).unwrap();
+        let result = load_seed_file(tmp.to_str().unwrap(), 3).unwrap();
+        std::fs::remove_file(&tmp).ok();
+        assert_eq!(result.iter().map(|e| e.seed).collect::<Vec<i64>>(), vec![10, 20, 30]);
+        assert!(result.iter().all(|e| e.tribes.is_none()), "entries without tribe1/tribe2 must parse to None");
+    }
+
+    #[test]
+    fn seed_file_parses_per_entry_tribe_pair() {
+        let tmp = std::env::temp_dir().join(format!("polyfish_arena_seed_file_test_tribes_{}.json", std::process::id()));
+        std::fs::write(
+            &tmp,
+            r#"{"seeds": [{"seed": 10, "tribe1": "XinXi", "tribe2": "Zebasi"}, {"seed": 20}]}"#,
+        )
+        .unwrap();
+        let result = load_seed_file(tmp.to_str().unwrap(), 2).unwrap();
+        std::fs::remove_file(&tmp).ok();
+        assert_eq!(result[0].tribes, Some((TribeType::XinXi, TribeType::Zebasi)));
+        assert_eq!(result[1].tribes, None);
+    }
+
+    #[test]
+    fn seed_file_one_sided_tribe_pair_errors_loudly() {
+        let tmp = std::env::temp_dir().join(format!("polyfish_arena_seed_file_test_onesided_{}.json", std::process::id()));
+        std::fs::write(&tmp, r#"{"seeds": [{"seed": 10, "tribe2": "Zebasi"}]}"#).unwrap();
+        let result = load_seed_file(tmp.to_str().unwrap(), 1);
+        std::fs::remove_file(&tmp).ok();
+        assert!(result.is_err(), "one of tribe1/tribe2 set without the other must error, not silently drop it");
+    }
+
+    /// The seat-not-config invariant: `play_match` builds the map-gen tribe
+    /// vec from `seat_tribes(tribe1, tribe2)`, which does not take `swap` as
+    /// a parameter at all -- structurally, it cannot vary with which config
+    /// occupies which seat. This is the property the caller's free
+    /// config/tribe fairness across a seed's swapped pair depends on.
+    #[test]
+    fn seat_tribes_is_indexed_by_seat_not_config() {
+        let unswapped = seat_tribes(TribeType::Imperius, TribeType::Bardur);
+        let swapped = seat_tribes(TribeType::Imperius, TribeType::Bardur);
+        assert_eq!(unswapped, vec![TribeType::Imperius, TribeType::Bardur]);
+        // Same tribe1/tribe2 in, same seat-indexed vec out, regardless of
+        // which config a caller intends to put in which seat via `swap`.
+        assert_eq!(unswapped, swapped);
     }
 }
