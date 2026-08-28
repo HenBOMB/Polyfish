@@ -587,7 +587,17 @@ fn goal_potential_inner(
             let Some(th) = city_threats.iter().find(|t| t.city == *idx) else {
                 continue; // stale order: threat cleared, nothing to pay
             };
-            let urgency = if th.at_risk { 1.0 } else { 0.5 };
+            // Aug 2026 (Verdi): continuous in risk, not a flat 1.0/0.5 step
+            // -- a .06-risk city and a .34-risk city used to pay identically
+            // as long as neither tripped `at_risk`, giving micro-mcts no
+            // gradient to allocate more search toward the more urgent one.
+            // `at_risk` is a sharper, non-risk-derived signal (already
+            // sieged, or near-lethal damage incoming) that `risk` alone can
+            // under-represent once it saturates -- keep it as a hard floor,
+            // not folded into the tanh.
+            let urgency = (th.risk / crate::ai::combat::RISK_GARRISON_FALLS)
+                .tanh()
+                .max(if th.at_risk { 1.0 } else { 0.0 });
             let plan = crate::ai::combat::defend_plan(state, player, th, &attack_targets);
             for (_, sat) in &plan.assigned {
                 acc.add("defend_cover", SHAPE_GOAL_DEFEND_COVER * urgency * sat);

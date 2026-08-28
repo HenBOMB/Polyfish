@@ -302,6 +302,44 @@ pub(crate) fn threat_units(state: &GameState, player: PlayerId) -> Vec<(UnitStat
     out
 }
 
+/// My opportunity to take ENEMY cities: `city_risks_with_threats` computed
+/// from the ENEMY's own perspective, with MY units standing in as their
+/// threats. Their risk of losing a city to me IS my opportunity of gaining
+/// it (Verdi, Aug 2026: "a city with .75 risk of loss is .75 opp of gain
+/// for your enemy") -- so this reuses the exact same risk math and dials
+/// rather than a second, independently-tuned heuristic. `state` is the
+/// caller's own fogged view, so whatever it knows (or doesn't) about the
+/// enemy's cities/garrisons flows through unchanged -- no new omniscience.
+/// My own units need no fog filter (always fully known to me), unlike
+/// `threat_units`'s enemy-facing FOW check.
+pub fn city_opportunities(state: &GameState, player: PlayerId, enemy: PlayerId) -> Vec<CityRisk> {
+    let Some(tribe) = state.tribes.get(&player) else {
+        return Vec::new();
+    };
+    let my_units_as_threats: Vec<(UnitState, f32)> =
+        tribe.units.iter().map(|u| (probe(u), 1.0)).collect();
+    city_risks_with_threats(state, enemy, &my_units_as_threats)
+}
+
+/// The single best (highest-opportunity) enemy city to attack, across every
+/// visible enemy tribe -- `known_enemy_capital`'s counterpart for "any weak
+/// city", not just the capital. `None` if no enemy city clears `min_risk`
+/// (avoids proposing a candidate for a city with negligible opportunity).
+pub fn best_attack_opportunity(
+    state: &GameState,
+    player: PlayerId,
+    min_risk: f32,
+) -> Option<(i32, f32)> {
+    state
+        .tribes
+        .keys()
+        .filter(|&&id| id != player)
+        .flat_map(|&enemy| city_opportunities(state, player, enemy))
+        .filter(|r| r.risk >= min_risk)
+        .map(|r| (r.city, r.risk))
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+}
+
 /// Per-city expected loss: who can reach the tile, whether a siege there
 /// would be breakable, and what that costs me. FOW-honest — only visible
 /// enemy units, read with their real movement (roads and tech included).

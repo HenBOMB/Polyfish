@@ -62,6 +62,60 @@ fn dump_ply_decision(
     }
 }
 
+/// Single-search deep inspection (not a standing feature): when
+/// `POLYFISH_MACRO_ROLLOUT_TRACE=<path>` is set, `MacroMctsSearch::expand`
+/// appends one JSONL row per simulated node it creates — `parent` plus the
+/// turn/mover/directive that produced it, and the ROOT PLAYER's own city
+/// ownership at that simulated point. Built to answer a concrete question
+/// the aggregate root_q/visits can't: walking down one specific root
+/// candidate's simulated rollout, does the adversarial opponent ever
+/// actually take one of the root player's cities, or does the simulated
+/// future never reproduce the danger a real opponent found? `parent` alone
+/// is enough to reconstruct any node's full ancestry (and therefore which
+/// root edge it descends from) by walking the chain back to node 0 in
+/// post-processing — no need to track that redundantly here.
+fn macro_rollout_trace_path() -> Option<&'static str> {
+    static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| std::env::var("POLYFISH_MACRO_ROLLOUT_TRACE").ok())
+        .as_deref()
+}
+
+fn dump_rollout_node(
+    path: &str,
+    node_idx: usize,
+    parent: usize,
+    turn: i32,
+    mover: PlayerId,
+    goal: &MacroGoal,
+    pov: PlayerId,
+    state: &crate::states::GameState,
+) {
+    let pov_cities: Vec<i32> = state
+        .tribes
+        .get(&pov)
+        .map(|t| t.cities.iter().map(|c| c.idx).collect())
+        .unwrap_or_default();
+    let row = serde_json::json!({
+        "node_idx": node_idx,
+        "parent": parent,
+        "turn": turn,
+        "mover": mover,
+        "directive": {
+            "stance": format!("{:?}", goal.stance),
+            "orders": goal.orders.iter()
+                .map(|(kind, t)| serde_json::json!([format!("{kind:?}"), t]))
+                .collect::<Vec<_>>(),
+        },
+        "pov_cities": pov_cities,
+    });
+    if let Ok(s) = serde_json::to_string(&row) {
+        use std::io::Write;
+        if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(fh, "{s}");
+        }
+    }
+}
+
 /// Micro-mcts Phase 0 (throughput/cache-hit probe, not a standing feature):
 /// how many extra synthetic single-leaf `eval_server` requests this process
 /// has issued, and how many of the probe's own hypothetical continuations
@@ -805,6 +859,19 @@ impl<'a> MacroMctsSearch<'a> {
         self.nodes.push(child);
         self.nodes[parent].children[edge] = Some(child_idx);
         self.nodes[parent].edge_shape[edge] = shape;
+        if let Some(path) = macro_rollout_trace_path() {
+            let child_state = &self.nodes[child_idx].game.state;
+            dump_rollout_node(
+                path,
+                child_idx,
+                parent,
+                child_state.settings.turn,
+                player,
+                &goal,
+                self.pov,
+                child_state,
+            );
+        }
         child_idx
     }
 }

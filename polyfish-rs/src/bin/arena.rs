@@ -608,9 +608,14 @@ struct MatchResult {
     /// (capital-materialized turns, units materialized, planned turns).
     belief_mat: Option<(u32, u32, u32)>,
     /// EXP_ELO_036/038, config1 macro-mcts: winning-candidate class counts
-    /// (base/stance/real/attack/claim/contest/continuation), belief-target
-    /// re-picks, mid-turn fog-order strips.
-    belief_gen: Option<([u32; 7], u32, u32)>,
+    /// (base/stance/real/attackCapital/claim/contest/continuation/
+    /// attackWeakest/defendUrgent), belief-target re-picks, mid-turn
+    /// fog-order strips.
+    belief_gen: Option<(
+        [u32; polyfish::ai::search::macro_agent::CANDIDATE_CLASSES],
+        u32,
+        u32,
+    )>,
 }
 
 /// Play one game. `swap` puts config2 in the P1 seat and config1 in P2.

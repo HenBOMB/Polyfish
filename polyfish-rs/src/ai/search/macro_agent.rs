@@ -112,10 +112,23 @@ pub enum CandidateClass {
     /// EXP_ELO_038: one of the strategist's last 3 picked directives,
     /// re-offered — continuity by informed selection, never forced.
     Continuation = 6,
+    /// Aug 2026 (Verdi): the weakest attackable enemy city (highest
+    /// `combat::city_opportunities`), not just the capital -- offered
+    /// unconditionally like AttackCapital, so search can weigh a genuinely
+    /// easy siege against the scripted plan instead of never seeing it.
+    AttackWeakest = 7,
+    /// Aug 2026 (Verdi): the single highest-`city_risks` owned city,
+    /// offered unconditionally rather than gated behind `needs_order()` --
+    /// same "candidate, not a hard gate" treatment AttackCapital already
+    /// gets. `commit_macro_goal`'s own needs_order()-gated Defend still
+    /// fires into the BASE goal at high risk; this adds the option earlier,
+    /// while risk is real but below that threshold, so search can compare
+    /// defending against whatever the base plan already wants to do.
+    DefendUrgent = 8,
 }
 
 /// Number of CandidateClass variants (telemetry array size).
-pub const CANDIDATE_CLASSES: usize = 7;
+pub const CANDIDATE_CLASSES: usize = 9;
 
 /// Plans are made on the fogged view, so a chosen move can be illegal on the
 /// true state (arena ignores play_move failure and re-asks on unchanged state
@@ -366,6 +379,41 @@ pub fn enumerate_candidates_with_belief(
             push(
                 MacroGoal { orders, stance: base.stance, save_target: base.save_target.clone() },
                 CandidateClass::AttackCapital,
+                &mut out,
+            );
+        }
+    }
+    // Aug 2026 (Verdi): symmetric offer to AttackCapital, for any weak
+    // enemy city (not just the capital) and for defending our own most
+    // at-risk city. Both unconditional -- risk/opportunity only decide
+    // WHICH city, never whether the candidate exists at all -- so search
+    // gets a real comparison instead of a threshold deciding it upfront.
+    // `min_risk` floors are small and deliberately below
+    // `RISK_GARRISON_FALLS`/an equivalent offense bar: the base goal's own
+    // gates already cover the high-confidence cases, this fills the gap
+    // below them where a real option was previously never offered at all.
+    if let Some((city, _)) = crate::ai::combat::best_attack_opportunity(state, pov, 0.05) {
+        if !base.orders.contains(&(OrderKind::Attack, city)) {
+            let mut orders = base.orders.clone();
+            orders.push((OrderKind::Attack, city));
+            push(
+                MacroGoal { orders, stance: base.stance, save_target: base.save_target.clone() },
+                CandidateClass::AttackWeakest,
+                &mut out,
+            );
+        }
+    }
+    if let Some(city_risk) = crate::ai::combat::city_risks(state, pov)
+        .into_iter()
+        .filter(|r| r.risk >= 0.05)
+        .max_by(|a, b| a.risk.partial_cmp(&b.risk).unwrap_or(std::cmp::Ordering::Equal))
+    {
+        if !base.orders.contains(&(OrderKind::Defend, city_risk.city)) {
+            let mut orders = base.orders.clone();
+            orders.push((OrderKind::Defend, city_risk.city));
+            push(
+                MacroGoal { orders, stance: base.stance, save_target: base.save_target.clone() },
+                CandidateClass::DefendUrgent,
                 &mut out,
             );
         }
