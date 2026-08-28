@@ -227,6 +227,27 @@ async function jumpToStep(index) {
     return true;
 }
 
+// ---- Reward/tech/ruin toasts --------------------------------------------
+// Surfaces state._messages (populated server-side only for the most
+// recently-applied move — see analyze_replay_step) as small, auto-dismissing
+// toasts, top-right. Separate from showToast()/#toast-container (top-center,
+// used for general app status) so replay grant notifications get their own
+// unobtrusive stack.
+function showReplayRewardToast(message) {
+    const container = document.getElementById('replay-reward-toast-container');
+    if (!container) return;
+    const toast = document.createElement('div');
+    toast.className = 'replay-reward-toast';
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
+
+function showReplayRewardToasts(messages) {
+    if (!Array.isArray(messages)) return;
+    messages.forEach(msg => showReplayRewardToast(msg));
+}
+
 // Apply a replay game state to the board + stat bar. Shared by step-through
 // (jumpToStep) and the instant initial render in enterReplayMode.
 function applyReplayState(state, mctsAnalysis) {
@@ -259,6 +280,13 @@ function applyReplayState(state, mctsAnalysis) {
     // (and FOW) follows the active player as you step through.
     renderer.render(GAME_STATE, []);
     renderer.renderMCTSHeatmap(mctsAnalysis);
+
+    // Toast whatever the last-applied move granted (research/ruin/city reward).
+    showReplayRewardToasts(state._messages);
+    // Clear after showing (main.js's own convention, see its updateUI use of
+    // GAME_STATE._messages) so nothing double-toasts through the app-wide
+    // #toast-container if updateUI() ever syncs against this same GAME_STATE.
+    state._messages = [];
 }
 
 // ---- Autoplay ----------------------------------------------------------

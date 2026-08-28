@@ -43,6 +43,11 @@ impl Move for ResearchMove {
 
         // Logic
         let undo = crate::actions::tech::unlock_tech(state, self.tech_type, false)?;
+        if state.settings._verbose {
+            state
+                ._messages
+                .push(format!("📚 Researched {:?}!", self.tech_type));
+        }
         Ok(MoveResult {
             undo,
             rewards: None,
@@ -127,5 +132,47 @@ pub fn generate_research_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>
                 moves.push(Box::new(ResearchMove::new(tech)));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::states::TribeState;
+    use crate::types::TribeType;
+
+    fn base_state() -> GameState {
+        let mut state = GameState::default();
+        state.settings.current_player_turn_id = 1;
+
+        let mut tribe = TribeState::default();
+        tribe.id = 1;
+        tribe.tribe_type = TribeType::Imperius;
+        tribe.stars = 9999; // affordable regardless of cost curve
+        state.tribes.insert(1, tribe);
+        state
+    }
+
+    #[test]
+    fn research_pushes_message_only_when_verbose() {
+        let mut verbose_state = base_state();
+        verbose_state.settings._verbose = true;
+        let res = ResearchMove::new(TechnologyType::Riding).execute(&mut verbose_state);
+        assert!(res.is_ok(), "research should succeed: {:?}", res.err());
+        assert_eq!(
+            verbose_state._messages,
+            vec!["📚 Researched Riding!".to_string()],
+            "expected exactly one research message when _verbose is true"
+        );
+
+        let mut quiet_state = base_state();
+        // _verbose defaults to false
+        let res = ResearchMove::new(TechnologyType::Riding).execute(&mut quiet_state);
+        assert!(res.is_ok(), "research should succeed: {:?}", res.err());
+        assert!(
+            quiet_state._messages.is_empty(),
+            "expected no message when _verbose is false, got {:?}",
+            quiet_state._messages
+        );
     }
 }

@@ -153,3 +153,34 @@
     min-width: 68px;
     font-weight: 600;
 }
+
+/* Reward/tech/ruin grant toasts, top-right. Visual style mirrors #toast-container's
+   .toast (ui.css) — dark glass, reuses its toast-in-out keyframes — but kept in a
+   separate top-right stack so it doesn't blend with app-wide status toasts. */
+#replay-reward-toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 100000;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+    pointer-events: none;
+}
+
+.replay-reward-toast {
+    background: rgba(16, 18, 27, 0.92);
+    backdrop-filter: blur(12px);
+    color: var(--rts-text, #e2e8f0);
+    padding: 10px 18px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    font-weight: 600;
+    font-size: 14px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    animation: toast-in-out 3s forwards ease-in-out;
+    pointer-events: auto;
+    white-space: nowrap;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}

@@ -148,6 +148,138 @@ pub fn replay_game(game: &mut Game, mod_replay: &mut ModReplay) -> Result<(), St
 mod tests {
     use super::*;
 
+    /// Regression for a 2026-08-27 replay-desync incident: a stale binary
+    /// still keying ruin rewards off drifting `settings.seed` (pre-9a76ca4)
+    /// reconstructed a DIFFERENT reward than the real commit granted,
+    /// desyncing every later move that turn. Exercises the actual self-play
+    /// RECORD (serialize before execute) → REPLAY round trip, with search
+    /// noise plus a drifted `settings.seed` standing in for the stale-vs-live
+    /// mismatch; `ruin_rng_pick` must ignore both.
+    #[test]
+    fn ruin_capture_survives_record_replay_round_trip_through_search_noise() {
+        use crate::coords::Coords;
+        use crate::moves::Move;
+        use crate::states::{CityState, StructureState, TechnologyState, TileState, TribeState, UnitState};
+        use crate::types::{StructureType, TechnologyType, TerrainType, TribeType, UnitType};
+
+        let tile_idx = 42;
+        let cap_idx = 0;
+
+        let mut game = Game::new();
+        game.state.initial_seed = 424242;
+        game.state.settings.size = 11;
+        game.state.settings._max_tribe_count = 2;
+        game.state.settings.current_player_turn_id = 1;
+
+        let mut tribe = TribeState::default();
+        tribe.id = 1;
+        tribe.tribe_type = TribeType::Imperius;
+        tribe.stars = 5;
+        tribe.tech_vanilla = vec![TechnologyState {
+            tech_type: TechnologyType::Basic,
+            discovered: true,
+            discovered_turn: 0,
+        }];
+        tribe.cities.push(CityState { owner: 1, idx: cap_idx, ..Default::default() });
+        tribe.units.push(UnitState {
+            coords: Coords::from_index(tile_idx, 11),
+            owner: 1,
+            unit_type: UnitType::Warrior,
+            ..Default::default()
+        });
+        game.state.tribes.insert(1, tribe);
+        // A second tribe so turn-transition machinery has somewhere to go.
+        let mut tribe2 = TribeState::default();
+        tribe2.id = 2;
+        tribe2.tribe_type = TribeType::Bardur;
+        game.state.tribes.insert(2, tribe2);
+
+        game.state.tiles.insert(cap_idx, TileState {
+            coords: Coords::from_index(cap_idx, 11),
+            terrain_type: TerrainType::Field,
+            capital_of: 1,
+            owner: 1,
+            ..Default::default()
+        });
+        game.state.tiles.insert(tile_idx, TileState {
+            coords: Coords::from_index(tile_idx, 11),
+            terrain_type: TerrainType::Field,
+            owner: 1,
+            ..Default::default()
+        });
+        game.state.structures.insert(
+            tile_idx,
+            Some(StructureState { structure_type: StructureType::Ruin, ..Default::default() }),
+        );
+
+        game.post_load();
+        // The replay's starting snapshot, taken BEFORE `settings.seed` below
+        // is drifted — exactly like a real replay file, which stores the
+        // map's fixed initial state, not whatever `settings.seed` had
+        // drifted to by the time a mid-game ruin gets captured.
+        let pristine = game.state.clone();
+
+        // Search noise: speculatively capture-and-undo the same ruin many
+        // times before the real commit, mimicking MCTS evaluating the
+        // branch. Each call runs with `_are_you_sure = false` (see
+        // `simulate_move`), same as a real search rollout.
+        for _ in 0..25 {
+            if let Some(undo) = game.simulate_move(&CaptureMove::new(tile_idx)) {
+                undo(&mut game.state);
+            }
+        }
+        assert_eq!(
+            game.state.tribes.get(&1).unwrap().stars,
+            5,
+            "search noise must fully undo — no leaked stars before the real commit"
+        );
+
+        // Simulate unrelated earlier real game history (other captures,
+        // combat, etc.) having already advanced the game's running RNG
+        // cursor by the time THIS ruin gets captured. This is the drift the
+        // pre-fix `next_rng_xxhash` picked its reward index from; the fixed
+        // `ruin_rng_pick` must ignore it entirely.
+        game.state.settings.seed = 987_654_321;
+
+        // Real commit, recorded self-play-style: serialize BEFORE execute
+        // (matches self_play.rs's flat_recap.push(..., m.serialize()) then
+        // game.play_move(m.as_ref()) ordering).
+        let real_move = CaptureMove::new(tile_idx);
+        let recorded_json = real_move.serialize();
+        assert!(game.play_move(&real_move).is_some(), "real capture must succeed");
+
+        let real_stars = game.state.tribes.get(&1).unwrap().stars;
+        let real_tech: Vec<_> =
+            game.state.tribes.get(&1).unwrap().tech_vanilla.iter().map(|t| t.tech_type).collect();
+
+        // Reconstruct purely from the recorded command, from scratch.
+        let mut replay = ModReplay {
+            game_state: pristine,
+            turns: vec![ReplayTurn {
+                turn: 0,
+                players: vec![ReplayPlayer { player_id: 1, commands: vec![recorded_json] }],
+            }],
+        };
+        let mut reconstructed = Game::new();
+        replay_game(&mut reconstructed, &mut replay).expect("replay must reconstruct cleanly");
+
+        assert_eq!(
+            reconstructed.state.tribes.get(&1).unwrap().stars,
+            real_stars,
+            "replay reconstruction must grant the SAME ruin reward as the real commit"
+        );
+        let reconstructed_tech: Vec<_> = reconstructed
+            .state
+            .tribes
+            .get(&1)
+            .unwrap()
+            .tech_vanilla
+            .iter()
+            .map(|t| t.tech_type)
+            .collect();
+        assert_eq!(reconstructed_tech, real_tech);
+    }
+
     /// Replay-checkpoint probe (manual): board/economy audit of a saved
     /// replay at turn checkpoints, plus giant/hub timelines. Run:
     ///   REPLAY_FILE=replays/<file>.json cargo test --lib replayer -- \

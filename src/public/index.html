@@ -240,6 +240,10 @@
     <script src="js/main.js?v=2"></script>
 
     <!-- Replay UI Overlay -->
+    <!-- Reward/tech/ruin toasts for the replay viewer, top-right, separate
+         from the app-wide #toast-container (top-center) so replay-step
+         grant notifications don't mix with general status toasts. -->
+    <div id="replay-reward-toast-container"></div>
     <div id="replay-controls" class="hidden">
         <div class="replay-header">
             <span class="icon">📼</span> Replay Analysis

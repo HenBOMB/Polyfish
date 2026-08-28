@@ -1651,6 +1651,11 @@ async fn load_replay_endpoint(
         Ok(json) => match parse_replay_playback(&json) {
             Ok((mut loaded_state, history)) => {
                 loaded_state._history = history;
+                // A bare-GameState save (parse_replay_playback's non-gameState branch)
+                // can carry _messages from whatever move was last applied before it was
+                // saved — stale here, since no move has been (re-)applied yet on load.
+                // Without this the replay viewer's toast would fire on initial load.
+                loaded_state._messages.clear();
                 game.state = loaded_state;
                 game.post_load();
 
@@ -1947,6 +1952,12 @@ async fn analyze_replay_step(
         game.post_load();
     }
 
+    // Turn on reward/tech/ruin message logging so the replay viewer can show
+    // a toast for the last-applied move; cleared per-iteration below so only
+    // the final move's messages survive to the response.
+    game.state.settings._verbose = true;
+    game.state._messages.clear();
+
     // 3. Replay moves up to step_index (exclusive? or inclusive? let's say we want to analyze the state BEFORE turn step_index is played)
     // Wait, if we want to compare "User Move vs AI Move", we need the state *before* the user made the move at step_index.
     // So we replay moves 0 to step_index - 1.
@@ -1957,6 +1968,10 @@ async fn analyze_replay_step(
         }
 
         let move_json = &history[i];
+
+        // Reset per-iteration so _messages ends up holding only the
+        // last-applied move's output, not the whole replay's history.
+        game.state._messages.clear();
 
         // We need to parse this JSON back into a Box<dyn Move>
         // Use a matching logic similar to manual_step... logic duplication is confusing.
@@ -2008,6 +2023,15 @@ async fn analyze_replay_step(
         }
     }
 
+    // Snapshot the replayed move's messages, then turn _verbose off before search:
+    // MCTS simulates moves via execute()+undo, and the undo side of a message push
+    // is a no-op (see reward.rs/structure.rs/research.rs), so a live _verbose flag
+    // during tree search would leak every simulated tech/reward pick into
+    // _messages, not just the one real move that was just replayed. auto_step()
+    // guards its own search call the same way.
+    let last_move_messages = game.state._messages.clone();
+    game.state.settings._verbose = false;
+
     // 4. Now game is at the state just before the user played history[step_index]
     // Run MCTS analysis
     use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
@@ -2048,7 +2072,7 @@ async fn analyze_replay_step(
             "tribes": tribes_json_with_max_health(&game.state),
             "leveledStructureTypes": leveled_structure_types_json(),
             "_prediction": game.state._prediction,
-            "_messages": game.state._messages,
+            "_messages": last_move_messages,
         },
         "userMove": {
             "json": user_move_json,
