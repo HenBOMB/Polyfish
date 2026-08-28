@@ -9545,6 +9545,60 @@ identical to "the network devalues the option" in this metric without
 being the same phenomenon. Cannot distinguish the two from this data
 alone. **Disposition: not refuted, not confirmed — a real but noisy
 interim signal that the direction isn't obviously working either.**
-Training continues; a second read at a later iteration (~60-100) is
-planned to check whether this is a transient dip or a real trend before
-drawing a conclusion.
+
+**Methodology correction (Verdi, Aug 28): the training loop's own
+`anchor_net_wr` (used above) draws a RANDOM tribe pair per iteration and
+never passes `--seed-file`** — confirmed by reading `run_training_loop.sh`'s
+self_play invocation (no `--seed-file`) and `self_play.rs`'s `pick_tribes`.
+So iteration-to-iteration swings in that metric conflate map/tribe
+variance with checkpoint-strength variance, on top of an already-tiny
+n=6/iteration. The `anchor_net_wr` rolling-average read (a dip to
+27-40% around iterations 8-14, recovering to 50-60% by 31-45,
+overall 47.8%/42.2%/54.4% across thirds) should be read as suggestive at
+best, not as the correctly-controlled signal.
+
+**Correctly-anchored readout (Aug 28, ~19:30): `arena --seed-file
+eval_seeds.json` against a real Greedy search backend (no network),** 6
+seeds × 2 sides = 12 games, `--macro-leaf1 net-asym --macro-sims1 64
+--macro-k1 8`, `checkpoints/run_1787879619_iter1_start.safetensors`
+(true pre-run baseline) vs `Greedy`, and separately the live
+`model.safetensors` snapshotted at iteration 47 vs the same `Greedy`,
+same 12 seeds both times — holding map, tribes, and opponent identical
+across the comparison, isolating the checkpoint as the only variable:
+
+| Checkpoint | Win rate vs Greedy | Cities lost/game |
+|---|---|---|
+| iter1 (baseline) | 58.3% (7/12) | 1.25 |
+| iter47 | 66.7% (8/12) | 0.75 |
+
+Win rate moved the right direction (+8.4pp) but n=12 means an 8-vs-7 flip
+is not statistically decisive on its own. The siege-defense numbers have
+more signal — cities lost per game dropped ~40% (16→9 total across the
+batch) — and, notably, point the SAME direction the flip-event candidate
+mechanism was built to fix (fewer cities lost = better defense), unlike
+the discouraging iteration-31 self-play flip-event read (which measured
+net-vs-net games, a different and noisier comparison than net-vs-fixed-Greedy).
+**This is the first genuinely clean, apples-to-apples evidence this run
+produced, and it's positive, though not yet decisive at this n.**
+
+**STATUS: training run stopped by Verdi's explicit request at iteration
+51/200** ("we've done enough there... let's focus on using eval seeds for
+evaluating performance"). Final checkpoint is `model.safetensors` in
+`/Users/verdi/Development/Polyfish-worktree-exp074/polyfish-rs`
+(iteration 51's weights) plus `checkpoints/gauge_1787879619_iter45.safetensors`
+and earlier gauge snapshots at 5/10/15/20/25/30/35/40. Worktree left
+intact for further eval_seeds-anchored readouts against these
+checkpoints if wanted. Next step per Verdi: build a standing
+eval_seeds-anchored evaluation path (this `arena --seed-file` pattern)
+rather than relying on the training loop's own noisy random-tribe
+`anchor_net_wr`.
+
+**Operational note, launchctl one-shot jobs**: `launchctl submit` restarts
+its command on ANY exit, including a clean successful completion, not
+just crashes — confirmed twice (the iter1-baseline arena job kept
+silently re-running itself after printing its results; a later attempt's
+result was nearly lost when a restart truncated the same output file
+mid-read). For one-shot readouts (unlike the long-lived, `--resume`-safe
+training loop), write output to a unique per-attempt filename and
+`launchctl remove` the job the instant a result is detected — see the
+updated `macos-wakeup-limit-kills-net-leaf-actors` project memory.
