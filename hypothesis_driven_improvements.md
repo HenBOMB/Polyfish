@@ -9382,3 +9382,122 @@ macro-mcts) has, for the first time, cleared parity with the heuristic
 leaf twice in a row under two different but overlapping configurations —
 worth a confirmatory run (fresh seed or larger n) on `DETACH_MACRO_HEADS=1`
 alone before either shipping it as default or moving to T3 distillation.
+
+## EXP_ELO_074 — symmetric attack/defend candidates: offer, don't gate (registered)
+
+STATUS: registered, launching overnight training run now.
+
+CONTEXT: `current_understanding.md`'s Aug 27 OPEN finding — macro-mcts lost
+a city (seed 1787500020, turn 4-5) it never even offered defending. Root
+cause traced turn-by-turn: risk was real (0.17) but below the sole
+Defend-order gate (`needs_order()`'s `RISK_GARRISON_FALLS=0.35`), so no
+defensive candidate existed for search to weigh — and the opponent's own
+simulated rollout had the identical blind spot in reverse (its candidate
+generator never proposed attacking our weak city either), so even
+macro-mcts's own multi-turn lookahead couldn't discover the danger from
+either side. Verdi's explicit design ask: a symmetric risk/opportunity
+signal ("a city with .75 risk of loss is .75 opp of gain for your
+enemy"), continuous/tanh-scaled rather than binary, offered as a
+candidate for search to weigh rather than a hard gate — mirroring the
+existing `AttackCapital` pattern, not a new mechanism.
+
+CHANGE (shipped, commit cca275a): `city_opportunities()` /
+`best_attack_opportunity()` (`combat.rs`) reuse `city_risks_with_threats`
+with attacker/defender roles inverted — free reuse of the existing
+calibrated risk math instead of a second heuristic. Two new candidate
+classes (`AttackWeakest`, `DefendUrgent` in `macro_agent.rs`) offer the
+single best instance of each unconditionally (mirroring `AttackCapital`),
+so risk/opportunity picks WHICH city, never whether the candidate exists
+at all. Defend-order pricing (`goal_potential.rs`) is now
+`(risk / RISK_GARRISON_FALLS).tanh().max(at_risk ? 1.0 : 0.0)` instead of
+a flat 1.0/0.5 step. `CANDIDATE_CLASSES` 7→9. No network/shape/feature
+changes — pure search/candidate-generation, `model.safetensors` stays
+fully compatible, warm start is safe.
+
+PRE-LAUNCH VERIFICATION (12-game net-asym self-play batch,
+`replays/symmetric_check/`, `--macro-leaf net-asym --macro-sims 64
+--macro-k 8 --goal-channels --goal-w-tree 1`, `POLYFISH_MICRO_MCTS_SIMS=64`,
+`eval_seeds.json` games 0-11): no crashes, full test suite green (304 lib +
+27 self_play) before the batch ran. At the exact original turn/seed
+(game0 = seed 1787500020, pov=1): turn 4 `Defend@49` is offered as a
+genuinely new candidate (base goal lacked it, the old gate hadn't
+tripped) — search still declined it, garrison stepped OUT (`Step:
+49->37`), city fell turn 6. The candidate's existence is confirmed; the
+pick is what training needs to move, and that is what this run tests —
+not claimed as already fixed. Turn 6 pov=2 `Attack@49` (AttackWeakest,
+not AttackCapital — 49 isn't P1's capital, that's 84) is picked and the
+city is captured the same turn. Turn 8+ pov=1 `Attack@49` is picked
+repeatedly and the city is recaptured turn 16 — real back-and-forth siege
+play over a previously-invisible city, not a scripted outcome. Across all
+12 games, ballots containing a Defend or Attack order (old gate + new
+classes combined, not separated by class — the JSONL dump has no class
+tag) appear in the majority of plies (33-54 of 14-62 rows/game) and are
+picked 50-85% of the time when offered.
+
+LAUNCH CONFIG: isolated worktree
+(`/Users/verdi/Development/Polyfish-worktree-exp074`, branch
+`exp-elo-074-symmetric-attack-defend`, from commit 5c54fc6), symlinked
+`.venv`, `model.safetensors` copied warm-start from the main tree's
+current checkpoint. That checkpoint is EXP_ELO_067's own lineage
+(run_id 1787307645, confirmed via `training_log.csv`'s last rows and the
+file mtime) — `DETACH_MACRO_HEADS=1` already a standing default at
+`run_training_loop.sh:20`, but `OUTCOME_SCALE`/`MACRO_ROLLOUT_LAMBDA`
+are NOT standing defaults (script default `OUTCOME_SCALE=3.0`), so 067's
+own values are carried forward here to stay consistent with the
+checkpoint's own calibration rather than silently reverting mid-lineage:
+```
+MACRO_GEN=1 GOAL_CHANNELS=1 MACRO_STANCE_W=0.1 MACRO_ORDER_W=0.1 \
+MACRO_ROLLOUT_LAMBDA=0.0 OUTCOME_SCALE=1.5 MACRO_LEAF=net-asym MACRO_K=8 \
+POLYFISH_MICRO_MCTS_SIMS=64 ./run_training_loop.sh -i 200
+```
+`MACRO_LEAF=net-asym` and `MACRO_K=8` are this run's deliberate
+deviations from 067/072/073's own heuristic-leaf generation default —
+matching tonight's verified config (leaf eval is what determines whether
+a candidate gets picked) and directly serving the user's stated goal
+("see the NET take advantage... see the net start emitting some defense
+signal"), which requires the net to be in the generation loop, not just
+read out afterward. `POLYFISH_MICRO_MCTS_SIMS=64` is a raw env var
+(`micro_mcts.rs`, not a CLI flag) and must be exported for every process
+that reads it, not assumed inherited. (fresh run_id, no
+`--resume`/`--reset`; `GOAL_W_TREE` left unset, defaults to 1 when
+`GOAL_CHANNELS=1`; `MACRO_SIMS` left at its own default of 64, matching
+the verification batch; `MACRO_ROOT_PRIOR_W` left unset per 067's own
+reasoning — generation shouldn't lean on an unvalidated root prior on
+itself).
+
+INSTRUMENTS for the morning read:
+1. Contested-city flips per game — same detector as the pre-launch
+   verification (capture preceded by an `Attack` on the same tile within
+   15 plies), run against a fresh matched-size self-play sample from the
+   trained checkpoint, compared to tonight's 12-game batch as the
+   pre-training baseline.
+2. Frozen seed-770425 gauge harness (`seed-770425-gauge-harness` memory),
+   pre- vs post-training.
+3. Whether the turn-4-style below-threshold Defend pick RATE moves — not
+   just whether the candidate is offered (already confirmed tonight).
+
+FALSIFIABLE PREDICTIONS:
+- **Confirmed**: post-training, the below-threshold Defend candidate gets
+  picked measurably more often than tonight's pre-training baseline in
+  matched-risk situations, and/or contested-city flip rate rises (search
+  contesting cities it used to silently concede) without a win-rate
+  regression against the seed-770425 baseline outside its 7.8pp noise
+  floor. Ship as standing default; consider whether the same
+  candidate-vs-gate pattern generalizes to other threshold-gated orders.
+- **Refuted**: pick rate on the new candidates doesn't move after
+  training (network doesn't learn to value them even though they're
+  visible), or win rate regresses outside the noise floor. Candidate
+  existence alone was necessary but not sufficient — investigate reward
+  magnitude (Q-gap dial method) or training exposure (how often these
+  ballots actually appear early enough in games to matter) before trying
+  a different mechanism.
+- **Honest open question carried into this run, not resolved by it**:
+  even where the fix visibly worked tonight (turn 6→16 recapture), the
+  turn-5 Defend pick did NOT save the original city — execution
+  translating a correct pick into an actual hold is a separate, deeper
+  per-unit-coordination question this run does not directly test.
+
+MONITORING: `ScheduleWakeup` long-fallback (1200s+) through the night;
+`--resume <run_id>` on any macOS process-teardown kill (established
+recurring issue this session, checkpoints every 5 iterations make this
+safe).
