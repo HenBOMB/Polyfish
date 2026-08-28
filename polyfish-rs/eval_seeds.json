@@ -1,6 +1,11 @@
 {
   "seeds": [
     {
+      "seed": 1787500020,
+      "tribe1": "XinXi",
+      "tribe2": "Imperius"
+    },
+    {
       "seed": 312822346,
       "tribe1": "Quetzali",
       "tribe2": "Kickoo"
@@ -154,11 +159,6 @@
       "seed": 302432876,
       "tribe1": "Yadakk",
       "tribe2": "Zebasi"
-    },
-    {
-      "seed": 405004493,
-      "tribe1": "Imperius",
-      "tribe2": "XinXi"
     },
     {
       "seed": 1917390332,
@@ -503,5 +503,5 @@
   ],
   "count": 100,
   "generated_by": "python3 -c \"import random, json; print(json.dumps(random.Random(100).sample(range(1, 2_000_000_000), 100)))\" for the seed integers; tribe pairs added by a separate pass with random.Random(101) drawing tribe1 then tribe2 uniformly (with re-draw until tribe2 != tribe1) from the 12-tribe pool self_play.rs's all_tribes uses (Imperius, Bardur, Oumaji, Kickoo, XinXi, Zebasi, AiMo, Vengir, Luxidoor, Quetzali, Hoodrick, Yadakk), mirroring pick_tribes' own draw-then-redraw-until-distinct algorithm. Seed 101 is deliberately different from seed 100 used for the seed integers, to avoid correlating the two draws.",
-  "note": "Stable, reusable eval seed list, each paired with a fixed asymmetric tribe1/tribe2 (tribe1 != tribe2, always). Pass --seed-file eval_seeds.json to self_play/arena so game i uses seeds[i].seed instead of base_seed + i, and (when not overridden by explicit CLI tribe flags) seeds[i].tribe1/tribe2 for that game's tribe pair. Do not reorder or edit -- frozen for reproducibility across experiments."
+  "note": "Stable, reusable eval seed list, each paired with a fixed asymmetric tribe1/tribe2 (tribe1 != tribe2, always). Pass --seed-file eval_seeds.json to self_play/arena so game i uses seeds[i].seed instead of base_seed + i, and (when not overridden by explicit CLI tribe flags) seeds[i].tribe1/tribe2 for that game's tribe pair. Do not reorder or edit -- frozen for reproducibility across experiments. Entry [0] is manually pinned to match replays/unit_opportunity_cost_v2/game_iter0_game0_seed1787500020.replay.json (seed + tribe/seat assignment) for continuity with that replay -- do not overwrite it when regenerating the rest."
 }
