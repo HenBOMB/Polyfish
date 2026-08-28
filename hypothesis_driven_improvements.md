@@ -9500,4 +9500,51 @@ FALSIFIABLE PREDICTIONS:
 MONITORING: `ScheduleWakeup` long-fallback (1200s+) through the night;
 `--resume <run_id>` on any macOS process-teardown kill (established
 recurring issue this session, checkpoints every 5 iterations make this
-safe).
+safe). **Amendment (launch mechanics, Aug 28):** the training run itself
+hit two DISTINCT kill mechanisms, both now fixed and documented in
+[[macos-wakeup-limit-kills-net-leaf-actors]] (project memory) — (1)
+`ACTORS=128` (the script's own default) trips macOS's per-process
+CPU-wakeups guard under net-leaf macro-mcts within ~40-70s, fixed with
+`-a 14` (core count); (2) a separate, unpredictable "launchd ... teardown
+of process-scoped services after host exited" session-lifecycle issue
+killed the run every 6-40min regardless of actor count (confirmed
+system-wide — it killed unrelated helper processes like
+`com.apple.intents.intents-helper` at the same moments, not anything
+specific to self_play), fixed by detaching via `launchctl submit`
+(`-l com.polyfish.exp074`) instead of a plain backgrounded shell child,
+with an explicit `PATH` export inside the job (launchd's default job
+environment lacks `~/.cargo/bin`/Homebrew). Stable since ~04:06 once both
+fixes were in place.
+
+**INTERIM READ, iteration 31 (Aug 28, ~12:00), reported honestly per the
+hypothesis-driven-loop convention — not the final verdict:** ran a fresh
+12-game readout batch (net-asym leaf, same config as the pre-training
+`replays/symmetric_check/` baseline) against the live checkpoint after 31
+iterations of training (one game still in progress at analysis time, n=11
+used). Comparison against the pre-training baseline (n=12):
+
+| Metric | Baseline (iter 1) | After 31 iterations |
+|---|---|---|
+| Flip events (contested-city captures) | 23 | 15 (n=11) |
+| Games with ≥1 flip | 11/12 (92%) | 8/11 (73%) |
+| Defend picked when offered | 67.3% | 56.4% |
+| Attack picked when offered | 52.5% | 45.2% |
+
+All four numbers moved DOWN after training, not up — the opposite of the
+hoped-for direction. The candidates are still being offered at a similar
+rate (365-404 ply-rows contain a Defend/Attack order in both batches), so
+this isn't the old bug regressing — it's the network picking them less
+once they exist. Two honest caveats before treating this as the verdict:
+(1) n=11 vs n=12 is far below this project's own established noise floor
+for behavioral reads (the 64-game gauge is already flagged as a ±12pp
+ruler; self-play is confirmed non-deterministic run-to-run at fixed seeds
+even with an unchanged network); (2) a real alternative explanation
+exists — a stronger economy from training could simply leave fewer
+genuinely-contestable weak cities on the board at all, which would look
+identical to "the network devalues the option" in this metric without
+being the same phenomenon. Cannot distinguish the two from this data
+alone. **Disposition: not refuted, not confirmed — a real but noisy
+interim signal that the direction isn't obviously working either.**
+Training continues; a second read at a later iteration (~60-100) is
+planned to check whether this is a transient dip or a real trend before
+drawing a conclusion.
