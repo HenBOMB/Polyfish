@@ -94,10 +94,10 @@ fn dump_risk_and_plan(game: &Game, label: &str, attack_targets: &[i32]) {
             .tanh()
             .max(if r.at_risk { 1.0 } else { 0.0 });
         println!(
-            "  [{label}] defend_plan city={} hold_needed={} shortfall={:.3} assigned={:?} urgency={:.4} cover_credit={:.1}",
-            r.city, plan.hold_needed, plan.shortfall, plan.assigned, urgency,
-            plan.assigned.iter().map(|(_, sat)| 600.0 * urgency * sat).sum::<f32>()
-                + if plan.hold_needed { 400.0 * urgency } else { 0.0 }
+            "  [{label}] defend_plan city={} hold_needed={} hold_margin={:.3} shortfall={:.3} assigned={:?} urgency={:.4} cover_credit={:.1}",
+            r.city, plan.hold_needed, plan.hold_margin, plan.shortfall, plan.assigned, urgency,
+            plan.assigned.iter().map(|(_, sat, credit_frac)| 600.0 * urgency * sat * credit_frac).sum::<f32>()
+                + 400.0 * urgency * plan.hold_margin
         );
     }
     if !risks.iter().any(|r| r.city == 49) {

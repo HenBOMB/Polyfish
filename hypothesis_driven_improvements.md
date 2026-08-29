@@ -11100,3 +11100,74 @@ took. The REAL open item this entry surfaces is `defend_cover`'s
 discreteness, which is what actually still produces the -558/-600
 pathology on the original flagged ply and needs its own investigation
 before that specific complaint can be called closed.
+
+## EXP_ELO_096 — `defend_plan`'s greedy fill and `defend_cover`/`defend_hold` redesigned as a smooth coverage credit, replacing the flat per-unit / boolean pricing EXP_ELO_095 flagged
+
+CONTEXT: Verdi's direct question about `defend_cover` ("it gives a single
+600 pts chunk per unit assigned... all or nothing... doesn't take into
+account the health of a defending unit") confirmed EXP_ELO_095's own
+closing finding — `defend_cover` pays `SHAPE_GOAL_DEFEND_COVER * urgency
+* sat` per assigned unit regardless of that unit's own combat power, and
+`defend_plan`'s greedy `fill()` stops the instant cumulative coverage
+crosses `need_damage`, so the unit that happens to close the gap gets a
+full flat share and the next-in-line gets zero — a hard cliff at the
+margin. Verdi's instruction: "I agree that a better design is a sliding
+scale. Overall we should get away from hard yes-no answers they have bad
+edge cases at the margins."
+
+HYPOTHESIS: replacing the threshold-crossing pick with a waterfall
+allocation — each candidate credited only for whatever slice of
+`need_damage` is still open when it's reached in priority order — removes
+the cliff and ties `defend_cover`'s per-unit payment to the unit's own
+`dmg` (health/attack/defense via `hypo_damage`) instead of a flat count,
+without changing which units get selected as defenders or the city-level
+safety facts (`shortfall`, `hold_needed`) that other logic depends on.
+
+CHANGE (`combat.rs`): `DefendPlan.assigned` becomes `Vec<(i32, f32, f32)>`
+— (tile, sat, credit_frac), where `credit_frac = credited / contribution`
+and `credited = (dmg * sat).min(need_damage - got_so_far)`. A unit whose
+credited contribution is ≤0 (gap already shut, or it deals no damage) is
+skipped, not recruited at zero value. `fill()` no longer breaks on
+`got >= need_damage` — the natural zero-credit outcome makes further units
+self-exclude. Added `DefendPlan.hold_margin: f32` (EXP_ELO_096), continuous
+in [0,1] — `(need_damage - without_garrison) / need_damage` when the
+garrison is present and `need_damage > 0`, else 0 — with `hold_needed`
+now derived as `hold_margin > 0.0` rather than computed separately, so the
+two can never disagree. `goal_potential.rs`: `defend_cover` is now
+`SHAPE_GOAL_DEFEND_COVER * urgency * sat * credit_frac` per assigned unit;
+`defend_hold` is now `SHAPE_GOAL_DEFEND_HOLD * urgency * hold_margin`
+(only added when `hold_margin > 0.0`), replacing both boolean gates.
+`need_damage`/`shortfall`/which-units-are-selected logic is untouched —
+this is scoped to the credit/payment layer only, not city-safety facts.
+
+New test (`defend_credit_tapers_smoothly_instead_of_a_flat_per_unit_share`):
+a weak defender (fully needed, `credit_frac == 1.0`) and a strong one
+processed second (`credit_frac` strictly between 0 and 1) confirm the
+tapering directly rather than by inference. All existing `combat.rs`
+fixtures needed only tuple-shape updates (2-tuple → 3-tuple pattern
+matches) — none needed a value change, confirming the new fill() is a
+strict refinement of the old one whenever no unit sits exactly on the old
+threshold. Full suite green: 309 lib + 27 self_play + all integration
+tests, 0 failures.
+
+**Re-verified against the real flagged idx179 ply** (`attack_pricing_probe`,
+`goal_potential_breakdown`, not hand math): dphi for the garrison-preserving
+Attack is now **-597.527**, not the flat **-600.000** every prior reading
+(EXP_ELO_075, 094, 095) recorded on this exact ply. The breakdown shows why:
+city 41's assigned set goes from `[(20, 1.0, 1.0), (21, 1.0, 0.825)]`
+pre-Attack to `[(20, 1.0, 0.829)]` post-Attack — unit 21 is no longer
+needed at all (need_damage nearly halves, 9.951 → 4.975, because the
+Attack weakens the shared attacker at tile 39) AND unit 20's own credit
+shrinks slightly (1.0 → 0.829) rather than staying pinned at a flat share.
+The same real-world change (weakening a shared attacker) now produces a
+proportionally graded Φ response instead of a coincidental flat round
+number — the qualitative fix EXP_ELO_095 called for.
+
+FALSIFIER (pre-registered before the gauge below): a paired n=128 gauge
+(`--base-seed 770425`, `--actors 14`, single-commit diff, matching every
+prior EXP_ELO_09x gauge in this ledger) should land within noise of
+EXP_ELO_095's own "fixed" arm (0.3203, 41/128) — this is a
+pricing-precision fix at the margin, not expected to be a large lever on
+its own. A swing well outside that band (say beyond ±8pp) would mean the
+smoothing changed real behavior more than intended and needs a second
+look before shipping.

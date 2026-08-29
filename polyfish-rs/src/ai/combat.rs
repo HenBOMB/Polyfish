@@ -26,14 +26,29 @@ const MAX_ASSIGN: usize = 4;
 #[derive(Debug, Clone)]
 pub struct DefendPlan {
     pub city: i32,
-    /// (unit tile, satisfaction): 1.0 = can strike an attacker on the city
-    /// next turn, 0.5 = inside the two-turn response ring.
-    pub assigned: Vec<(i32, f32)>,
+    /// (unit tile, satisfaction, credit_frac): satisfaction is 1.0 = can
+    /// strike an attacker on the city next turn, 0.5 = inside the two-turn
+    /// response ring. credit_frac (EXP_ELO_096) is the fraction of this
+    /// unit's own damage contribution that was actually needed to close
+    /// the city's coverage gap, in priority order — 1.0 while the gap is
+    /// still open, tapering down for whichever unit closes it, 0 (and
+    /// excluded from this list) once the gap is already shut. Replaces a
+    /// flat per-unit share so pricing scales with the unit's own combat
+    /// power (via `dmg`) and never cliffs between the last-included and
+    /// first-excluded candidate.
+    pub assigned: Vec<(i32, f32, f32)>,
     /// Unmet kill damage after assignment — drives recall/prep gradients.
     pub shortfall: f32,
     /// The garrison is load-bearing: without it the assigned cover cannot
-    /// meet `need_damage`. Only then does holding the tile get paid.
+    /// meet `need_damage`. Kept as a boolean fact (`hold_margin > 0.0`);
+    /// use `hold_margin` for a continuous reward.
     pub hold_needed: bool,
+    /// EXP_ELO_096: how load-bearing the garrison is, continuous in
+    /// [0, 1] — 0 when the rest of the roster already covers `need_damage`
+    /// without it, sliding up to 1 as removing it reopens the full gap.
+    /// Replaces a flat yes/no so a barely-load-bearing garrison doesn't
+    /// get paid the same as one that's the entire defense.
+    pub hold_margin: f32,
 }
 
 /// Clone with fresh action flags: threat and coverage reason about NEXT
@@ -833,32 +848,50 @@ pub fn defend_plan(
             .then(a.3.cmp(&b.3))
             .then(a.0.cmp(&b.0))
     });
-    // Greedy fill: full-cover before ring, closest first, until the kill
-    // damage is met or the cap is hit.
-    let fill = |skip_garrison: bool| -> (Vec<(i32, f32)>, f32) {
+    // EXP_ELO_096: waterfall fill, full-cover before ring, closest first.
+    // Each candidate is credited only for whatever slice of `need_damage`
+    // is still open when it's reached — the unit that closes the gap gets
+    // a partial `credit_frac` for just its needed sliver instead of a full
+    // flat share, so there is no cliff between the last-included and
+    // first-excluded candidate. A unit that contributes nothing to the
+    // still-open gap (because the gap is already shut, or it deals no
+    // damage at all) is skipped rather than recruited at zero value.
+    let fill = |skip_garrison: bool| -> (Vec<(i32, f32, f32)>, f32) {
         let mut picked = Vec::new();
         let mut got = 0.0f32;
         for &(tile, sat, dmg, _) in &cands {
-            if got >= need_damage || picked.len() >= MAX_ASSIGN {
+            if picked.len() >= MAX_ASSIGN {
                 break;
             }
             if skip_garrison && tile == threat.city {
                 continue;
             }
-            picked.push((tile, sat));
-            got += dmg * sat;
+            let contribution = dmg * sat;
+            let remaining = (need_damage - got).max(0.0);
+            let credited = contribution.min(remaining);
+            if credited <= 0.0 {
+                continue;
+            }
+            picked.push((tile, sat, credited / contribution));
+            got += credited;
         }
         (picked, got)
     };
     let (assigned, got) = fill(false);
-    let has_garrison = assigned.iter().any(|&(t, _)| t == threat.city);
+    let has_garrison = assigned.iter().any(|&(t, _, _)| t == threat.city);
     // Load-bearing test: rebuild the plan without the garrison — if the
     // rest of the roster can meet the kill damage alone, the tile is free.
-    let hold_needed = has_garrison && fill(true).1 < need_damage;
+    let without_garrison = fill(true).1;
+    let hold_margin = if has_garrison && need_damage > 0.0 {
+        ((need_damage - without_garrison) / need_damage).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     DefendPlan {
         city: threat.city,
         shortfall: (need_damage - got).max(0.0),
-        hold_needed,
+        hold_needed: hold_margin > 0.0,
+        hold_margin,
         assigned,
     }
 }
@@ -1293,10 +1326,38 @@ pub(crate) mod tests {
         t1.units.push(unit_at(82, UnitType::Rider, 1)); // cheb 2: covers
         let risks = city_risks(&state, 1);
         let plan = defend_plan(&state, 1, &risks[0], &[]);
-        assert_eq!(plan.assigned.iter().filter(|&&(_, s)| s == 1.0).count(), 2);
+        assert_eq!(plan.assigned.iter().filter(|&&(_, s, _)| s == 1.0).count(), 2);
         // Two rider hits do not kill a full swordsman: shortfall is honest.
         let sword_hp = risks[0].need_damage;
         assert!(plan.shortfall > 0.0 && plan.shortfall < sword_hp);
+    }
+
+    /// EXP_ELO_096: the unit that closes the coverage gap gets a partial
+    /// `credit_frac` for just its needed sliver, not the same full share as
+    /// a unit that was needed outright — no cliff between "picked" and
+    /// "not picked", and the share is priced off the unit's own damage
+    /// output (health/attack/defense via `hypo_damage`), not a flat count.
+    #[test]
+    fn defend_credit_tapers_smoothly_instead_of_a_flat_per_unit_share() {
+        let mut state = board(60);
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(61, UnitType::Warrior, 2));
+        let t1 = state.tribes.get_mut(&1).unwrap();
+        t1.units.push(unit_at(49, UnitType::Warrior, 1)); // weaker, priority order first (tile 49 < 59)
+        t1.units.push(unit_at(59, UnitType::Giant, 1)); // stronger, priority order second
+        let risks = city_risks(&state, 1);
+        let plan = defend_plan(&state, 1, &risks[0], &[]);
+
+        let weak = plan.assigned.iter().find(|&&(t, _, _)| t == 49).expect("weak defender assigned");
+        let strong = plan.assigned.iter().find(|&&(t, _, _)| t == 59).expect("strong defender assigned");
+        assert_eq!(weak.2, 1.0, "first-in-priority unit didn't close the gap alone: fully needed");
+        assert!(
+            strong.2 > 0.0 && strong.2 < 1.0,
+            "second unit should only be partially needed, not a flat 0-or-1 share: {:?}",
+            strong
+        );
+        // The pair together essentially close the gap: no artificial cliff
+        // stranded either a real shortfall or a wasted overshoot.
+        assert!(plan.shortfall < 1.0, "shortfall {}", plan.shortfall);
     }
 
     #[test]
@@ -1424,7 +1485,7 @@ pub(crate) mod tests {
         state.tribes.get_mut(&2).unwrap().units.push(unit_at(59, UnitType::Swordsman, 2));
         let r = city_risks(&state, 1);
         let plan = defend_plan(&state, 1, &r[0], &[79]);
-        assert!(!plan.assigned.iter().any(|&(t, _)| t == 79));
-        assert!(plan.assigned.iter().any(|&(t, _)| t == 48));
+        assert!(!plan.assigned.iter().any(|&(t, _, _)| t == 79));
+        assert!(plan.assigned.iter().any(|&(t, _, _)| t == 48));
     }
 }

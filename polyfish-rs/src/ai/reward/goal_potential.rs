@@ -599,17 +599,26 @@ fn goal_potential_inner(
                 .tanh()
                 .max(if th.at_risk { 1.0 } else { 0.0 });
             let plan = crate::ai::combat::defend_plan(state, player, th, &attack_targets);
-            for (_, sat) in &plan.assigned {
-                acc.add("defend_cover", SHAPE_GOAL_DEFEND_COVER * urgency * sat);
+            // EXP_ELO_096: credit scales with the unit's own contribution
+            // (credit_frac), not a flat per-unit share — a strong unit and
+            // a barely-relevant one no longer pay identically.
+            for (_, sat, credit_frac) in &plan.assigned {
+                acc.add(
+                    "defend_cover",
+                    SHAPE_GOAL_DEFEND_COVER * urgency * sat * credit_frac,
+                );
             }
-            if plan.hold_needed {
-                acc.add("defend_hold", SHAPE_GOAL_DEFEND_HOLD * urgency);
+            if plan.hold_margin > 0.0 {
+                acc.add(
+                    "defend_hold",
+                    SHAPE_GOAL_DEFEND_HOLD * urgency * plan.hold_margin,
+                );
             }
             // EXP_ELO_042: recall never conscripts attack-committed units;
             // with none free, shortfall drives prep, not un-commitment.
             if plan.shortfall > 0.0 {
                 let assigned: std::collections::HashSet<i32> =
-                    plan.assigned.iter().map(|(t, _)| *t).collect();
+                    plan.assigned.iter().map(|(t, _, _)| *t).collect();
                 if let Some(d) = tribe
                     .units
                     .iter()
