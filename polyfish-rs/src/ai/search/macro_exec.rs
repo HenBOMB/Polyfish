@@ -341,21 +341,6 @@ pub fn rank_plies(
         })
         .collect();
     scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-    // EXP_ELO_075: EndTurn is stripped above whenever another move exists
-    // (anti-passivity — don't let a merely-mediocre move lose to doing
-    // nothing) and there is no separate "hold/skip" move type in this
-    // engine, so a Defend-ordered garrison with nothing but Φ-harmful
-    // options (e.g. every reachable Step vacates the tile it's holding)
-    // is structurally forced to spend its move anyway. Only when every
-    // surviving candidate actively LOWERS Φ relative to doing nothing
-    // (score 0.0, matching EndTurn's own `scoring::score_move` value) does
-    // EndTurn get a chance to compete — "doing nothing beats doing active
-    // harm" is a narrower bar than "nothing beats mediocre," so the
-    // anti-passivity behavior this strip exists for is unchanged.
-    if has_other && lambda != 0.0 && scored.first().is_some_and(|(s, _)| *s < 0.0) {
-        scored.push((0.0, Box::new(EndTurnMove) as Box<dyn Move>));
-        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-    }
     scored
 }
 
@@ -576,66 +561,6 @@ mod tests {
                     .iter()
                     .all(|(_, m)| m.move_type() != MoveType::Research),
                 "seed {seed}: gated Research survived"
-            );
-        }
-    }
-
-    /// EXP_ELO_075: a lone, Defend-ordered garrison facing a real adjacent
-    /// threat has no move that doesn't vacate the tile it's holding (this
-    /// engine has no "hold/skip" move type) — every Step should price
-    /// Φ-negative under `defend_plan`'s `hold_needed` loss, and EndTurn
-    /// (normally stripped whenever another move survives) must be allowed
-    /// back in and win, rather than forcing the garrison to wander off.
-    #[test]
-    fn forced_garrison_abandonment_prefers_end_turn_over_every_negative_step() {
-        use crate::ai::combat::tests::{board, unit_at};
-        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
-        use crate::types::UnitType;
-
-        let mut state = board(60);
-        state.tribes.get_mut(&1).unwrap().units.push(unit_at(60, UnitType::Rider, 1));
-        // 2 tiles out (Chebyshev), not adjacent: close enough to be a live
-        // threat next turn (`defend_plan`'s 2*movement+RING2_PAD window) but
-        // out of THIS ply's Attack range, so Attack isn't a legal escape
-        // hatch here — every legal move for the Rider is a Step, and every
-        // Step vacates the tile it's holding.
-        state.tribes.get_mut(&2).unwrap().units.push(unit_at(58, UnitType::Swordsman, 2));
-        let mut game = Game::new();
-        game.state = state;
-        game.post_load();
-
-        let goal = MacroGoal {
-            orders: vec![(OrderKind::Defend, 60)],
-            stance: Stance::Arm,
-            save_target: None,
-        };
-        let aux = compute_goal_aux(&game.state, 1, &goal, 0, 0, None);
-        let ranked = rank_plies(&mut game, 1, &goal, &aux, true, 1.0, None);
-
-        // Every Step vacates the tile the Rider is holding, so every one of
-        // them must lose the `defend_hold` credit and price Φ-negative.
-        // (Attack stays on the tile and is exempt from this fixture's claim
-        // — its own pricing is a separate, already-flagged issue, not this
-        // fix's target.)
-        let steps: Vec<_> = ranked.iter().filter(|(_, m)| m.move_type() == MoveType::Step).collect();
-        assert!(!steps.is_empty(), "fixture should offer the Rider Step options");
-        assert!(
-            steps.iter().all(|(s, _)| *s < 0.0),
-            "test fixture assumption broken: not every Step candidate is Φ-negative: {:?}",
-            steps.iter().map(|(s, m)| (*s, m.serialize())).collect::<Vec<_>>()
-        );
-
-        let end_turn = ranked.iter().find(|(_, m)| m.move_type() == MoveType::EndTurn);
-        assert!(
-            end_turn.is_some(),
-            "EndTurn must survive gating once every Step is Φ-negative; ranked: {:?}",
-            ranked.iter().map(|(s, m)| (*s, m.move_type())).collect::<Vec<_>>()
-        );
-        assert_eq!(end_turn.unwrap().0, 0.0);
-        for (s, _) in &steps {
-            assert!(
-                end_turn.unwrap().0 > *s,
-                "EndTurn (0.0) should outrank every Φ-negative Step ({s})"
             );
         }
     }
