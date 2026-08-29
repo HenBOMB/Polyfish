@@ -10732,3 +10732,81 @@ treating this n=128, ±2.3pp-per-arm figure as the project's own current
 working noise estimate for this exact recipe (replacing the older,
 smaller-n citations) until either a larger validation run or the
 tie-break fix changes the picture.
+
+## EXP_ELO_091 — found and fixed the actual non-determinism: two std HashMap/HashSet iterations in Step and Research move generation, spread now 0.0pp
+
+CONTEXT: Verdi, after EXP_ELO_090's n=128 replicate spread: "I need the
+spread here to be less than 0.5pp. That is the goal. Now go figure out
+how to deliver that." A hard, concrete target, not another noise-floor
+citation.
+
+METHOD: `GameState`'s own maps (`tiles`/`tribes`/`structures`/`resources`)
+are `IndexMap<_, _, FxBuild>` — insertion-order iteration, deterministic
+regardless of hasher. Searched `moves/` and `ai/` for anywhere a raw
+`std::collections::HashMap`/`HashSet` (default `RandomState` hasher,
+reseeded per-process from OS entropy) gets ITERATED to build an ordered
+candidate list, as opposed to used for O(1) point-lookup (safe) or
+membership testing (safe). Two real hits, both in core move generators
+(not incidental code):
+
+1. `moves/mod.rs::generate_step_moves` — `compute_reachable_tiles`
+   returns `std::collections::HashMap<i32, f32>`; the caller iterated it
+   directly (`for (&tile_index, _) in &reachable`) to build `StepMove`
+   candidates. Since `rank_plies`' sort is STABLE, tied Step candidates
+   kept whatever order they arrived in — which varies process to process
+   even on an identical map with identical code.
+2. `moves/research.rs::generate_research_moves` — same shape,
+   `std::collections::HashSet<TechnologyType>` iterated directly to
+   build `ResearchMove` candidates.
+
+Both are exactly the mechanism the `same-seed-not-reproducible` project
+memory named ("HashMap tie-break order") — this entry replaces that
+memory's vague attribution with the two actual call sites.
+
+Ruled out before concluding these were sufficient: no unseeded RNG
+(`thread_rng`/`from_entropy`) anywhere in the `macro-mcts` decision path
+(`macro_mcts.rs`/`micro_mcts.rs`/`macro_exec.rs`/`macro_agent.rs`) or in
+`self_play.rs`'s own move-selection/tribe-pick code (which IS seeded from
+the game seed via `StdRng::seed_from_u64`). Also tested `--actors 1
+--eval-servers 1` (fully serialized, no cross-actor eval-batch timing
+effects) BEFORE finding these two bugs: `avg_moves`/`avg_score` still
+differed run-to-run even fully serialized, ruling out GPU-batch-timing
+floating-point effects as the (or a) dominant cause and pointing back at
+a discrete ordering bug in the CPU-side move generation, not numerical
+noise.
+
+CHANGE: both call sites now collect into a `Vec`, sort by a deterministic
+key (`i32` tile index for Step; `TechnologyType`'s own `i8` discriminant
+for Research), then iterate the sorted `Vec`. Minimal, surgical — no
+change to the underlying search structures (`ReachableNode`'s `BinaryHeap`
+traversal was already confirmed deterministic given deterministic push
+order; only the FINAL result-iteration was the bug).
+
+FALSIFIER, run in stages to attribute each fix's contribution:
+- Before either fix: n=48 paired rerun (EXP_ELO_088's own data) — 12.5pp
+  swing on an identical config.
+- After the Step-move fix alone: n=48 paired rerun — 6.25pp swing (halved,
+  not eliminated — confirmed the Research-move bug was independently
+  contributing).
+- After BOTH fixes: n=48 paired rerun (`--actors 14`, matching
+  production) — **61 of 62 metrics fields byte-identical between the two
+  runs** (win rate 0.29167 both; avg_moves 197.1667 both; avg_score
+  4001.0417 both; every turn-by-turn/t2c/tempo sub-metric identical). The
+  one differing field is the output filename, which embeds a run
+  timestamp, not game data. **Spread: 0.0pp — clears the <0.5pp target.**
+
+Full `cargo test --release --lib --tests --bin self_play` green after
+each fix (303+27 passed, no regressions).
+
+**Disposition: fixed and verified.** This is a real correctness/
+reproducibility bug fix, not a tuning change — it does not alter what any
+move SCORES, only what order tied candidates are considered in, so it
+should not itself shift behavior/strength (no paired win-rate gauge
+needed the way a scoring change would need one). What it DOES change:
+every future paired A/B gauge on this recipe is now a clean, exact
+measurement — no more chasing whether an observed win-rate delta is a
+real effect or replay noise. **Retroactive implication**: every gauge run
+earlier tonight (EXP_ELO_077 through 090) was measured against this
+non-determinism and should be read as noisier than its own stated
+n-based floor suggested — none of those verdicts should be re-opened
+without a fresh, now-clean rerun, but none should be over-trusted either.

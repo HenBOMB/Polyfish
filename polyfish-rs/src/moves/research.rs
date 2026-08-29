@@ -120,7 +120,15 @@ pub fn generate_research_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>
         // If tech_vanilla is empty (impossible), add Unrequired?
         // Let's assume tech_vanilla is populated.
 
-        for tech in available_techs {
+        // EXP_ELO_091: `available_techs` is a std HashSet (random per-process
+        // seed) -- iterating it directly makes Research candidate order,
+        // and therefore which tied-score tech wins a stable sort, vary run
+        // to run on an identical map with identical code. Sort by
+        // discriminant for a deterministic order.
+        let mut sorted_techs: Vec<TechnologyType> = available_techs.into_iter().collect();
+        sorted_techs.sort_unstable_by_key(|t| *t as i8);
+
+        for tech in sorted_techs {
             // Check if already discovered
             if tribe.tech_vanilla.iter().any(|t| t.tech_type == tech) {
                 continue;

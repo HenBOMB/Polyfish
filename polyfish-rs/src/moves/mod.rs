@@ -405,8 +405,15 @@ fn generate_step_moves(state: &GameState, unit: &UnitState, moves: &mut Vec<Box<
     }
 
     let reachable = compute_reachable_tiles(state, unit);
+    // EXP_ELO_091: `reachable` is a std HashMap (random per-process seed),
+    // so iterating it directly makes candidate order -- and therefore
+    // which tied-score Step wins `rank_plies`' stable sort -- vary run to
+    // run on the IDENTICAL map with IDENTICAL code. Sort by tile index so
+    // this candidate order is deterministic.
+    let mut tiles: Vec<i32> = reachable.keys().copied().collect();
+    tiles.sort_unstable();
 
-    for (&tile_index, _) in &reachable {
+    for tile_index in tiles {
         if unit.coords.idx == tile_index {
             continue;
         }
