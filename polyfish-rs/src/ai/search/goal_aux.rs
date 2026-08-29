@@ -277,6 +277,12 @@ pub fn market_ready(state: &GameState, player: PlayerId) -> bool {
 
 /// Root-only whole-game purchase caps — applied whenever a `GoalAux` is set,
 /// independent of the stance gate's window. Non-Research moves always pass.
+/// EXP_ELO_083 diagnostic (temporary, to be removed): how often the
+/// no-recommendation rejection below actually fires -- was
+/// TECH_LIMIT_FALLTHROUGH (counting the old allow-through gap) before the
+/// gap was closed; now counts the new rejection instead.
+pub static TECH_LIMIT_REJECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub fn passes_tech_purchase_limits(m: &dyn Move, aux: &GoalAux) -> bool {
     if m.move_type() != MoveType::Research {
         return true;
@@ -326,9 +332,17 @@ pub fn passes_tech_purchase_limits(m: &dyn Move, aux: &GoalAux) -> bool {
                 if tech != next {
                     return false;
                 }
-            } else if !aux.recommended_techs.is_empty()
-                && !aux.recommended_techs.contains(&tech)
-            {
+            } else if !aux.recommended_techs.contains(&tech) {
+                // EXP_ELO_083: an EMPTY recommended set used to fall through
+                // to "allowed" here -- the one gap left in an otherwise
+                // exhaustive whitelist (committed lane's own tech, a live
+                // save-plan's next tech, or an explicit recommendation).
+                // Measured reachable: 304 candidate legality-checks in an
+                // 8-game batch. Verdi: "tech should only be bought if
+                // explicitly requested... not something the ply can just
+                // accidentally wander into." No recommendation at all is
+                // the strongest case for "not requested" there is.
+                TECH_LIMIT_REJECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return false;
             }
         }

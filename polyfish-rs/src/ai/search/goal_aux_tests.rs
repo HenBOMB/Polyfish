@@ -80,9 +80,14 @@ fn banking_gates_research_that_is_not_the_plan() {
     aux.save_next_tech = None;
     assert!(passes_tech_purchase_limits(&ResearchMove::new(T::Mining), &aux));
     assert!(!passes_tech_purchase_limits(&ResearchMove::new(T::Organization), &aux));
-    // No opinion at all: nothing is gated on lane grounds.
+    // EXP_ELO_083: no opinion at all now means nothing is EXPLICITLY
+    // requested, so it is gated -- the opposite of the pre-083 behavior
+    // this branch used to document. "Not something the ply can just
+    // accidentally wander into" (Verdi) applies with equal force whether
+    // the reason for having no opinion is an empty save target or an
+    // empty recommendation.
     aux.recommended_techs.clear();
-    assert!(passes_tech_purchase_limits(&ResearchMove::new(T::Organization), &aux));
+    assert!(!passes_tech_purchase_limits(&ResearchMove::new(T::Organization), &aux));
 }
 #[test]
 fn legacy_star_gate_blocks_research_at_any_star_count() {
@@ -235,6 +240,11 @@ fn combat_tier3_waits_for_an_economic_tier3() {
     let mut aux = GoalAux::default();
     aux.overlays.knight_commit = true; // clears the stepping-stone rule
     aux.tier3_bought = 0; // budget available
+    // EXP_ELO_083: Construction needs an explicit recommendation now that
+    // "no opinion" is gated rather than allowed -- Chivalry doesn't (the
+    // knight_lane exemption above skips the whitelist for it entirely),
+    // isolating this assertion to the tier-3 ordering rule alone.
+    aux.recommended_techs = vec![TechnologyType::Construction];
 
     assert!(
         !passes_tech_purchase_limits(&chivalry, &aux),
@@ -289,6 +299,12 @@ fn water_techs_are_masked_only_on_a_map_without_water() {
         TechnologyType::Aquatism,
         TechnologyType::Navigation,
     ];
+    // EXP_ELO_083: explicitly recommend everything this test exercises
+    // (Riding/Chivalry bypass via knight_lane and don't need it) so the
+    // "no opinion -> gated" whitelist doesn't shadow the water-masking
+    // rule this test actually targets.
+    aux.recommended_techs = wet.to_vec();
+    aux.recommended_techs.push(TechnologyType::Construction);
     aux.water_dead = false;
     for t in wet {
         assert!(passes_tech_purchase_limits(&ResearchMove::new(t), &aux), "{t:?} legal with water");
@@ -410,10 +426,13 @@ fn tech_caps_and_rider_push() {
     // cities, so EXP_ELO_055's territory-scoped recommended_techs recommends
     // nothing of its own here (only the rider-push insert), which would
     // otherwise gate Organization out for lane reasons unrelated to what
-    // this assertion is testing.
+    // this assertion is testing. EXP_ELO_083: clearing the list no longer
+    // means "no opinion, don't gate" -- it means "gate everything" -- so
+    // isolation now means explicitly recommending both techs this
+    // assertion pair exercises instead.
     let mut t3 = aux.clone();
     t3.tier3_bought = TIER3_CAP_PER_GAME;
-    t3.recommended_techs.clear();
+    t3.recommended_techs = vec![research1.tech_type().unwrap(), research3.tech_type().unwrap()];
     assert!(passes_tech_purchase_limits(&research1, &t3));
     assert!(!passes_tech_purchase_limits(&research3, &t3));
 }

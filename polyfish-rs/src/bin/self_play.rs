@@ -5188,6 +5188,10 @@ fn main() -> anyhow::Result<()> {
         rank_plies_candidates,
         rank_plies_candidates as f64 / (rank_plies_calls as f64).max(1.0)
     );
+    println!(
+        "  - EXP_ELO_083 tech-limit no-recommendation rejections (diagnostic, temporary): {} candidates",
+        polyfish::ai::search::goal_aux::TECH_LIMIT_REJECTIONS.load(std::sync::atomic::Ordering::Relaxed)
+    );
     // Micro-mcts Phase 0 (throughput/cache-hit probe, POLYFISH_MICRO_PROBE_SIMS):
     // zero unless that env var is set. Note the rank_plies numbers above also
     // inflate while this probe is active -- its own continuation walk calls
