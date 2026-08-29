@@ -9468,6 +9468,98 @@ net MORE passive in ambiguous-but-not-hopeless states would be a real
 regression, not a wash — watch for that specifically since this touches the
 one place passivity is deliberately suppressed elsewhere in this file).
 
+**ACTUAL — MEASURED, FALSIFIED, REVERTED (commit `62828e9`).** The idx179
+falsifier passed cleanly (EndTurn appears, wins, ranked_#1 of 8 — see the
+prior faithful-`rank_plies` re-run) and the new unit test passed. But the
+project's own registered falsifier's own explicit warning ("a fix that
+makes the net MORE passive... would be a real regression — watch for that
+specifically") is exactly what happened, caught by the paired-gauge
+no-regression check before it went anywhere near training:
+
+Macro-mcts paired gauge (not the gumbel-tuned seed-770425 recipe verbatim —
+adapted to this run's real production config: `--search-backend macro-mcts
+--macro-leaf net-asym --macro-sims 64 --macro-k 8 --macro-rollout-lambda
+0.0 --goal-channels --goal-w-tree 1`, `--anchor-frac 1.0
+--iteration 100 --anchor-decay-start 100 --base-seed 770425 --tribe1
+Imperius --tribe2 Imperius --gamemode 2 --actors 14`, n=48, same
+`model.safetensors` mtime both arms, single-commit diff isolating exactly
+this fix):
+
+| | pre-fix (`c57e036`) | post-fix (`ffce0b5`) |
+|---|---|---|
+| anchor_net_wr | 0.396 (19/48) | 0.146 (7/48) |
+| avg_moves | 248.1 | 188.0 |
+| avg_score | 4847.2 | 3344.1 |
+
+A 25-point win-rate collapse, games ending ~24% shorter, ~30% lower score —
+coherent, not noise (n=48 is below the 128-seed formal floor, but this
+magnitude and the multi-metric co-movement both clear it easily).
+
+Root cause, confirmed by instrumenting the fire site (temporary
+`ENDTURN_REVIVED` atomic + `POLYFISH_LOG_ENDTURN_REVIVE` per-fire logging,
+removed before reverting): the fix fires far more often than the rare
+forced-garrison-abandonment case it was designed for — **127 times in an
+8-game batch (~16/game, ~2-3% of that pov's plies)** — and the score
+distribution at fire time is dominated by shallow negatives, not the deep
+(-400+) garrison-abandonment class: of 140 fires, 105 (75%) scored between
+-100 and -50, only ~6 (4%) below -400. **The design flaw: EndTurn's flat
+0.0 is not a fair price against `base + λΔφ`.** A candidate's score prices
+ONE ply's immediate Φ change; EndTurn's implicit 0.0 claims "stopping
+preserves Φ," but stopping forfeits every remaining ply of the turn AND
+hands the move to the opponent — exactly the tradeoff the unconditional
+strip existed to prevent. Most fires are ordinary late-turn diminishing-
+returns plies (a small mildly-negative Step or Research with nothing better
+left this turn, previously just taken and the turn continued) which the fix
+now cuts short instead — the AI got measurably more passive in
+ambiguous-but-not-hopeless states, precisely the failure mode the
+falsifier called in advance.
+
+Considered and rejected for tonight: a depth threshold (revive only when
+the best score is very deeply negative, e.g. < -300) to try to isolate the
+sparse deep tail. Rejected because the tail isn't a clean second cluster
+separated by a gap — it's continuous down to -1529 with no obvious cut
+point — so a threshold would be an unvalidated guess, not a principled
+retry, and this project's own low-confidence-fix discipline says that
+doesn't ship on a hunch. Also worth recording for whoever revisits this:
+under `--macro-rollout-lambda 0.0`, the fix (gated on `lambda != 0.0`)
+could never fire inside the tree's own turn rollouts even if kept — the
+macro ballot's Q values assume full-turn execution while the real executor
+would have truncated, a search/execution incoherence any surviving variant
+needs to address, not just the threshold question.
+
+**The better fix candidate for the original bug is still open, not
+reverted-with-nothing-to-show:** this ledger's own side-finding on the same
+idx179 ply — `Attack 49→39` (hitting the actual besieging unit while
+staying garrisoned; melee doesn't relocate the attacker) priced at -558.240
+in the real game, worse than every vacating Step, while the exact same
+shape (lone Defend-ordered garrison, adjacent single attacker) in this
+entry's own clean unit-test fixture priced Attack at +27.84 and it won
+correctly. If Φ priced a garrison-preserving Attack right in the real
+game's actual (multi-attacker, `must_kill`-driven) situation, the correct
+move wins outright on its own merits and the EndTurn question never needs
+to arise — a "price, don't mask" fix (per this project's own
+`goal-pricing-beats-masks` finding) that never touches the
+passivity-sensitive EndTurn gating at all. Not traced further tonight
+(discovered late, needs its own `defend_plan`/`must_kill` investigation);
+registering as the natural next step rather than rushing it.
+
+**Disposition: REVERTED.** `git revert ffce0b5` (commit `62828e9`) — full
+test suite re-passes post-revert. No training run follows from this
+entry; the user's own gate ("once we have the thing that looks like it's
+gonna work... then we can kick off a training run") was not met. Two of
+Verdi's four flagged turn-level complaints were checked against this
+project's own ground-truth tools and refuted (Organization tech's real
+driver is upstream stance selection, not tech-utility myopia; the Forge-
+site pick agrees with `eco_plan`'s own forward solver). The other two
+(garrison abandonment, PopGrowth-over-BorderGrowth) are real, but neither
+has a fix that survived measurement — garrison abandonment's first attempt
+regressed on contact with the paired gauge and was reverted; a more
+targeted Attack-pricing candidate is identified and registered for next
+time. Stopping here without a training run is the correct outcome of the
+loop, not a shortfall against it — the loop's whole point is to catch
+exactly this kind of plausible-but-wrong fix before it reaches a multi-hour
+training investment, and it did.
+
 ## EXP_ELO_076 — reward-choice and Forge-site scoring are Φ-blind to the eco_plan hub plan (registered)
 
 STATUS: REGISTERED, about to implement.
