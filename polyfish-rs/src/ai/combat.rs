@@ -415,6 +415,15 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
 pub static SHARED_ATTACKER_PARTIAL_WEIGHTS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+/// EXP_ELO_096 diagnostic (temporary): how often the new waterfall credit
+/// actually produces a fractional (0, 1) `credit_frac`/`hold_margin` —
+/// i.e. how often the smoothing changes anything versus every assignment
+/// landing at the old system's implicit 0 or 1.
+pub static DEFEND_CREDIT_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static DEFEND_CREDIT_PARTIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static DEFEND_HOLD_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static DEFEND_HOLD_PARTIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Same as [`city_risks`], but takes an already-computed threat list instead
 /// of scanning for one. `threat_units` depends only on the OPPONENT's units
 /// and ghosts — never on the acting player's own move — so a caller ranking
@@ -872,7 +881,12 @@ pub fn defend_plan(
             if credited <= 0.0 {
                 continue;
             }
-            picked.push((tile, sat, credited / contribution));
+            let credit_frac = credited / contribution;
+            DEFEND_CREDIT_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if credit_frac < 1.0 {
+                DEFEND_CREDIT_PARTIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            picked.push((tile, sat, credit_frac));
             got += credited;
         }
         (picked, got)
@@ -883,7 +897,12 @@ pub fn defend_plan(
     // rest of the roster can meet the kill damage alone, the tile is free.
     let without_garrison = fill(true).1;
     let hold_margin = if has_garrison && need_damage > 0.0 {
-        ((need_damage - without_garrison) / need_damage).clamp(0.0, 1.0)
+        DEFEND_HOLD_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let m = ((need_damage - without_garrison) / need_damage).clamp(0.0, 1.0);
+        if m > 0.0 && m < 1.0 {
+            DEFEND_HOLD_PARTIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        m
     } else {
         0.0
     };

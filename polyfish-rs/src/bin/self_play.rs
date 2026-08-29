@@ -5213,6 +5213,24 @@ fn main() -> anyhow::Result<()> {
         "  - EXP_ELO_095 shared-attacker partial weights (diagnostic, temporary): {} entries",
         polyfish::ai::combat::SHARED_ATTACKER_PARTIAL_WEIGHTS.load(std::sync::atomic::Ordering::Relaxed)
     );
+    {
+        let cover_total =
+            polyfish::ai::combat::DEFEND_CREDIT_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
+        let cover_partial =
+            polyfish::ai::combat::DEFEND_CREDIT_PARTIAL.load(std::sync::atomic::Ordering::Relaxed);
+        let hold_total =
+            polyfish::ai::combat::DEFEND_HOLD_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
+        let hold_partial =
+            polyfish::ai::combat::DEFEND_HOLD_PARTIAL.load(std::sync::atomic::Ordering::Relaxed);
+        println!(
+            "  - EXP_ELO_096 defend_cover fractional credit (diagnostic, temporary): {cover_partial}/{cover_total} ({:.3}%) assignments partial",
+            100.0 * cover_partial as f64 / (cover_total as f64).max(1.0)
+        );
+        println!(
+            "  - EXP_ELO_096 defend_hold fractional margin (diagnostic, temporary): {hold_partial}/{hold_total} ({:.3}%) evaluations partial",
+            100.0 * hold_partial as f64 / (hold_total as f64).max(1.0)
+        );
+    }
     // Micro-mcts Phase 0 (throughput/cache-hit probe, POLYFISH_MICRO_PROBE_SIMS):
     // zero unless that env var is set. Note the rank_plies numbers above also
     // inflate while this probe is active -- its own continuation walk calls

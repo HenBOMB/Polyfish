@@ -11171,3 +11171,41 @@ pricing-precision fix at the margin, not expected to be a large lever on
 its own. A swing well outside that band (say beyond ±8pp) would mean the
 smoothing changed real behavior more than intended and needs a second
 look before shipping.
+
+**FIRE-RATE** (n=16 real games, macro-mcts + goal-channels): `defend_cover`
+fractional credit 52,762/321,800 (16.4%) of assignments; `defend_hold`
+fractional margin 28,519/36,167 (78.9%) of evaluations. The hold-margin
+rate in particular is high — the old boolean `hold_needed` gate was
+flipping at a genuinely graded margin far more often than the cliff
+suggested, not a rare edge case.
+
+**PAIRED GAUGE** (n=128, `--actors 14`, worktree-isolated single-commit
+diff `bd8db82` → `06da616`, identical `model.safetensors` copied into
+both, matching every prior EXP_ELO_09x gauge in this ledger):
+
+| | prefix (`bd8db82`, EXP_ELO_095) | fixed (`06da616`, EXP_ELO_096) |
+|---|---|---|
+| anchor_net_wr | 0.2969 (38/128) | 0.4063 (52/128) |
+| avg_moves | 221.99 | 249.10 |
+| avg_score | 4229.45 | 4898.95 |
+
+**Both arms reproduced bit-for-bit across two independent runs each**
+(identical anchor_net_wr/avg_moves/avg_score to full float precision on
+both sides) — the residual `--actors 14` batch-timing variance flagged
+after EXP_ELO_091 did not manifest in either arm this time, so this
++10.94pp swing is a real, deterministic, reproducible effect of the code
+diff, not noise. This is well outside this entry's own pre-registered
+"within noise of 0.3203" expectation — the hypothesis under-predicted
+the effect size. A pricing-precision fix at the margin was expected to
+be a small lever; instead, removing the discreteness in `defend_cover`/
+`defend_hold` measurably changes how much defensive posture gets rewarded
+across ordinary play (fires on 16-79% of evaluations, not a rare corner
+case), and that turned out to matter more than the single flagged ply
+suggested.
+
+Disposition: SHIP. `DEFEND_CREDIT_TOTAL`/`DEFEND_CREDIT_PARTIAL`/
+`DEFEND_HOLD_TOTAL`/`DEFEND_HOLD_PARTIAL` left in place as permanent
+cheap counters, matching the `RANK_PLIES_CALLS` precedent for this
+ledger. No further tuning needed at this reading — the two-round
+replicate check is stronger evidence than a single n=128 read, and both
+sides of the comparison confirmed stable.
