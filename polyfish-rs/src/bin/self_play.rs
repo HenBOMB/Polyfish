@@ -5209,6 +5209,10 @@ fn main() -> anyhow::Result<()> {
             100.0 * chosen as f64 / (eligible as f64).max(1.0)
         );
     }
+    println!(
+        "  - EXP_ELO_094 cross-city attacker dedups (diagnostic, temporary): {} entries removed",
+        polyfish::ai::combat::CROSS_CITY_ATTACKER_DEDUPS.load(std::sync::atomic::Ordering::Relaxed)
+    );
     // Micro-mcts Phase 0 (throughput/cache-hit probe, POLYFISH_MICRO_PROBE_SIMS):
     // zero unless that env var is set. Note the rank_plies numbers above also
     // inflate while this probe is active -- its own continuation walk calls

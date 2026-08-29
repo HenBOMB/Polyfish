@@ -348,6 +348,11 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
     city_risks_with_threats(state, player, &threats)
 }
 
+/// EXP_ELO_094 diagnostic (temporary): how many (unit, city) attacker
+/// entries the cross-city dedup pass below actually removes.
+pub static CROSS_CITY_ATTACKER_DEDUPS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 /// Same as [`city_risks`], but takes an already-computed threat list instead
 /// of scanning for one. `threat_units` depends only on the OPPONENT's units
 /// and ghosts — never on the acting player's own move — so a caller ranking
@@ -367,12 +372,25 @@ pub fn city_risks_with_threats(
     if threats.is_empty() {
         return Vec::new();
     }
-    let mut out = Vec::new();
+
+    // Pass 1: everything that does NOT depend on cross-city information --
+    // occupancy, the broader multi-turn `enterers` set, and the RAW
+    // this-turn `attackers` set (unfiltered).
+    struct Pre<'c> {
+        city: &'c crate::states::CityState,
+        occupant: Option<&'c UnitState>,
+        sieged: bool,
+        open: bool,
+        enterers: Vec<Enterer>,
+        attackers: Vec<i32>,
+        arrives_next_turn: bool,
+        breakable: bool,
+    }
+    let mut pre: Vec<Pre> = Vec::with_capacity(tribe.cities.len());
     for city in &tribe.cities {
         let idx = city.idx;
         let occupant = get_true_unit_at(state, idx);
-        let sieged = occupant.as_ref().map_or(false, |u| u.owner != player);
-        let garrison = occupant.as_ref().filter(|u| u.owner == player);
+        let sieged = occupant.map_or(false, |u| u.owner != player);
         let open = occupant.is_none();
 
         let enterers: Vec<Enterer> = if sieged {
@@ -396,7 +414,6 @@ pub fn city_risks_with_threats(
             .map(|(e, _)| e.coords.idx)
             .collect();
 
-        // Whoever is (or would be) standing there: can I remove them?
         let threat_unit: Option<&UnitState> = if sieged {
             occupant
         } else {
@@ -422,6 +439,75 @@ pub fn city_risks_with_threats(
             }
             None => true,
         };
+        pre.push(Pre {
+            city,
+            occupant,
+            sieged,
+            open,
+            enterers,
+            attackers,
+            arrives_next_turn,
+            breakable,
+        });
+    }
+
+    // EXP_ELO_094: a single enemy unit cannot deliver its whole attack to
+    // TWO of our cities in the same turn -- it has to pick one. Before this
+    // pass, a unit within strike range of multiple cities was counted at
+    // FULL, undiscounted weight in every one of their `attackers`/
+    // `need_damage`/`on_garrison` (a unit near two garrisons priced as if
+    // it could kill both this turn). Confirmed as the exact mechanism
+    // behind a garrison-preserving Attack scoring -558 in a real game:
+    // damaging the attacker reduced a SEPARATE city's `need_damage` (fewer
+    // of our own units "required" to cover it), which silently deleted
+    // that city's `defend_cover` credit even though city 49's own plan was
+    // byte-identical before/after and nothing got worse anywhere. Verdi:
+    // "it's either 0.2 in both cities... or .6 in one, .15 in the other" --
+    // physically it can't be full-strength against both, so attribute each
+    // attacker to its NEAREST qualifying city only (cheapest, most legible
+    // proxy for "which one it's actually postured to hit") and drop it
+    // from every other city's this-turn attacker set.
+    let mut primary_city_of: std::collections::HashMap<i32, usize> = std::collections::HashMap::new();
+    for (ci, p) in pre.iter().enumerate() {
+        for &unit_tile in &p.attackers {
+            let d = get_chebyshev_distance(unit_tile, p.city.idx, state.settings.size);
+            primary_city_of
+                .entry(unit_tile)
+                .and_modify(|best_ci| {
+                    let best_d =
+                        get_chebyshev_distance(unit_tile, pre[*best_ci].city.idx, state.settings.size);
+                    if d < best_d || (d == best_d && ci < *best_ci) {
+                        *best_ci = ci;
+                    }
+                })
+                .or_insert(ci);
+        }
+    }
+    for (ci, p) in pre.iter_mut().enumerate() {
+        let before = p.attackers.len();
+        p.attackers.retain(|t| primary_city_of.get(t) == Some(&ci));
+        let dropped = before - p.attackers.len();
+        if dropped > 0 {
+            CROSS_CITY_ATTACKER_DEDUPS.fetch_add(dropped as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    // Pass 2: everything downstream of the (now deduplicated) `attackers`.
+    let mut out = Vec::new();
+    for p in pre {
+        let Pre {
+            city,
+            occupant,
+            sieged,
+            open,
+            enterers,
+            attackers,
+            arrives_next_turn,
+            breakable,
+        } = p;
+        let idx = city.idx;
+        let garrison = occupant.filter(|u| u.owner == player);
+
         // Damage the visible enemies could put on the garrison next turn.
         let on_garrison: f32 = garrison.map_or(0.0, |g| {
             attackers
@@ -749,7 +835,8 @@ mod risk_tests {
     use super::*;
     use crate::ai::oracle_macro::MacroGoal;
     use crate::ai::reward::goal_potential;
-    use crate::types::UnitType;
+    use crate::states::{CityState, TileState, TribeState};
+    use crate::types::{TerrainType, UnitType};
 
     /// The whole doctrine in one assertion: with an enemy able to walk onto
     /// an empty city, the potential must PREFER the tile occupied.
@@ -837,6 +924,48 @@ mod risk_tests {
 
         state.tribes.get_mut(&2).unwrap().units.clear();
         assert_eq!(residual_risk(&state, 1, &risks[0]), 0.0);
+    }
+
+    /// EXP_ELO_094: one enemy unit within striking range of two of our
+    /// cities cannot deliver its whole attack to both this turn — it has to
+    /// pick one. Before this fix, `city_risks` counted it at full,
+    /// undiscounted weight in EVERY city it could reach, pricing as if it
+    /// could kill both simultaneously. Confirmed as the exact mechanism
+    /// behind a garrison-preserving Attack scoring -558 in a real game:
+    /// damaging the attacker shrank a SEPARATE city's `need_damage`, which
+    /// silently deleted that city's defend_cover credit even though the
+    /// actually-attacked city's own plan never changed.
+    #[test]
+    fn a_shared_attacker_is_only_charged_to_its_nearest_city() {
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        for i in 0..121 {
+            let mut tile = TileState::default();
+            tile.terrain_type = TerrainType::Field;
+            tile.explorers.insert(1);
+            tile.explorers.insert(2);
+            state.tiles.insert(i, tile);
+        }
+        let mut t1 = TribeState::default();
+        // City A at (5,6)=61, distance 1 from the enemy at (5,5)=60.
+        // City B at (5,7)=62, distance 2 from the same enemy -- both are
+        // within a Catapult's range-3 reach, so pre-fix both would list it.
+        t1.cities.push(CityState { owner: 1, idx: 61, ..Default::default() });
+        t1.cities.push(CityState { owner: 1, idx: 62, ..Default::default() });
+        state.tribes.insert(1, t1);
+        let mut t2 = TribeState::default();
+        t2.units.push(unit_at(60, UnitType::Catapult, 2));
+        state.tribes.insert(2, t2);
+
+        let risks = city_risks(&state, 1);
+        let a = risks.iter().find(|r| r.city == 61).expect("city A must be in city_risks");
+        let b = risks.iter().find(|r| r.city == 62).expect("city B must be in city_risks");
+        assert_eq!(a.attackers, vec![60], "the nearer city keeps the attacker");
+        assert!(
+            !b.attackers.contains(&60),
+            "the farther city must NOT also be charged the same unit's full threat: {:?}",
+            b.attackers
+        );
     }
 
     /// No line may buy potential by letting the city fall: dropping it from
