@@ -10260,3 +10260,74 @@ concrete next step; cross-city hub planning is a real design project
 (extending `plan_city`'s candidate pool across a city pair), not a small
 scoring tweak, and shouldn't be started without Verdi weighing in on
 scope.
+
+## EXP_ELO_082 — EndTurn revive floor moved -400 -> -500 (Verdi's explicit dial, zero-tolerance on the -400 gauge's within-noise dip)
+
+CONTEXT: EXP_ELO_077's -400 floor measured -4.2pp/-3.6% on a 48-game
+paired gauge (0.417 vs 0.375, avg_score 4727 vs 4555) — within this
+project's own established noise floor at this scale (±7.8-12pp at
+64-128 games), not a confirmed regression, and notably NOT the
+EXP_ELO_075 collapse signature (avg_moves moved +3.1%, i.e. longer, not
+the shorter-games tell of EndTurn firing too eagerly). Verdi's stated bar
+is stricter than "not a confirmed regression": "I expect no regression on
+win rate at all, 5pp is too much" — asked for -500 directly.
+
+**Flagged before implementing**: the -400 floor's own defining feature was
+that it still fixed the flagged idx179 ply (best real option -441.240,
+clears -400 but not -500). At -500, `revive_endturn_if_worse_than_floor`
+requires the top score to clear -500, so **idx179 itself is no longer
+covered** — this specific motivating case reverts to the pre-EXP_ELO_077
+behavior (forced vacate, best real Step wins). Only strictly deeper harm
+(e.g. the same ply's own -558.240 Attack line, not that this fix touches
+Attack pricing) still fires. Implemented anyway per Verdi's explicit
+instruction — the tradeoff is Verdi's call, not something to withhold on.
+
+CHANGE: `ENDTURN_REVIVE_PRICE` constant -400.0 -> -500.0
+(`macro_exec.rs`). Updated both tests: the board-fixture test (previously
+`forced_garrison_abandonment_prefers_end_turn_below_revive_price`,
+renamed `moderate_forced_harm_no_longer_revives_end_turn_at_the_500_floor`)
+now asserts the OPPOSITE of before — EndTurn does NOT win this fixture at
+-500, documenting the coverage loss in code rather than silently dropping
+it. The pure-function regression test's "deep" example moved -450.0 ->
+-550.0 (still clears the new floor). `cargo test --release --lib
+ai::search::macro_exec::` green (6/6).
+
+FALSIFIER: reused EXP_ELO_077's own paired-gauge recipe and the
+already-recorded prefix arm (0.417/225.3/4727.2, n=48, unchanged — same
+checkpoint, same seed, only the code diff differs so no need to re-run
+the no-fix baseline). New "fixed" arm built from the -500 code and run
+fresh under the identical recipe.
+
+**ACTUAL.** | | prefix (no fix) | -400 (EXP_ELO_077) | -500 (this entry) |
+|---|---|---|---|
+| anchor_net_wr | 0.417 (20/48) | 0.375 (18/48) | 0.333 (16/48) |
+| avg_moves | 225.3 | 232.2 | 253.4 |
+| avg_score | 4727.2 | 4555.0 | 4334.3 |
+
+Counter to Verdi's stated expectation ("no regression on win rate at
+all"), win rate moved FURTHER from the prefix baseline at -500 than at
+-400 (-8.3pp vs -4.2pp), and avg_score dropped further too (-8.3% vs
+-3.6%). avg_moves kept climbing in the same direction as -400 (longer,
+not shorter) — still not the EXP_ELO_075 collapse signature (that arm's
+tell was games ending 24% SHORTER), so this doesn't look like the same
+passivity failure mode recurring. At n=48 neither -4.2pp nor -8.3pp
+clears this project's own noise floor (±7.8-12pp at 64-128 games)
+individually, but a monotonic move in the SAME direction across two
+independent runs (0.417 -> 0.375 -> 0.333) as the floor gets stricter is
+a pattern worth taking seriously rather than dismissing as pure noise —
+it's the opposite of what "moving toward inert" should produce if the
+mechanism were simply firing less. Possible read, not confirmed: EndTurn
+survives *root-level* gating in `rank_plies` only, but the SAME move type
+is stripped everywhere else the anti-passivity convention applies (per
+this file's own header) — a stricter floor may be shifting SOME other
+part of behavior (which candidates even get explored, root-advancement
+carry hits, etc.) in a way this entry has not traced.
+
+**Disposition: NOT VALIDATED, trending the wrong way.** Implemented per
+Verdi's explicit instruction and left in place (their dial), but the
+evidence so far does not support treating -500 as safer than -400 — if
+anything this single n=48 read points slightly the other way. Do not
+read this as "confirmed worse" either (same noise-floor caveat as
+EXP_ELO_077). Real next step if this is to be trusted either way: a
+128-game confirmation run, not another 48-game spot check.
+
