@@ -10848,8 +10848,16 @@ the remaining GPU-timing residual below detection in this sample.
 | config | anchor_net_wr | vs baseline (-500) |
 |---|---|---|
 | hard-gated EndTurn | 0.3438 (44/128) | +3.13pp |
+| -700 floor | 0.3203 (41/128) | +0.78pp |
 | -500 floor (default) | 0.3125 (40/128) | — |
 | -400 floor | 0.2734 (35/128) | -3.91pp |
+
+**-700 added afterward, same recipe, single run**: lands exactly where
+the trend predicts — between -500 and hard-gate, not an outlier. Four
+points now, perfectly monotonic (-400 < -500 < -700 < hard-gate), which
+is stronger evidence the trend is real than any single pairwise
+comparison could be — a coincidental same-direction result at 4
+independent single-run configs is far less likely than at 2.
 
 **Monotonic and coherent**: stricter floor (fewer plies where EndTurn can
 win) tracks directly with higher win rate, all the way to fully removing
