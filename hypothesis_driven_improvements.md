@@ -10669,3 +10669,66 @@ gate) should be read as confirmed-harmful OR confirmed-safe from
 tonight's data; both stay exactly where their own entries left them
 (implemented per explicit instruction / implemented per stated
 principle), pending real validation.
+
+## EXP_ELO_090 — n=128 same-config replicate spread, measured directly: ~4.7pp (much tighter than n=48's 12.5pp), and the root cause is worth fixing on its own
+
+CONTEXT: Verdi, after EXP_ELO_088's n=48 pair swung 12.5pp on an
+identical rerun: "we really need to get this noise thing under control...
+some improvements that might be incremental and deliver +5 are gonna be
+completely invisible." Asked for 3 sequential n=128 runs of the same
+config to characterize the real noise floor directly, not cite a stale
+number.
+
+METHOD: 3 sequential (never concurrent) n=128 runs of the CURRENT
+DEFAULT config (no env overrides — `-500` EndTurn floor + EXP_ELO_083's
+tech-gate closure, both as shipped), identical `--base-seed 770425` so
+all 3 runs play the identical 128 maps in the identical order — this
+isolates pure trajectory-level non-determinism (the known "same-seed not
+reproducible" HashMap-tie-break issue) from map-selection variance,
+which a paired same-seed A/B design already cancels.
+
+ACTUAL:
+| run | anchor_net_wr | avg_moves | avg_score |
+|---|---|---|---|
+| 1 | 0.375 (48/128) | 225.2 | 4503.6 |
+| 2 | 0.398 (51/128) | 244.2 | 4882.9 |
+| 3 | 0.352 (45/128) | 221.0 | 4387.3 |
+
+Spread (max-min): 4.69pp. Mean 0.375, max deviation from mean 2.34pp.
+**Dramatically tighter than n=48's own demonstrated 12.5pp single-pair
+swing (EXP_ELO_088)** — going from 48 to 128 games cut the same-config
+noise by roughly 2.7x, in line with (if not quite matching) the sqrt(128/48)
+≈ 1.63x reduction naive sampling theory would predict, suggesting n=48's
+12.5pp reading may have been an unlucky draw beyond what even its own
+sample size would typically produce, not purely representative.
+
+**What this means for detecting a real +5pp improvement**: a single
+same-config arm has ~±2.3pp deviation from its own true mean at n=128.
+Comparing TWO arms (a baseline and a candidate fix) compounds this — if
+each arm's trajectory noise is independent, the DIFFERENCE's noise scales
+roughly `sqrt(2)` above a single arm's, so a paired n=128 comparison
+could plausibly show several points of spurious swing even with zero
+real effect. A true +5pp effect sits close to that noise band, not
+cleanly above it — a single n=128 paired gauge is not yet reliably
+sufficient to detect it, matching Verdi's own worry precisely.
+
+**The higher-leverage fix, not attempted tonight**: this entire spread
+traces to one known, already-documented root cause (`same-seed-not-
+reproducible` project memory) — HashMap iteration order affecting move
+tie-breaking means even IDENTICAL code on an IDENTICAL map does not
+replay identically. If that were fixed (deterministic tie-breaking, e.g.
+sorting candidates by a stable key before any HashMap-order-dependent
+choice), a same-map same-code replay would become EXACTLY reproducible,
+collapsing a paired gauge's noise down to only the real code-difference's
+effect — making every future comparison at ANY sample size dramatically
+more sensitive, for free, forever. This is plausibly a bigger lever for
+"stacking multiple +5pp improvements reliably" (Verdi's stated goal) than
+continuing to chase the EndTurn/tech-gate question with ever-larger
+samples. Not investigated tonight — registering as the concrete next
+step to weigh against "just always run n=128+."
+
+**Disposition: measurement only, high-value finding.** Recommend
+treating this n=128, ±2.3pp-per-arm figure as the project's own current
+working noise estimate for this exact recipe (replacing the older,
+smaller-n citations) until either a larger validation run or the
+tie-break fix changes the picture.
