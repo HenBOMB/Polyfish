@@ -226,22 +226,24 @@ pub fn gate_ok(
     true
 }
 
-/// EXP_ELO_082: EndTurn's re-entry price when every other candidate is
+/// EXP_ELO_093: EndTurn's re-entry price when every other candidate is
 /// Φ-negative (see `rank_plies` below). EXP_ELO_075 tried flat 0.0 and
 /// regressed the paired gauge (win rate 0.396->0.146) because 0.0 also
-/// outcompetes ordinary shallow diminishing-returns plies — of 140 sampled
-/// fires, 75% scored only -100..-50, not the deep forced-harm class
-/// (-400..-558) the fix targeted. EXP_ELO_077's first cut (-400) measured
-/// -4.2pp on a 48-game paired gauge — within this project's own noise
-/// floor at that scale (±7.8-12pp), not a confirmed regression, but
-/// Verdi's own bar is zero tolerance, so this now sits at -500. NOTE this
-/// is BELOW the flagged idx179 ply's own best real option (-441.240) — at
-/// -500 that specific motivating case no longer fires; only strictly
-/// deeper harm (e.g. the -558.240 Attack line from the same ply) does. A
-/// dial position, not a final answer — Verdi's own framing is "never chosen
-/// until it's the only choice left," to be relaxed toward something
-/// contextual once this floor is confirmed safe.
-const ENDTURN_REVIVE_PRICE_DEFAULT: f32 = -500.0;
+/// outcompetes ordinary shallow diminishing-returns plies. EXP_ELO_077
+/// (-400) and EXP_ELO_082 (-500) both looked roughly-neutral-to-negative
+/// under noisy pre-EXP_ELO_091 gauges; once that non-determinism was fixed,
+/// a clean n=128 4-point sweep (-400 < -500 < -700 < hard-gate, all
+/// monotonic in win rate) showed the mechanism is net negative at every
+/// tested strength, hard-gate (never revive) winning outright. Verdi's
+/// call: land at -700 anyway — close enough to hard-gate's measured
+/// win rate (0.3203 vs 0.3438, n=128) to capture nearly all of that
+/// benefit while keeping the mechanism alive for the rare case it's
+/// actually the right call, as a base to build a smarter/contextual
+/// EndTurn ranking on later rather than deleting the capability outright.
+/// NOTE this is well below the originally-flagged idx179 ply's best real
+/// option (-441.240) and even EXP_ELO_082's -500 — this floor does not
+/// fire on either of those cases; only much deeper Φ-collapse does.
+const ENDTURN_REVIVE_PRICE_DEFAULT: f32 = -700.0;
 
 /// EXP_ELO_092 diagnostic: `POLYFISH_ENDTURN_REVIVE_PRICE=<f32>` overrides
 /// the compile-time default, so different floors (e.g. -400 vs -500) can
@@ -640,18 +642,18 @@ mod tests {
         }
     }
 
-    /// EXP_ELO_082: same fixture as EXP_ELO_077's own test (lone
+    /// EXP_ELO_093: same fixture as EXP_ELO_077's own test (lone
     /// Defend-ordered garrison, 2-tiles-out threat, every Step vacates the
     /// held tile) — confirmed by direct probe to price every Step around
     /// -426..-429. That clears the old -400 floor but NOT the current
-    /// -500 one: this documents the calibration tradeoff Verdi explicitly
-    /// chose (zero tolerance for the -400 gauge's within-noise dip, at the
-    /// cost of this specific motivating case no longer being fixed) rather
-    /// than silently losing the coverage fact. EndTurn stays gated out
-    /// here; the best real Step wins instead, exactly as it did before
-    /// EXP_ELO_077 shipped.
+    /// -700 one: this documents the calibration tradeoff Verdi explicitly
+    /// chose (landing near hard-gate's measured win rate while keeping the
+    /// mechanism alive for deeper cases, at the cost of this specific
+    /// motivating case no longer being fixed) rather than silently losing
+    /// the coverage fact. EndTurn stays gated out here; the best real Step
+    /// wins instead, exactly as it did before EXP_ELO_077 shipped.
     #[test]
-    fn moderate_forced_harm_no_longer_revives_end_turn_at_the_500_floor() {
+    fn moderate_forced_harm_no_longer_revives_end_turn_at_the_700_floor() {
         use crate::ai::combat::tests::{board, unit_at};
         use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
         use crate::types::UnitType;
@@ -675,7 +677,7 @@ mod tests {
         assert!(!steps.is_empty(), "fixture should offer the Rider Step options");
         assert!(
             steps.iter().all(|(s, _)| *s > ENDTURN_REVIVE_PRICE_DEFAULT),
-            "test fixture assumption broken: expected every Step to sit ABOVE the -500 floor \
+            "test fixture assumption broken: expected every Step to sit ABOVE the -700 floor \
              (i.e. NOT clear it), so this case stays uncovered by design: {:?}",
             steps.iter().map(|(s, m)| (*s, m.serialize())).collect::<Vec<_>>()
         );
@@ -684,15 +686,15 @@ mod tests {
         assert_ne!(
             top_move.move_type(),
             MoveType::EndTurn,
-            "at -500 this moderate-depth forced-harm case is uncovered by design; ranked: {:?}",
+            "at -700 this moderate-depth forced-harm case is uncovered by design; ranked: {:?}",
             ranked.iter().map(|(s, m)| (*s, m.move_type())).collect::<Vec<_>>()
         );
     }
 
-    /// EXP_ELO_082: the regression this threshold exists to prevent. A
+    /// EXP_ELO_093: the regression this threshold exists to prevent. A
     /// mildly-negative best candidate (-50, in EXP_ELO_075's own measured
     /// "75% of fires" band) must NOT revive EndTurn — only genuinely deep
-    /// harm (worse than -500) should. Tests the pure threshold function
+    /// harm (worse than -700) should. Tests the pure threshold function
     /// directly since `rank_plies` itself needs a real game board.
     #[test]
     fn endturn_does_not_revive_for_shallow_negative_plies() {
@@ -703,12 +705,12 @@ mod tests {
             "a -50.0 top score (EXP_ELO_075's dominant regression band) must not revive EndTurn"
         );
 
-        let deep = vec![(-550.0f32, Box::new(StepMove::new(1, 2)) as Box<dyn Move>)];
+        let deep = vec![(-750.0f32, Box::new(StepMove::new(1, 2)) as Box<dyn Move>)];
         let out = revive_endturn_if_worse_than_floor(deep, true, 1.0);
         assert_eq!(
             out[0].1.move_type(),
             MoveType::EndTurn,
-            "a -550.0 top score (worse than the revive floor) must revive and win with EndTurn"
+            "a -750.0 top score (worse than the revive floor) must revive and win with EndTurn"
         );
 
         // Boundary: exactly at the floor does not revive (strict `<`).
@@ -717,13 +719,13 @@ mod tests {
         assert!(out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn));
 
         // lambda == 0.0 (non-goal-shaped callers) never revives.
-        let deep_no_lambda = vec![(-550.0f32, Box::new(StepMove::new(1, 2)) as Box<dyn Move>)];
+        let deep_no_lambda = vec![(-750.0f32, Box::new(StepMove::new(1, 2)) as Box<dyn Move>)];
         let out = revive_endturn_if_worse_than_floor(deep_no_lambda, true, 0.0);
         assert!(out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn));
 
         // has_other == false (fully gated turn) never revives — that path
         // already degrades to a lone EndTurn earlier in rank_plies.
-        let deep_no_other = vec![(-550.0f32, Box::new(StepMove::new(1, 2)) as Box<dyn Move>)];
+        let deep_no_other = vec![(-750.0f32, Box::new(StepMove::new(1, 2)) as Box<dyn Move>)];
         let out = revive_endturn_if_worse_than_floor(deep_no_other, false, 1.0);
         assert!(out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn));
     }

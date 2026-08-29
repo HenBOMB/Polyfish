@@ -10887,3 +10887,30 @@ order: (a) if a decision is needed now, revert to hard-gated EndTurn
 committed baseline rather than losing to it; (b) if more confidence is
 wanted first, replicate all three probe configs 2-3x at n=128 (now cheap
 and trustworthy to do, ~5min/run) before committing to a revert.
+
+**FINAL DECISION (Verdi): ship -700 as the standing default, not hard-gate.**
+"Its good enough that its near identical to the gate but it can still
+come through in some situations then we can figure out how to improve
+the ranking for when its the rght call vs not." -700 (0.3203, 41/128)
+sits close to hard-gate's measured win rate (0.3438, 44/128) — most of
+the benefit — while keeping the mechanism alive as a base for a future
+smarter/contextual EndTurn ranking (per this entry's own original framing
+of the constant as "a dial position... to be relaxed toward something
+contextual" once the floor was confirmed safe) rather than deleting the
+capability outright.
+
+CHANGE (shipped): `ENDTURN_REVIVE_PRICE_DEFAULT` -500.0 -> -700.0
+(`macro_exec.rs`). Both unit tests updated to match: the board-fixture
+test renamed to `..._at_the_700_floor` (its own -426..-429 fixture score
+still correctly stays uncovered at the stricter floor); the pure-function
+regression test's "deep" example moved -550.0 -> -750.0 (still clears
+-700). Full `cargo test --release --lib --tests --bin self_play` green
+(303+27 passed).
+
+**Registered next step, NOT started**: design a smarter/contextual EndTurn
+price — something that distinguishes "genuinely nothing better exists"
+from "merely deep in this static heuristic's eyes" — rather than a single
+flat number. The still-open EXP_ELO_075 "better fix" candidate (price a
+garrison-preserving Attack correctly, which would make the whole EndTurn
+question moot for that class of ply) remains the most concrete starting
+point for that work.
