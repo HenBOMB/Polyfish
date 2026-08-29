@@ -9382,3 +9382,199 @@ macro-mcts) has, for the first time, cleared parity with the heuristic
 leaf twice in a row under two different but overlapping configurations —
 worth a confirmatory run (fresh seed or larger n) on `DETACH_MACRO_HEADS=1`
 alone before either shipping it as default or moving to T3 distillation.
+
+## EXP_ELO_075 — a Defend-ordered garrison is forced to vacate because EndTurn is unconditionally gated out (registered)
+
+STATUS: REGISTERED, about to implement.
+
+CONTEXT: Verdi watched the seed[0] (1787500020, XinXi vs Imperius) replay
+generated from this branch's iter51 checkpoint and flagged turn 11, plies
+177-179 (global step index 177-179 in the replay viewer): the sole garrison
+Warrior on city 49 (a level-4 city) spent the last 2 stars on two Harvests
+elsewhere, then stepped off 49 to tile 60, leaving the city open. The enemy
+walked a unit onto 49 the very next ply (idx181) and it sieged for the rest
+of the game (never captured — city 49 was owner=1 at game end, P1 won
+decisively; the honest claim is "gave away a free siege/tempo," not "gave
+away a city," per the ledger's own accuracy bar).
+
+Root-caused with a faithful re-run of the real executor path (fogged view via
+`clone_for_mcts`, threaded `LaneState`/`TurnCounters` from turn 0, real
+`GoalAux` via `compute_goal_aux`, real `star_gate`, `rank_plies` itself —
+`examples/step_diag2.rs`, throwaway, not shipped) at the exact idx179 ply.
+Turn 11's actually-picked macro goal (from `game0.jsonl`, visits-weighted)
+DID include `Defend@49` — the goal-setter's risk detection was correct
+(`combat::city_risks` already showed `at_risk=true needs_order=true` for
+city49 several plies before this sequence even started, per
+`examples/step_diag.rs`'s dump). The faithful `rank_plies` output at idx179
+(`lambda=1`, the real per-ply value — `--macro-lambda` defaults to 1.0 and
+this run's launch config never overrode it):
+```
+   -441.240  Step 49->48
+   -442.240  Step 49->37
+   -461.240  Step 49->60   <- close to what was actually executed
+   -462.240  Step 49->61
+   -463.240  Step 49->38
+   -463.240  Step 49->50
+   -558.240  Attack 49->39
+   (EndTurn gated out entirely)
+```
+Every single legal candidate is deeply Φ-negative (the `defend_hold`/
+`defend_cover` loss from `combat::defend_plan`'s `hold_needed` flipping
+true→false the instant the garrison simulates as gone — confirmed directly:
+`defend_plan` at idx176-178 reports `hold_needed=true`, at idx179-after
+`hold_needed=false`). EndTurn — which would leave the Warrior in place and
+score its usual flat `0.0` — is never in the running because `rank_plies`
+(`macro_exec.rs`) unconditionally strips it whenever any other move survives
+gating (`if has_other { moves.retain(|m| m.move_type() != EndTurn); }`), and
+there is no "hold/skip" move type in this engine (`MoveType`: Step / Attack /
+Ability / Summon / Harvest / Build / Research / Capture / Reward / EndTurn /
+Resign — nothing else). **The abandonment is not a mis-pricing the search
+reasoned its way into; it is a structurally forced move** — Φ correctly
+flags every option as bad, and the executor has no "do nothing" option to
+fall back on.
+
+Notable side-finding, not this fix's target but worth a future look:
+`Attack 49->39` (hitting the actual besieging unit while the Warrior stays
+on 49 — melee doesn't relocate the attacker) scores *worse* (-558.240) than
+every abandonment option. That's Φ mis-pricing a garrison-preserving Attack,
+a separate bug from the EndTurn-starvation one this entry fixes — noted for
+a later pass, not bundled in here.
+
+HYPOTHESIS: letting `EndTurn` survive `rank_plies`' gating specifically when
+every other surviving candidate's real (`base + lambda*dphi`) score is
+negative — "doing nothing beats doing active harm" — will stop this class of
+forced self-harm without reopening the anti-passivity problem the
+unconditional-strip was built for (that problem is "a move exists that's
+merely mediocre," not "every move is actively harmful"; this condition never
+fires in the former case). Per project convention (`goal-pricing-beats-masks`
+memory): this is a pricing-shaped fix (EndTurn already scores 0.0 in
+`scoring.rs`; the change is only about when it's allowed to compete), not a
+hard mask on any specific move type.
+
+CHANGE (to implement): in `macro_exec::rank_plies` (`src/ai/search/macro_exec.rs`),
+after scoring+sorting, if the top-scored non-EndTurn candidate's score is
+`< 0.0`, re-score EndTurn (flat `0.0`, matching `scoring::score_move`'s own
+`MoveType::EndTurn => 0.0`) and re-insert/re-sort so it can win. Scope the
+check to `lambda != 0.0` runs only (score is base-only, always non-negative
+in practice, when `lambda == 0.0` — no behavior change for non-goal-shaped
+callers).
+
+FALSIFIER: rerun `examples/step_diag2.rs` (or equivalent) at idx179 post-fix
+— EndTurn must appear in the ranked list and win when every other option is
+negative. Then a matched no-regression check: seed-770425 paired gauge
+(n=128) or `eval_seeds.json` arena vs Greedy, before/after, win rate within
+the 0.078 noise floor and cities-lost not worsening (a fix that makes the
+net MORE passive in ambiguous-but-not-hopeless states would be a real
+regression, not a wash — watch for that specifically since this touches the
+one place passivity is deliberately suppressed elsewhere in this file).
+
+## EXP_ELO_076 — reward-choice and Forge-site scoring are Φ-blind to the eco_plan hub plan (registered)
+
+STATUS: REGISTERED, about to implement.
+
+CONTEXT: same seed[0] watch session, two more flags from Verdi:
+- Step 122 (turn 9): city 84's level-3→4 reward choice picked PopGrowth
+  over BorderGrowth. Verdi's read: BorderGrowth was better here because it
+  would grow the city's border into a strong hub cluster ("we have insane
+  hub spots here").
+- Step 147 (turn 10): the Forge for city 49 went to tile 48 (2 adjacent
+  *already-built* Mine structures) instead of tile 61 (0 built Mines
+  adjacent, but 3 adjacent Mountain tiles — a level-3 Forge if the Mines
+  get built there first/around it). Verdi: "the furge spot is bad we
+  shouldve placed it at tile 61 instead so it can be a level 3."
+
+Both root-caused precisely with `examples/step_diag.rs`/`step_diag2.rs`
+(throwaway, not shipped):
+
+**Reward choice (idx122).** `scoring::score_reward`'s BorderGrowth branch
+only checks a crude proxy — `city._territory.len() < 10` (small city → +9,
+large city → +5) — against PopGrowth's flat +8; at city84's actual
+territory_len=9 this is a real but wafer-thin 1-point edge for BorderGrowth
+(209 vs 208) with **zero awareness of what's actually sitting just outside
+the border** (a real hub opportunity or nothing at all — the heuristic can't
+tell the difference). The faithful `rank_plies` re-run (real fogged view,
+real `GoalAux`, real `lambda=1`) shows the true picture is worse than that:
+Φ's dev_potential/economy_completion terms price PopGrowth's population
+gain richly (332.342 total) while BorderGrowth's territory gain gets a much
+smaller Φ credit (262.894 total) — PopGrowth wins by 69 points, not a
+coin-flip. Φ has no term that credits BorderGrowth for what it *unlocks*
+(a better hub site coming into territory); it only (weakly) credits the
+tile count.
+
+**Forge site (idx147).** Both tile 48 and tile 61 were simultaneously legal,
+owned-by-city-49 Build targets at that ply — this is not a legality/
+territory issue (tile 61 was already in territory the whole time, so it is
+NOT downstream of the reward-choice finding above; the two are independent
+bugs, not one). `scoring.rs`'s Build-adjacency bonus (`adj_count`) counts
+only tiles with an *already-built* Mine structure adjacent (confirmed via
+`examples/step_diag.rs`'s corrected `built_mine_partners` helper, matching
+`scoring.rs`'s own `prereqs.contains(&s.structure_type)` check exactly):
+tile 48 has 2 (→ `adj_count` bonus +5), tile 61 has 0 built Mines but 3
+Mountain tiles with nothing built on them yet (→ bonus +0). The heuristic is
+a zero-lookahead greedy snapshot: it cannot represent "hold this tile, build
+the Mines around it first, then it's a level-3 Forge" — it always prefers
+whatever pays off *this instant*.
+
+**This codebase already has the missing lookahead, unused here**:
+`rules::eco_plan::plan_city`/`hub_candidates` (`src/rules/eco_plan/city.rs`)
+is a real forward solver — `CityPlan.hub_site: Option<i32>` and
+`CityPlan.hub_level: i32` are exactly "the best hub tile and what tier it
+reaches," accounting for a build sequence, not just current-instant
+adjacency. It's already wired into the MACRO/lane layer (`ai/economy.rs`'s
+`eco_plan_best_city`, consulted by `search/lane.rs`'s Giant-spam-viability
+check and `oracle_macro.rs`'s tech-line recommendation discount) but never
+reaches the PER-MOVE execution heuristics in `scoring.rs` that actually pick
+which reward/which Build tile to take. The plan exists; it just isn't
+threaded down to the plies that would act on it.
+
+HYPOTHESIS: computing the eco_plan hub reading ONCE per turn at goal-commit
+(NOT per rank_plies candidate — this project's own memory
+`macro-heur-generation-is-structurally-slow` and the `PlyMoveCache`
+lesson (EXP_ELO_062, net *slower* despite being correct) both warn against
+adding per-candidate cost to a path that already runs `rank_plies` ~45
+times/move) and carrying `hub_site`/`hub_level` in `GoalAux` will let both
+`score_reward`'s BorderGrowth branch and the Build Forge/adj_count branch
+consult "does this city's plan actually have a hub opportunity here" instead
+of a context-free proxy, without adding search-time cost.
+
+CHANGE (to implement): 
+1. `GoalAux` (`src/ai/search/goal_aux.rs`): add `hub_site: Option<i32>`,
+   `hub_level_reachable: i32` (from `eco_plan_best_city`'s `CityPlan` for
+   the relevant lane, computed once inside `compute_goal_aux`).
+2. `scoring::score_move_with_unit_goals`/`score_move_inner`
+   (`src/ai/scoring.rs`): thread an `aux: Option<&GoalAux>` parameter
+   through (currently only `unit_goals` is threaded; single real call site
+   in `macro_exec::rank_plies`, so this is a contained signature change).
+3. `score_reward`'s BorderGrowth branch: when `aux.hub_site` is known and
+   currently outside the city's territory but would be brought in by growth,
+   award a bonus scaled by `hub_level_reachable` instead of the flat
+   territory-length proxy.
+4. The Build-adjacency (`adj_count`) branch: when `target == aux.hub_site`,
+   score using `hub_level_reachable` (the plan's designated eventual tier)
+   rather than only the current built-Mine `adj_count` — so the search can
+   value "this is THE spot" even before every partner Mine is standing.
+
+FALSIFIER: re-run the faithful `rank_plies` probe at the reconstructed
+idx122/idx147 states pre/post-fix — BorderGrowth and tile-61 must each
+become competitive (need not always win; the map won't always have a real
+hub opportunity, and `aux.hub_site` should correctly read `None` on maps
+that don't). Then the same matched no-regression check as EXP_ELO_075
+(seed-770425 paired gauge or eval_seeds arena vs Greedy) — win rate within
+noise, no SPT/army/expansion regression from over-indexing on hub siting at
+the expense of everything else `score_move` already prices.
+
+## EXP_ELO_074 (T2 continued, deferred item) — Organization tech at turn 7 stays out of scope tonight
+
+Verdi's third flag from the same seed[0] watch: step 92 (turn 7), Research
+Organization when stars were arguably better saved toward the Forge/Giants
+lane ("we have insane hub spots here... wait for it"). Checked (`game0.jsonl`):
+turn 7's actually-picked stance was `Grow`, not `Save` — so this is NOT
+`evaluate_tech_utility`'s per-tech myopia (each tech scored independently,
+no opportunity-cost-of-waiting term — that critique is real but not what
+fired here); it's upstream, in `oracle_macro.rs`'s stance/lane selection
+deciding `Grow` over `Save` at that turn. That subsystem
+(`commit_macro_goal`/`select_lane`/`pick_save_lane`) is large and untouched
+by tonight's other two fixes. Deferring per the advisor consult's own
+time-box guidance rather than rushing a shallow patch — noted here so it
+isn't silently dropped. Worth its own registered experiment once EXP_ELO_075/
+076 land and measure clean.
