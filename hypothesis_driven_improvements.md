@@ -10914,3 +10914,95 @@ flat number. The still-open EXP_ELO_075 "better fix" candidate (price a
 garrison-preserving Attack correctly, which would make the whole EndTurn
 question moot for that class of ply) remains the most concrete starting
 point for that work.
+
+## EXP_ELO_094 — cross-city threat double-counting in `city_risks`: root-caused, fixed, validated (+2.3pp paired gauge, fires ~10,900x/game)
+
+CONTEXT: Verdi's direct instruction after EXP_ELO_093's EndTurn work: dig
+into pricing the garrison-preserving Attack correctly (the still-open item
+from EXP_ELO_075/077). Reconstructed the exact flagged idx179 ply
+(`examples/attack_pricing_probe.rs`, faithful executor, same replay as
+the whole night's investigation) and decomposed the Attack's -558 score
+directly instead of continuing to guess at the mechanism.
+
+FOUND: city 49's own `defend_plan` was BYTE-IDENTICAL before and after
+the Attack (1600.0 cover credit both times) — attacking never touched the
+garrison's own coverage math. The entire -600 dphi traced to a completely
+separate city (41), also Defend-ordered: the attacked unit (39) ALSO
+threatened city 41, and damaging it correctly dropped city 41's
+`need_damage` from 10 to 5 — but `defend_plan`'s greedy `fill()` stops the
+instant `need_damage` is met, so the lower threshold needed only 1
+assigned defender instead of 2, and the second defender's 600-point
+`defend_cover` credit vanished — a real defender doing nothing wrong,
+purely because the threat it covered got weaker. Verdi's diagnosis,
+confirmed exactly: "the intensity of that threat vector cannot be high in
+both [cities], that's physically impossible... we primarily optimize on
+the main threatened city" — `city_risks_with_threats` had NO cross-city
+awareness at all; the same enemy unit got counted at FULL, undiscounted
+strength in every city within its strike range simultaneously.
+
+CHANGE: `combat.rs::city_risks_with_threats` split into two passes. Pass
+1 computes each city's raw (unfiltered) `attackers`, `enterers`, and
+`breakable` (none of which need cross-city information). A new pass
+between them attributes each attacking unit to its NEAREST qualifying
+city only (cheapest, most legible proxy for "which one it's actually
+postured to hit") via a `HashMap<unit_tile, primary_city_index>`, and
+drops the unit from every other city's `attackers`. Pass 2 computes
+everything downstream of the now-deduplicated `attackers`
+(`on_garrison`/`severity`/`risk`/`at_risk`/`need_damage`) exactly as
+before. New unit test
+(`a_shared_attacker_is_only_charged_to_its_nearest_city`) confirms the
+attribution directly with two cities at different distances from one
+shared Catapult; all 21 pre-existing `combat.rs` tests pass unchanged
+(none exercised the multi-city case this touches).
+
+FALSIFIER 1 (reconstructed state): re-ran `attack_pricing_probe` — dphi
+for the flagged Attack goes from **-600.0000 to 0.0000 exactly**. Re-ran
+the full faithful `rank_plies` (`step_diag2.rs`) at idx179: the Attack now
+**wins outright, 41.760, ranked #1 of 7** (lambda=1), beating every
+vacating Step (still correctly -441 to -463, since city 49's own
+defend_hold/cover loss from actually leaving the tile is untouched by
+this fix). Resolves the original motivating complaint via "price, don't
+mask" — the whole EndTurn-gating question is moot for this specific ply
+once the Attack is priced correctly, exactly as EXP_ELO_075 hoped for but
+never traced.
+
+FALSIFIER 2 (fire-rate, n=16 real games): **174,713 dedups removed
+(~10,920/game)** — this is not a rare-edge-case fix, it fires
+constantly. Worth flagging plainly: the bug was structurally pervasive on
+this map size (cities close enough that most enemy units sit in strike
+range of more than one), not a narrow one-ply patch.
+
+FALSIFIER 3 (paired gauge, n=128, `--actors 14` matching production,
+identical checkpoint, single-commit diff `ff655e8` -> `abae75d`):
+
+| | prefix (pre-fix) | fixed (post-fix) |
+|---|---|---|
+| anchor_net_wr | 0.3203 (41/128) | 0.3438 (44/128) |
+| avg_moves | 217.84 | 214.12 |
+| avg_score | 4242.66 | 4243.79 |
+
++2.34pp win rate, essentially flat score (a 1-point difference on ~4243
+is noise), slightly shorter games. Not being oversold as a large effect
+at a single n=128 run given tonight's own established residual-noise
+caveats (EXP_ELO_088/090) — but it moved in the theoretically-predicted
+direction (fixing a real mispricing should help, not hurt), score staying
+flat while win rate improves is coherent rather than a lucky split, and
+critically this is a TRACED, mechanistic correctness fix, not a tuning
+guess riding on the aggregate number alone the way the EndTurn floor
+experiments were.
+
+**Disposition: fixed, validated, standing.** Full test suite green
+throughout (304+1 lib tests, 27 self_play tests). Diagnostic
+instrumentation (`CROSS_CITY_ATTACKER_DEDUPS`, the per-tech-style print in
+`self_play.rs`) left in place as a permanent, cheap counter rather than
+stripped — matches the project's own precedent for keeping load-bearing
+diagnostics (e.g. `RANK_PLIES_CALLS`) rather than every temporary one.
+`attack_pricing_probe.rs` kept committed as reproducible evidence, same
+convention as `step_diag.rs`/`step_diag2.rs`.
+
+Closes the loop this whole session was chasing: the original four
+turn-level complaints from Verdi's seed[0] replay watch are now either
+refuted (Organization tech, Forge site), root-caused-and-fixed (this
+entry: the garrison-preserving Attack), or root-caused-and-shipped-as-a-
+dial (EndTurn floor, -700). The reward-choice item (PopGrowth vs
+BorderGrowth) remains the one still fully open from that original list.
