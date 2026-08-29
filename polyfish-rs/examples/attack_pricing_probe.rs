@@ -157,8 +157,31 @@ fn main() {
     println!("\n--- AFTER Attack ---");
     dump_risk_and_plan(&probe, "after", &attack_targets);
 
-    // Direct Φ decomposition via the accumulator dump, if available.
-    let phi_pre = polyfish::ai::reward::goal_potential(&view.state, POV, &goal, None);
-    let phi_post = polyfish::ai::reward::goal_potential(&probe.state, POV, &goal, None);
+    // Real, authoritative decomposition -- not a hand recomputation.
+    use std::collections::HashMap;
+    let (phi_pre, bd_pre) = polyfish::ai::reward::goal_potential_breakdown(&view.state, POV, &goal, None, None, None, None);
+    let (phi_post, bd_post) = polyfish::ai::reward::goal_potential_breakdown(&probe.state, POV, &goal, None, None, None, None);
     println!("\nphi_pre={phi_pre:.4} phi_post={phi_post:.4} dphi={:.4}", phi_post - phi_pre);
+
+    let sum_by_label = |bd: &[(&'static str, f32)]| -> HashMap<&'static str, f32> {
+        let mut m = HashMap::new();
+        for (k, v) in bd {
+            *m.entry(*k).or_insert(0.0) += v;
+        }
+        m
+    };
+    let pre = sum_by_label(&bd_pre);
+    let post = sum_by_label(&bd_post);
+    let mut labels: Vec<&&str> = pre.keys().chain(post.keys()).collect();
+    labels.sort();
+    labels.dedup();
+    println!("\n--- Φ breakdown by term (pre -> post, delta) ---");
+    for label in labels {
+        let p = pre.get(*label).copied().unwrap_or(0.0);
+        let q = post.get(*label).copied().unwrap_or(0.0);
+        let d = q - p;
+        if d.abs() > 0.01 {
+            println!("  {label:30} {p:10.3} -> {q:10.3}  (Δ {d:+.3})");
+        }
+    }
 }

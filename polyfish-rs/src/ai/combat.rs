@@ -98,6 +98,44 @@ fn can_attack_tile(state: &GameState, unit: &UnitState, target_tile: i32) -> boo
     .1
 }
 
+/// EXP_ELO_095: how strongly `unit` should count as a threat to
+/// `target_tile`, given it already passed `can_attack_tile`'s hard gate.
+/// Continuous and tanh-bounded rather than a flat 1.0 -- a unit sitting
+/// right next to a city is a near-certain threat there; the same unit at
+/// the far edge of its own reach (e.g. a Rider spending its whole
+/// road-assisted movement to just barely get in range) is a real but much
+/// weaker one, and it's exactly this discount that lets it also carry a
+/// smaller, non-zero share of threat against a SECOND city it could reach
+/// instead this turn -- neither city gets hard-zeroed, both get an
+/// intensity proportional to how comfortably this unit can actually reach
+/// them.
+fn attack_weight(state: &GameState, unit: &UnitState, target_tile: i32) -> f32 {
+    let range = get_unit_setting(unit.unit_type).range as f32;
+    let d = get_chebyshev_distance(unit.coords.idx, target_tile, state.settings.size) as f32;
+    // Within pure attack range, the unit spends NO movement at all to hit
+    // this tile -- full certainty, not a discount. The decay applies only
+    // to the movement this unit would have to commit to close whatever gap
+    // is left beyond its raw range; two units both comfortably within
+    // range of their own single city are equally certain, single-city or
+    // not -- discounting uncontested in-range attackers was the bug in
+    // this function's first cut.
+    if d <= range {
+        return 1.0;
+    }
+    // `2*movement` (not just `movement`) is the budget to decay against --
+    // `can_attack_tile`'s own outer bound is `2*movement + range` (the
+    // road-aware search it falls back to before giving up), specifically
+    // to cover a Rider-with-roads hitting a target several tiles out. A
+    // narrower `movement`-only budget hard-zeroed that entire outer band
+    // even though the unit genuinely CAN still attack there -- exactly the
+    // "it could skip the near city for the far one" case this weight
+    // exists to keep visible, not erase a second time.
+    let m = get_unit_movement(state, unit) as f32;
+    let movement_needed = d - range;
+    SHARED_ATTACKER_PARTIAL_WEIGHTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    (2.0 * m - movement_needed).max(0.0).tanh()
+}
+
 /// EXP_ELO_050 risk dials. `risk` is a P(lose this city) proxy, multiplied
 /// by the city's worth to give a score-equivalent expected loss. The ordering
 /// is the doctrine: an unbreakable siege is the disaster, a garrison that
@@ -137,10 +175,17 @@ pub struct CityRisk {
     pub arrives_next_turn: bool,
     /// If they park there, my units could remove them within one turn.
     pub breakable: bool,
-    /// Tile indices of visible enemies that can strike the city tile — the
-    /// reachability search is T2's, resolving damage against whoever ends up
-    /// standing there is T3's.
-    pub attackers: Vec<i32>,
+    /// (tile, weight) of visible enemies that can strike the city tile this
+    /// turn — the reachability search is T2's, resolving damage against
+    /// whoever ends up standing there is T3's. EXP_ELO_095: `weight` is a
+    /// tanh-bounded commitment intensity in (0, 1], NOT a hard 1.0 — a unit
+    /// within strike range of several of our cities can only actually
+    /// deliver one attack this turn, but it genuinely could pick any of
+    /// them (a Rider with roads can skip the nearer city for a farther
+    /// one), so every reachable city keeps a reduced, distance-decayed
+    /// share of the threat rather than the nearest city getting all of it
+    /// and the rest getting none.
+    pub attackers: Vec<(i32, f32)>,
     /// Threats that could END their move on the tile inside the horizon.
     pub enterers: Vec<Enterer>,
     /// P(lose the city) proxy in [0,1], as assessed at turn start.
@@ -348,9 +393,11 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
     city_risks_with_threats(state, player, &threats)
 }
 
-/// EXP_ELO_094 diagnostic (temporary): how many (unit, city) attacker
-/// entries the cross-city dedup pass below actually removes.
-pub static CROSS_CITY_ATTACKER_DEDUPS: std::sync::atomic::AtomicU64 =
+/// EXP_ELO_095 diagnostic (temporary): how many (unit, city) attacker
+/// entries actually get a PARTIAL (< 1.0) weight, i.e. how often the
+/// distance-decay in `attack_weight` fires at all versus every attacker
+/// being comfortably within pure range everywhere it appears.
+pub static SHARED_ATTACKER_PARTIAL_WEIGHTS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
 /// Same as [`city_risks`], but takes an already-computed threat list instead
@@ -382,7 +429,7 @@ pub fn city_risks_with_threats(
         sieged: bool,
         open: bool,
         enterers: Vec<Enterer>,
-        attackers: Vec<i32>,
+        attackers: Vec<(i32, f32)>,
         arrives_next_turn: bool,
         breakable: bool,
     }
@@ -408,10 +455,12 @@ pub fn city_risks_with_threats(
                 })
                 .collect()
         };
-        let attackers: Vec<i32> = threats
+        // EXP_ELO_095: weighted, not a bare tile list -- `attack_weight`
+        // below is the tanh-bounded, distance-decayed commitment intensity.
+        let attackers: Vec<(i32, f32)> = threats
             .iter()
             .filter(|(e, trust)| *trust >= 1.0 && can_attack_tile(state, e, idx))
-            .map(|(e, _)| e.coords.idx)
+            .map(|(e, _)| (e.coords.idx, attack_weight(state, e, idx)))
             .collect();
 
         let threat_unit: Option<&UnitState> = if sieged {
@@ -451,48 +500,26 @@ pub fn city_risks_with_threats(
         });
     }
 
-    // EXP_ELO_094: a single enemy unit cannot deliver its whole attack to
-    // TWO of our cities in the same turn -- it has to pick one. Before this
-    // pass, a unit within strike range of multiple cities was counted at
-    // FULL, undiscounted weight in every one of their `attackers`/
-    // `need_damage`/`on_garrison` (a unit near two garrisons priced as if
-    // it could kill both this turn). Confirmed as the exact mechanism
-    // behind a garrison-preserving Attack scoring -558 in a real game:
-    // damaging the attacker reduced a SEPARATE city's `need_damage` (fewer
-    // of our own units "required" to cover it), which silently deleted
-    // that city's `defend_cover` credit even though city 49's own plan was
-    // byte-identical before/after and nothing got worse anywhere. Verdi:
+    // EXP_ELO_094 found (then EXP_ELO_095 corrected): a single enemy unit
+    // cannot deliver its whole attack to TWO of our cities in the same
+    // turn, so counting it at FULL, undiscounted weight in every city
+    // within strike range (a unit near two garrisons priced as if it could
+    // kill both this turn) is wrong -- confirmed as the exact mechanism
+    // behind a garrison-preserving Attack scoring -558 in a real game.
+    // EXP_ELO_094's first fix over-corrected the other way: attributing the
+    // unit ENTIRELY to its nearest city and zeroing every other one denies
+    // a real possibility -- a mobile unit (a Rider with roads reaching 4+
+    // tiles) can genuinely skip the near target for a farther one. Verdi:
     // "it's either 0.2 in both cities... or .6 in one, .15 in the other" --
-    // physically it can't be full-strength against both, so attribute each
-    // attacker to its NEAREST qualifying city only (cheapest, most legible
-    // proxy for "which one it's actually postured to hit") and drop it
-    // from every other city's this-turn attacker set.
-    let mut primary_city_of: std::collections::HashMap<i32, usize> = std::collections::HashMap::new();
-    for (ci, p) in pre.iter().enumerate() {
-        for &unit_tile in &p.attackers {
-            let d = get_chebyshev_distance(unit_tile, p.city.idx, state.settings.size);
-            primary_city_of
-                .entry(unit_tile)
-                .and_modify(|best_ci| {
-                    let best_d =
-                        get_chebyshev_distance(unit_tile, pre[*best_ci].city.idx, state.settings.size);
-                    if d < best_d || (d == best_d && ci < *best_ci) {
-                        *best_ci = ci;
-                    }
-                })
-                .or_insert(ci);
-        }
-    }
-    for (ci, p) in pre.iter_mut().enumerate() {
-        let before = p.attackers.len();
-        p.attackers.retain(|t| primary_city_of.get(t) == Some(&ci));
-        let dropped = before - p.attackers.len();
-        if dropped > 0 {
-            CROSS_CITY_ATTACKER_DEDUPS.fetch_add(dropped as u64, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
+    // the fix is a continuous, tanh-bounded commitment intensity per
+    // (unit, city) pair (`attack_weight`, computed inline above), not a
+    // winner-take-all attribution. A unit's total commitment is bounded by
+    // construction (tanh saturates, and a unit far enough from EITHER city
+    // gets a small share of BOTH) without ever hard-zeroing a city that is
+    // still genuinely reachable this turn -- `can_attack_tile` (unchanged)
+    // remains the only hard cutoff, for cities truly out of reach.
 
-    // Pass 2: everything downstream of the (now deduplicated) `attackers`.
+    // Pass 2: everything downstream of the (now weighted) `attackers`.
     let mut out = Vec::new();
     for p in pre {
         let Pre {
@@ -508,12 +535,13 @@ pub fn city_risks_with_threats(
         let idx = city.idx;
         let garrison = occupant.filter(|u| u.owner == player);
 
-        // Damage the visible enemies could put on the garrison next turn.
+        // Damage the visible enemies could put on the garrison next turn,
+        // weighted by each attacker's commitment intensity (EXP_ELO_095).
         let on_garrison: f32 = garrison.map_or(0.0, |g| {
             attackers
                 .iter()
-                .filter_map(|i| get_true_unit_at(state, *i))
-                .map(|e| hypo_damage(state, &probe(e), g, idx))
+                .filter_map(|&(i, w)| get_true_unit_at(state, i).map(|e| (e, w)))
+                .map(|(e, w)| hypo_damage(state, &probe(e), g, idx) * w)
                 .sum()
         });
 
@@ -549,8 +577,7 @@ pub fn city_risks_with_threats(
         } else {
             attackers
                 .iter()
-                .filter_map(|&i| get_true_unit_at(state, i))
-                .map(|u| u.health)
+                .filter_map(|&(i, w)| get_true_unit_at(state, i).map(|u| u.health * w))
                 .fold(0.0, f32::max)
         };
         out.push(CityRisk {
@@ -638,8 +665,8 @@ pub fn residual_risk(state: &GameState, player: PlayerId, d: &CityRisk) -> f32 {
             let dmg: f32 = d
                 .attackers
                 .iter()
-                .filter_map(|i| live(*i))
-                .map(|e| hypo_damage(state, &probe(e), g, d.city))
+                .filter_map(|&(i, w)| live(i).map(|e| (e, w)))
+                .map(|(e, w)| hypo_damage(state, &probe(e), g, d.city) * w)
                 .sum();
             garrison_risk(dmg, g.health, standing.is_empty())
         }
@@ -724,19 +751,25 @@ pub fn defend_plan(
     // keep the original single-strongest-unit framing (siege-break /
     // entry-deterrence), so it never floors at zero on a real threat.
     let (must_kill, need_damage): (Vec<UnitState>, f32) = if let Some(g) = garrison.as_ref() {
-        let mut contribs: Vec<(UnitState, f32)> = threat
+        // EXP_ELO_095: every quantity derived from an attacker -- its
+        // contribution to the incoming strike, its priority, and the kill
+        // damage it sets once selected -- is scaled by its commitment
+        // weight to THIS city. A unit only weakly postured here (because
+        // it's more credibly threatening a different one of our cities)
+        // is proportionally cheaper to prepare for, not a full hit.
+        let mut contribs: Vec<(UnitState, f32, f32)> = threat // (unit, weighted dmg, weight)
             .attackers
             .iter()
-            .filter_map(|&i| get_true_unit_at(state, i))
-            .map(|u| {
-                let dmg = hypo_damage(state, &probe(&u), g, threat.city);
-                (u.clone(), dmg)
+            .filter_map(|&(i, w)| get_true_unit_at(state, i).map(|u| (u, w)))
+            .map(|(u, w)| {
+                let dmg = hypo_damage(state, &probe(u), g, threat.city) * w;
+                (u.clone(), dmg, w)
             })
             .collect();
         contribs.sort_by(|a, b| b.1.total_cmp(&a.1));
         let mut remaining = threat.strike;
-        let mut out = Vec::new();
-        for (u, dmg) in contribs {
+        let mut out: Vec<(UnitState, f32)> = Vec::new();
+        for (u, dmg, w) in contribs {
             // Same bar `at_risk` already uses (`RISK_MARGIN`): one hit
             // leaving the garrison below a second hit is a threat worth
             // preparing for, not a nuisance. Keeps this branch identical
@@ -747,20 +780,21 @@ pub fn defend_plan(
                 break;
             }
             remaining -= dmg;
-            out.push(u);
+            out.push((u, w));
         }
-        let need = out.iter().map(|u| u.health).sum();
-        (out, need)
+        let need = out.iter().map(|(u, w)| u.health * w).sum();
+        (out.into_iter().map(|(u, _)| u).collect(), need)
     } else {
-        let sieger: Vec<UnitState> = threat
+        let sieger: Vec<(UnitState, f32)> = threat
             .attackers
             .iter()
-            .filter_map(|&i| get_true_unit_at(state, i))
-            .max_by(|a, b| a.health.total_cmp(&b.health))
-            .cloned()
+            .filter_map(|&(i, w)| get_true_unit_at(state, i).map(|u| (u, w)))
+            .max_by(|(a, wa), (b, wb)| (a.health * wa).total_cmp(&(b.health * wb)))
+            .map(|(u, w)| (u.clone(), w))
             .into_iter()
             .collect();
-        (sieger, threat.need_damage)
+        let need = sieger.first().map_or(threat.need_damage, |(u, w)| u.health * w);
+        (sieger.into_iter().map(|(u, _)| u).collect(), need)
     };
 
     let mut cands: Vec<(i32, f32, f32, i32)> = Vec::new(); // (tile, sat, dmg, dist)
@@ -936,7 +970,7 @@ mod risk_tests {
     /// silently deleted that city's defend_cover credit even though the
     /// actually-attacked city's own plan never changed.
     #[test]
-    fn a_shared_attacker_is_only_charged_to_its_nearest_city() {
+    fn a_shared_attacker_keeps_a_reduced_but_nonzero_weight_at_the_farther_city() {
         let mut state = GameState::default();
         state.settings.size = 11;
         for i in 0..121 {
@@ -947,24 +981,37 @@ mod risk_tests {
             state.tiles.insert(i, tile);
         }
         let mut t1 = TribeState::default();
-        // City A at (5,6)=61, distance 1 from the enemy at (5,5)=60.
-        // City B at (5,7)=62, distance 2 from the same enemy -- both are
-        // within a Catapult's range-3 reach, so pre-fix both would list it.
+        // Rider (range 1, movement 2): city A at (5,6)=61 is distance 1 --
+        // within pure range, so it must be FULL weight (no movement spent).
+        // City B at (5,7)=62 is distance 2 -- beyond pure range, needs 1
+        // tile of movement to reach, so it must carry a reduced but still
+        // real weight (EXP_ELO_095: a shared attacker is never hard-zeroed
+        // at a city it can still genuinely reach -- only discounted by how
+        // much of its own movement budget that city actually costs it).
         t1.cities.push(CityState { owner: 1, idx: 61, ..Default::default() });
         t1.cities.push(CityState { owner: 1, idx: 62, ..Default::default() });
         state.tribes.insert(1, t1);
         let mut t2 = TribeState::default();
-        t2.units.push(unit_at(60, UnitType::Catapult, 2));
+        t2.units.push(unit_at(60, UnitType::Rider, 2));
         state.tribes.insert(2, t2);
 
         let risks = city_risks(&state, 1);
         let a = risks.iter().find(|r| r.city == 61).expect("city A must be in city_risks");
         let b = risks.iter().find(|r| r.city == 62).expect("city B must be in city_risks");
-        assert_eq!(a.attackers, vec![60], "the nearer city keeps the attacker");
+        let wa = a.attackers.iter().find(|&&(t, _)| t == 60).map(|&(_, w)| w);
+        let wb = b.attackers.iter().find(|&&(t, _)| t == 60).map(|&(_, w)| w);
+        assert!(wa.is_some(), "the nearer city must list the attacker: {:?}", a.attackers);
         assert!(
-            !b.attackers.contains(&60),
-            "the farther city must NOT also be charged the same unit's full threat: {:?}",
+            wb.is_some(),
+            "the farther-but-still-reachable city must ALSO list the attacker, not be hard-zeroed: {:?}",
             b.attackers
+        );
+        let (wa, wb) = (wa.unwrap(), wb.unwrap());
+        assert_eq!(wa, 1.0, "within pure range costs no movement -- must be full certainty, got {wa}");
+        assert!(wb > 0.0 && wb < 1.0, "weight must be a bounded, genuinely partial intensity, got {wb}");
+        assert!(
+            wa > wb,
+            "the nearer city must carry the LARGER share of this unit's threat: near={wa} far={wb}"
         );
     }
 
