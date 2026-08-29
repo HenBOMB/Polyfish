@@ -9602,3 +9602,448 @@ mid-read). For one-shot readouts (unlike the long-lived, `--resume`-safe
 training loop), write output to a unique per-attempt filename and
 `launchctl remove` the job the instant a result is detected — see the
 updated `macos-wakeup-limit-kills-net-leaf-actors` project memory.
+## EXP_ELO_075 — a Defend-ordered garrison is forced to vacate because EndTurn is unconditionally gated out (registered)
+
+STATUS: REGISTERED, about to implement.
+
+CONTEXT: Verdi watched the seed[0] (1787500020, XinXi vs Imperius) replay
+generated from this branch's iter51 checkpoint and flagged turn 11, plies
+177-179 (global step index 177-179 in the replay viewer): the sole garrison
+Warrior on city 49 (a level-4 city) spent the last 2 stars on two Harvests
+elsewhere, then stepped off 49 to tile 60, leaving the city open. The enemy
+walked a unit onto 49 the very next ply (idx181) and it sieged for the rest
+of the game (never captured — city 49 was owner=1 at game end, P1 won
+decisively; the honest claim is "gave away a free siege/tempo," not "gave
+away a city," per the ledger's own accuracy bar).
+
+Root-caused with a faithful re-run of the real executor path (fogged view via
+`clone_for_mcts`, threaded `LaneState`/`TurnCounters` from turn 0, real
+`GoalAux` via `compute_goal_aux`, real `star_gate`, `rank_plies` itself —
+`examples/step_diag2.rs`, throwaway, not shipped) at the exact idx179 ply.
+Turn 11's actually-picked macro goal (from `game0.jsonl`, visits-weighted)
+DID include `Defend@49` — the goal-setter's risk detection was correct
+(`combat::city_risks` already showed `at_risk=true needs_order=true` for
+city49 several plies before this sequence even started, per
+`examples/step_diag.rs`'s dump). The faithful `rank_plies` output at idx179
+(`lambda=1`, the real per-ply value — `--macro-lambda` defaults to 1.0 and
+this run's launch config never overrode it):
+```
+   -441.240  Step 49->48
+   -442.240  Step 49->37
+   -461.240  Step 49->60   <- close to what was actually executed
+   -462.240  Step 49->61
+   -463.240  Step 49->38
+   -463.240  Step 49->50
+   -558.240  Attack 49->39
+   (EndTurn gated out entirely)
+```
+Every single legal candidate is deeply Φ-negative (the `defend_hold`/
+`defend_cover` loss from `combat::defend_plan`'s `hold_needed` flipping
+true→false the instant the garrison simulates as gone — confirmed directly:
+`defend_plan` at idx176-178 reports `hold_needed=true`, at idx179-after
+`hold_needed=false`). EndTurn — which would leave the Warrior in place and
+score its usual flat `0.0` — is never in the running because `rank_plies`
+(`macro_exec.rs`) unconditionally strips it whenever any other move survives
+gating (`if has_other { moves.retain(|m| m.move_type() != EndTurn); }`), and
+there is no "hold/skip" move type in this engine (`MoveType`: Step / Attack /
+Ability / Summon / Harvest / Build / Research / Capture / Reward / EndTurn /
+Resign — nothing else). **The abandonment is not a mis-pricing the search
+reasoned its way into; it is a structurally forced move** — Φ correctly
+flags every option as bad, and the executor has no "do nothing" option to
+fall back on.
+
+Notable side-finding, not this fix's target but worth a future look:
+`Attack 49->39` (hitting the actual besieging unit while the Warrior stays
+on 49 — melee doesn't relocate the attacker) scores *worse* (-558.240) than
+every abandonment option. That's Φ mis-pricing a garrison-preserving Attack,
+a separate bug from the EndTurn-starvation one this entry fixes — noted for
+a later pass, not bundled in here.
+
+HYPOTHESIS: letting `EndTurn` survive `rank_plies`' gating specifically when
+every other surviving candidate's real (`base + lambda*dphi`) score is
+negative — "doing nothing beats doing active harm" — will stop this class of
+forced self-harm without reopening the anti-passivity problem the
+unconditional-strip was built for (that problem is "a move exists that's
+merely mediocre," not "every move is actively harmful"; this condition never
+fires in the former case). Per project convention (`goal-pricing-beats-masks`
+memory): this is a pricing-shaped fix (EndTurn already scores 0.0 in
+`scoring.rs`; the change is only about when it's allowed to compete), not a
+hard mask on any specific move type.
+
+CHANGE (to implement): in `macro_exec::rank_plies` (`src/ai/search/macro_exec.rs`),
+after scoring+sorting, if the top-scored non-EndTurn candidate's score is
+`< 0.0`, re-score EndTurn (flat `0.0`, matching `scoring::score_move`'s own
+`MoveType::EndTurn => 0.0`) and re-insert/re-sort so it can win. Scope the
+check to `lambda != 0.0` runs only (score is base-only, always non-negative
+in practice, when `lambda == 0.0` — no behavior change for non-goal-shaped
+callers).
+
+FALSIFIER: rerun `examples/step_diag2.rs` (or equivalent) at idx179 post-fix
+— EndTurn must appear in the ranked list and win when every other option is
+negative. Then a matched no-regression check: seed-770425 paired gauge
+(n=128) or `eval_seeds.json` arena vs Greedy, before/after, win rate within
+the 0.078 noise floor and cities-lost not worsening (a fix that makes the
+net MORE passive in ambiguous-but-not-hopeless states would be a real
+regression, not a wash — watch for that specifically since this touches the
+one place passivity is deliberately suppressed elsewhere in this file).
+
+**ACTUAL — MEASURED, FALSIFIED, REVERTED (commit `62828e9`).** The idx179
+falsifier passed cleanly (EndTurn appears, wins, ranked_#1 of 8 — see the
+prior faithful-`rank_plies` re-run) and the new unit test passed. But the
+project's own registered falsifier's own explicit warning ("a fix that
+makes the net MORE passive... would be a real regression — watch for that
+specifically") is exactly what happened, caught by the paired-gauge
+no-regression check before it went anywhere near training:
+
+Macro-mcts paired gauge (not the gumbel-tuned seed-770425 recipe verbatim —
+adapted to this run's real production config: `--search-backend macro-mcts
+--macro-leaf net-asym --macro-sims 64 --macro-k 8 --macro-rollout-lambda
+0.0 --goal-channels --goal-w-tree 1`, `--anchor-frac 1.0
+--iteration 100 --anchor-decay-start 100 --base-seed 770425 --tribe1
+Imperius --tribe2 Imperius --gamemode 2 --actors 14`, n=48, same
+`model.safetensors` mtime both arms, single-commit diff isolating exactly
+this fix):
+
+| | pre-fix (`c57e036`) | post-fix (`ffce0b5`) |
+|---|---|---|
+| anchor_net_wr | 0.396 (19/48) | 0.146 (7/48) |
+| avg_moves | 248.1 | 188.0 |
+| avg_score | 4847.2 | 3344.1 |
+
+A 25-point win-rate collapse, games ending ~24% shorter, ~30% lower score —
+coherent, not noise (n=48 is below the 128-seed formal floor, but this
+magnitude and the multi-metric co-movement both clear it easily).
+
+Root cause, confirmed by instrumenting the fire site (temporary
+`ENDTURN_REVIVED` atomic + `POLYFISH_LOG_ENDTURN_REVIVE` per-fire logging,
+removed before reverting): the fix fires far more often than the rare
+forced-garrison-abandonment case it was designed for — **127 times in an
+8-game batch (~16/game, ~2-3% of that pov's plies)** — and the score
+distribution at fire time is dominated by shallow negatives, not the deep
+(-400+) garrison-abandonment class: of 140 fires, 105 (75%) scored between
+-100 and -50, only ~6 (4%) below -400. **The design flaw: EndTurn's flat
+0.0 is not a fair price against `base + λΔφ`.** A candidate's score prices
+ONE ply's immediate Φ change; EndTurn's implicit 0.0 claims "stopping
+preserves Φ," but stopping forfeits every remaining ply of the turn AND
+hands the move to the opponent — exactly the tradeoff the unconditional
+strip existed to prevent. Most fires are ordinary late-turn diminishing-
+returns plies (a small mildly-negative Step or Research with nothing better
+left this turn, previously just taken and the turn continued) which the fix
+now cuts short instead — the AI got measurably more passive in
+ambiguous-but-not-hopeless states, precisely the failure mode the
+falsifier called in advance.
+
+Considered and rejected for tonight: a depth threshold (revive only when
+the best score is very deeply negative, e.g. < -300) to try to isolate the
+sparse deep tail. Rejected because the tail isn't a clean second cluster
+separated by a gap — it's continuous down to -1529 with no obvious cut
+point — so a threshold would be an unvalidated guess, not a principled
+retry, and this project's own low-confidence-fix discipline says that
+doesn't ship on a hunch. Also worth recording for whoever revisits this:
+under `--macro-rollout-lambda 0.0`, the fix (gated on `lambda != 0.0`)
+could never fire inside the tree's own turn rollouts even if kept — the
+macro ballot's Q values assume full-turn execution while the real executor
+would have truncated, a search/execution incoherence any surviving variant
+needs to address, not just the threshold question.
+
+**The better fix candidate for the original bug is still open, not
+reverted-with-nothing-to-show:** this ledger's own side-finding on the same
+idx179 ply — `Attack 49→39` (hitting the actual besieging unit while
+staying garrisoned; melee doesn't relocate the attacker) priced at -558.240
+in the real game, worse than every vacating Step, while the exact same
+shape (lone Defend-ordered garrison, adjacent single attacker) in this
+entry's own clean unit-test fixture priced Attack at +27.84 and it won
+correctly. If Φ priced a garrison-preserving Attack right in the real
+game's actual (multi-attacker, `must_kill`-driven) situation, the correct
+move wins outright on its own merits and the EndTurn question never needs
+to arise — a "price, don't mask" fix (per this project's own
+`goal-pricing-beats-masks` finding) that never touches the
+passivity-sensitive EndTurn gating at all. Not traced further tonight
+(discovered late, needs its own `defend_plan`/`must_kill` investigation);
+registering as the natural next step rather than rushing it.
+
+**Disposition: REVERTED.** `git revert ffce0b5` (commit `62828e9`) — full
+test suite re-passes post-revert. No training run follows from this
+entry; the user's own gate ("once we have the thing that looks like it's
+gonna work... then we can kick off a training run") was not met. Two of
+Verdi's four flagged turn-level complaints were checked against this
+project's own ground-truth tools and refuted (Organization tech's real
+driver is upstream stance selection, not tech-utility myopia; the Forge-
+site pick agrees with `eco_plan`'s own forward solver). The other two
+(garrison abandonment, PopGrowth-over-BorderGrowth) are real, but neither
+has a fix that survived measurement — garrison abandonment's first attempt
+regressed on contact with the paired gauge and was reverted; a more
+targeted Attack-pricing candidate is identified and registered for next
+time. Stopping here without a training run is the correct outcome of the
+loop, not a shortfall against it — the loop's whole point is to catch
+exactly this kind of plausible-but-wrong fix before it reaches a multi-hour
+training investment, and it did.
+
+## EXP_ELO_076 — reward-choice and Forge-site scoring are Φ-blind to the eco_plan hub plan (registered)
+
+STATUS: REGISTERED, about to implement.
+
+CONTEXT: same seed[0] watch session, two more flags from Verdi:
+- Step 122 (turn 9): city 84's level-3→4 reward choice picked PopGrowth
+  over BorderGrowth. Verdi's read: BorderGrowth was better here because it
+  would grow the city's border into a strong hub cluster ("we have insane
+  hub spots here").
+- Step 147 (turn 10): the Forge for city 49 went to tile 48 (2 adjacent
+  *already-built* Mine structures) instead of tile 61 (0 built Mines
+  adjacent, but 3 adjacent Mountain tiles — a level-3 Forge if the Mines
+  get built there first/around it). Verdi: "the furge spot is bad we
+  shouldve placed it at tile 61 instead so it can be a level 3."
+
+Both root-caused precisely with `examples/step_diag.rs`/`step_diag2.rs`
+(throwaway, not shipped):
+
+**Reward choice (idx122).** `scoring::score_reward`'s BorderGrowth branch
+only checks a crude proxy — `city._territory.len() < 10` (small city → +9,
+large city → +5) — against PopGrowth's flat +8; at city84's actual
+territory_len=9 this is a real but wafer-thin 1-point edge for BorderGrowth
+(209 vs 208) with **zero awareness of what's actually sitting just outside
+the border** (a real hub opportunity or nothing at all — the heuristic can't
+tell the difference). The faithful `rank_plies` re-run (real fogged view,
+real `GoalAux`, real `lambda=1`) shows the true picture is worse than that:
+Φ's dev_potential/economy_completion terms price PopGrowth's population
+gain richly (332.342 total) while BorderGrowth's territory gain gets a much
+smaller Φ credit (262.894 total) — PopGrowth wins by 69 points, not a
+coin-flip. Φ has no term that credits BorderGrowth for what it *unlocks*
+(a better hub site coming into territory); it only (weakly) credits the
+tile count.
+
+**Forge site (idx147).** Both tile 48 and tile 61 were simultaneously legal,
+owned-by-city-49 Build targets at that ply — this is not a legality/
+territory issue (tile 61 was already in territory the whole time, so it is
+NOT downstream of the reward-choice finding above; the two are independent
+bugs, not one). `scoring.rs`'s Build-adjacency bonus (`adj_count`) counts
+only tiles with an *already-built* Mine structure adjacent (confirmed via
+`examples/step_diag.rs`'s corrected `built_mine_partners` helper, matching
+`scoring.rs`'s own `prereqs.contains(&s.structure_type)` check exactly):
+tile 48 has 2 (→ `adj_count` bonus +5), tile 61 has 0 built Mines but 3
+Mountain tiles with nothing built on them yet (→ bonus +0). The heuristic is
+a zero-lookahead greedy snapshot: it cannot represent "hold this tile, build
+the Mines around it first, then it's a level-3 Forge" — it always prefers
+whatever pays off *this instant*.
+
+**This codebase already has the missing lookahead, unused here**:
+`rules::eco_plan::plan_city`/`hub_candidates` (`src/rules/eco_plan/city.rs`)
+is a real forward solver — `CityPlan.hub_site: Option<i32>` and
+`CityPlan.hub_level: i32` are exactly "the best hub tile and what tier it
+reaches," accounting for a build sequence, not just current-instant
+adjacency. It's already wired into the MACRO/lane layer (`ai/economy.rs`'s
+`eco_plan_best_city`, consulted by `search/lane.rs`'s Giant-spam-viability
+check and `oracle_macro.rs`'s tech-line recommendation discount) but never
+reaches the PER-MOVE execution heuristics in `scoring.rs` that actually pick
+which reward/which Build tile to take. The plan exists; it just isn't
+threaded down to the plies that would act on it.
+
+HYPOTHESIS: computing the eco_plan hub reading ONCE per turn at goal-commit
+(NOT per rank_plies candidate — this project's own memory
+`macro-heur-generation-is-structurally-slow` and the `PlyMoveCache`
+lesson (EXP_ELO_062, net *slower* despite being correct) both warn against
+adding per-candidate cost to a path that already runs `rank_plies` ~45
+times/move) and carrying `hub_site`/`hub_level` in `GoalAux` will let both
+`score_reward`'s BorderGrowth branch and the Build Forge/adj_count branch
+consult "does this city's plan actually have a hub opportunity here" instead
+of a context-free proxy, without adding search-time cost.
+
+CHANGE (to implement): 
+1. `GoalAux` (`src/ai/search/goal_aux.rs`): add `hub_site: Option<i32>`,
+   `hub_level_reachable: i32` (from `eco_plan_best_city`'s `CityPlan` for
+   the relevant lane, computed once inside `compute_goal_aux`).
+2. `scoring::score_move_with_unit_goals`/`score_move_inner`
+   (`src/ai/scoring.rs`): thread an `aux: Option<&GoalAux>` parameter
+   through (currently only `unit_goals` is threaded; single real call site
+   in `macro_exec::rank_plies`, so this is a contained signature change).
+3. `score_reward`'s BorderGrowth branch: when `aux.hub_site` is known and
+   currently outside the city's territory but would be brought in by growth,
+   award a bonus scaled by `hub_level_reachable` instead of the flat
+   territory-length proxy.
+4. The Build-adjacency (`adj_count`) branch: when `target == aux.hub_site`,
+   score using `hub_level_reachable` (the plan's designated eventual tier)
+   rather than only the current built-Mine `adj_count` — so the search can
+   value "this is THE spot" even before every partner Mine is standing.
+
+FALSIFIER: re-run the faithful `rank_plies` probe at the reconstructed
+idx122/idx147 states pre/post-fix — BorderGrowth and tile-61 must each
+become competitive (need not always win; the map won't always have a real
+hub opportunity, and `aux.hub_site` should correctly read `None` on maps
+that don't). Then the same matched no-regression check as EXP_ELO_075
+(seed-770425 paired gauge or eval_seeds arena vs Greedy) — win rate within
+noise, no SPT/army/expansion regression from over-indexing on hub siting at
+the expense of everything else `score_move` already prices.
+
+**ACTUAL / Disposition (Forge-site half — REFUTED, reverted, not shipped):**
+Implemented per the CHANGE section above (GoalAux gained a per-CITY
+`hub_plans: Vec<(city_idx, hub_site, hub_level)>` — not the tribe-wide
+single-best `eco_plan_best_city` reads elsewhere, since the Build branch
+needs "does the city THIS candidate belongs to have a plan", caught in
+review before it shipped). First pass looked wrong for a boring reason
+(city 49's own `plan_city` read came back `hub_site=Some(48), hub_level=2`
+— agreeing with the engine, not the complaint) — but the first-pass "natural,
+no-border-growth" scenario turned out to be the wrong instrument, not proof
+of anything, so this was re-run as the actual discriminating probe advisor
+proposed: `plan_city` for city 49 under BOTH the natural and the
+`border_growth: true` Mine-lane scenarios, plus direct tile ownership
+checks on 50/51/62 (tile 61's three candidate Mine neighbors). Result:
+**tiles 50, 51, and 62 were ALL already owned by player 1** at idx147 (not
+gated behind border growth the way the geometry-only guess assumed), and
+`plan_city` returns the IDENTICAL answer either way —
+`hub_site=Some(48) hub_level=2 spt=7`, no improvement from having all three
+mountains hypothetically available. **Ground truth, asked the right
+question twice, agrees with the engine's original pick.** The exact reason
+`plan_city`'s solver doesn't favor investing in 3 fresh Mines to reach tile
+61's level-3 over reusing 2 already-standing ones at 48 was NOT traced
+further (a plausible mechanism is the star cost of 3 new Mines vs 0, but per
+this ledger's own `feedback-dont-misattribute-macro-findings` discipline,
+that is a *guess*, not something the actual computation was shown to weigh
+— not asserted here as fact). **Reverted**: the `hub_plans`/`aux`-threading
+changes to `goal_aux.rs`/`scoring.rs`/`macro_exec.rs` were fully backed out
+(`git checkout`) before commit — no evidence justified shipping them, and
+per this project's low-confidence-fix discipline, unverified plumbing
+doesn't ship on the strength of a plausible story alone. `examples/step_diag2.rs`
+keeps the discriminating-probe code (both-scenario `plan_city` calls +
+owner dump) as committed diagnostic evidence.
+
+The reward-choice half (idx122, PopGrowth vs BorderGrowth) was NOT
+implemented — the faithful `rank_plies` re-run (see the CONTEXT section
+above) had already shown the real margin (69 points, PopGrowth 332.342 vs
+BorderGrowth 262.894) is dominated by `goal_potential`'s dev_potential/
+economy_completion pricing of population gain, not primarily the
+`score_reward` heuristic this entry originally targeted, and — now that the
+Forge-site half's "give it eco_plan hub-awareness" mechanism has been
+directly refuted for this same city — there is no remaining evidence-backed
+hypothesis for what a BorderGrowth fix should even look like. **Deferred**,
+alongside EXP_ELO_074's Organization-tech item below: the real driver
+(which specific dev_potential/completion sub-term prices PopGrowth so much
+higher, and whether that pricing is wrong in general or only looks wrong in
+this one instance) needs its own registered investigation, not a rushed
+patch built on an unconfirmed mechanism.
+
+**Net for tonight: EXP_ELO_075 (EndTurn-survival) is the only EXP_ELO_076-
+adjacent code change that shipped.** Two of the four turn-level complaints
+Verdi flagged (Organization tech, Forge site) were checked against this
+project's own ground-truth tools and found to NOT be bugs — the engine's
+original decisions hold up. One (garrison abandonment) was a real,
+now-fixed structural bug. One (reward choice) has a real, identified-but-
+not-yet-actionable mechanism, deferred pending its own investigation.
+
+## EXP_ELO_074 (T2 continued, deferred item) — Organization tech at turn 7 stays out of scope tonight
+
+Verdi's third flag from the same seed[0] watch: step 92 (turn 7), Research
+Organization when stars were arguably better saved toward the Forge/Giants
+lane ("we have insane hub spots here... wait for it"). Checked (`game0.jsonl`):
+turn 7's actually-picked stance was `Grow`, not `Save` — so this is NOT
+`evaluate_tech_utility`'s per-tech myopia (each tech scored independently,
+no opportunity-cost-of-waiting term — that critique is real but not what
+fired here); it's upstream, in `oracle_macro.rs`'s stance/lane selection
+deciding `Grow` over `Save` at that turn. That subsystem
+(`commit_macro_goal`/`select_lane`/`pick_save_lane`) is large and untouched
+by tonight's other two fixes. Deferring per the advisor consult's own
+time-box guidance rather than rushing a shallow patch — noted here so it
+isn't silently dropped. Worth its own registered experiment once EXP_ELO_075/
+076 land and measure clean.
+
+## EXP_ELO_077 — EndTurn revives at a -400 floor, not flat 0.0 (implemented, unit-tested; paired gauge pending)
+
+CONTEXT: Verdi, on waking and reviewing EXP_ELO_075's revert, proposed the
+direct fix for that entry's own root cause: keep `rank_plies` reviving
+EndTurn once every other candidate is Φ-negative (the real
+forced-garrison-abandonment bug is unchanged — this engine still has no
+hold/skip move type), but stop pricing the revived EndTurn at a flat 0.0.
+EXP_ELO_075's own fire-site instrumentation (140 sampled fires: 75% scored
+-100..-50, only ~4% below -400) already showed exactly why 0.0 regressed
+the paired gauge — it let EndTurn beat ordinary shallow diminishing-returns
+plies, not just the rare deep-harm class. Verdi's proposal: price it at
+-400 for now ("never chosen until it's the only choice left"), refine
+toward something contextual later.
+
+HYPOTHESIS: -400 sits below essentially all of EXP_ELO_075's shallow
+75% band (-100..-50) and below the flagged idx179 ply's own best real
+option (-441.240), so it should still fix the original bug while
+declining to fire on the exact plies that caused the regression.
+
+CHANGE: `src/ai/search/macro_exec.rs` — `ENDTURN_REVIVE_PRICE: f32 = -400.0`
+constant; `rank_plies`'s revive branch now pushes `(ENDTURN_REVIVE_PRICE,
+EndTurnMove)` instead of `(0.0, EndTurnMove)`, gated identically
+(`has_other && lambda != 0.0 && top score < ENDTURN_REVIVE_PRICE`). Pulled
+the branch into a pure `revive_endturn_if_worse_than_floor` helper so the
+threshold is unit-testable against synthetic scores without a real board.
+
+FALSIFIER: (1) the reverted EXP_ELO_075 unit-test fixture (lone
+Defend-ordered garrison, 2-tiles-out threat, every Step vacates the held
+tile) re-verified by direct probe to price every Step around -426..-429 —
+clears the floor, EndTurn wins at exactly -400.0, test
+`forced_garrison_abandonment_prefers_end_turn_below_revive_price` passes.
+(2) new test `endturn_does_not_revive_for_shallow_negative_plies` directly
+encodes the regression this floor exists to prevent: a -50.0 top score
+(EXP_ELO_075's own dominant fire band) must NOT revive EndTurn; a -450.0
+top score must; the boundary (-400.0 exactly) must not (strict `<`);
+`lambda == 0.0` and `has_other == false` must never revive. All pass.
+Full `cargo test --release --lib ai::search::macro_exec::` green (6/6).
+
+**ACTUAL — so far.** Both falsifiers pass. What's NOT yet done: the same
+paired-seed macro-mcts gauge (n=48, matched checkpoint/seed, single-commit
+diff) that caught EXP_ELO_075's regression has not been re-run against
+this floored version. Per this project's own lesson from that exact
+regression (`endturn-flat-price-unfair-vs-shaped-scores` memory) — a
+falsifier passing at the reconstructed state is necessary but not
+sufficient; only the paired gauge tells us whether -400 actually holds up
+across real games, not just the one flagged ply and the fire-distribution
+math. **Disposition: NOT YET SHIPPED to a training run** — paired gauge is
+the next step before this can be called validated.
+
+## EXP_ELO_078 — the GARRISON_49 sequence's real defect: stars burned on Harvests before the forced vacate, foreclosing a legal post-vacate Summon (confirmed mechanism, no fix yet)
+
+CONTEXT: Verdi's sharper read of the same idx177-179 sequence: "the problem
+is not just we stepped off the city but that we sent our last 2 stars and
+THEN stepped off. If we had at least stepped off but had 2 stars left we
+could've made a unit from that city." Checked directly against
+`examples/step_diag.rs` (extended this session with a full ranked-legal-
+moves dump at idx177/178, run via `cargo run --release --example
+step_diag`):
+
+- idx177 (stars=4): 15 legal moves. Every vacating Step from 49 scores
+  39-61; the two Summon options (at cities 41/79, `src:41`/`src:79`) score
+  30; every Harvest scores 18 (tied, undifferentiated); EndTurn 0. The
+  executed move was `Harvest{target:78}` (score 18, ranked #10 of 15).
+  **No legal Summon at city 49 itself** at this ply.
+- idx178 (stars=2, after the first Harvest): same picture, still **no
+  legal Summon at city 49**. Executed `Harvest{target:60}` (score 18,
+  ranked #10 of 14), draining stars to 0.
+- idx179 (stars=0): the already-diagnosed EXP_ELO_075 forced-vacate ply.
+
+Root cause of "no legal Summon at 49," confirmed by reading
+`moves/summon.rs::generate_summon_moves`: city-tile Summon is blocked by
+`is_tile_occupied(state, target_idx)` — Polytopia has no unit stacking, and
+the garrison Warrior was still standing on 49 at both idx177 and idx178.
+**Verdi's proposed sequence (vacate first, Summon after) is mechanically
+correct**: stepping off 49 vacates the tile, which is exactly what makes a
+same-city Summon legal again — but by the time the forced vacate actually
+happens (idx179), the 4 stars that would have paid for it (Warrior costs
+2) were already spent on two undifferentiated-18-score Harvests at idx177
+and 178.
+
+This is a distinct bug from EXP_ELO_075/077 (which is about EndTurn's
+gating/pricing at the vacate ply itself) and from the already-flagged
+Attack-mispricing note (garrison-preserving Attack scoring worse than
+vacating). It's a **turn-sequencing / star-reservation gap**: nothing in
+`rank_plies`'s per-ply scoring or `defend_plan` credits holding 2 stars in
+reserve because a same-turn forced vacate is coming and a post-vacate
+Summon would restore the garrison. Each ply is scored independently
+against the CURRENT board (Summon at 49 illegal → never considered,
+literally invisible to the ply-local ranking at idx177/178); recognizing
+"spend elsewhere now forecloses a better sequence 2 plies later" requires
+either genuine multi-ply lookahead finding the specific (vacate, then
+Summon) trajectory, or an explicit star-reservation signal from
+`defend_plan` when `hold_needed` is live and a same-city Summon is
+affordable-if-deferred.
+
+**Not fixed tonight.** This is a harder problem than a pricing-floor tweak
+(EXP_ELO_077) — the macro-mcts budget (64 sims, k=8, ~8 plies/turn) would
+need to actually explore this specific sequence to find it via search
+alone, or `GoalAux`/`defend_plan` would need a new signal this ply-local
+architecture doesn't currently carry. Registering the confirmed mechanism
+so it isn't lost; a real fix needs its own design pass, not a rushed
+patch on top of tonight's other two changes.
