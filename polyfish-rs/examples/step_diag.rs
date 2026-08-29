@@ -198,6 +198,28 @@ fn main() {
                 }
 
                 let legal = game.legal_moves();
+                if idx == 177 || idx == 178 {
+                    let mut scored: Vec<(f32, String)> = legal
+                        .iter()
+                        .map(|m| (polyfish::ai::scoring::score_move(&game, m.as_ref()), format!("{:?} {}", m.move_type(), m.serialize())))
+                        .collect();
+                    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+                    println!("      [full ranked legal moves @ idx{idx}, top 15 of {}]", scored.len());
+                    for (s, desc) in scored.iter().take(15) {
+                        println!("        {s:8.3}  {desc}");
+                    }
+                    let summon_49: Vec<_> = scored.iter().filter(|(_, d)| d.starts_with("Summon") && d.contains("\"src\":49")).collect();
+                    if summon_49.is_empty() {
+                        println!("        (no legal Summon at city 49)");
+                    } else {
+                        for (s, d) in &summon_49 {
+                            println!("        [SUMMON@49 candidate] {s:8.3}  {d}");
+                        }
+                    }
+                    if let Some(pos) = scored.iter().position(|(_, d)| d.starts_with("Harvest")) {
+                        println!("        (top Harvest is ranked #{} of {}: {})", pos + 1, scored.len(), scored[pos].1);
+                    }
+                }
                 if idx == 179 {
                     use polyfish::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
                     let goal = MacroGoal {

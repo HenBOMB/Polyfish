@@ -9725,3 +9725,106 @@ by tonight's other two fixes. Deferring per the advisor consult's own
 time-box guidance rather than rushing a shallow patch — noted here so it
 isn't silently dropped. Worth its own registered experiment once EXP_ELO_075/
 076 land and measure clean.
+
+## EXP_ELO_077 — EndTurn revives at a -400 floor, not flat 0.0 (implemented, unit-tested; paired gauge pending)
+
+CONTEXT: Verdi, on waking and reviewing EXP_ELO_075's revert, proposed the
+direct fix for that entry's own root cause: keep `rank_plies` reviving
+EndTurn once every other candidate is Φ-negative (the real
+forced-garrison-abandonment bug is unchanged — this engine still has no
+hold/skip move type), but stop pricing the revived EndTurn at a flat 0.0.
+EXP_ELO_075's own fire-site instrumentation (140 sampled fires: 75% scored
+-100..-50, only ~4% below -400) already showed exactly why 0.0 regressed
+the paired gauge — it let EndTurn beat ordinary shallow diminishing-returns
+plies, not just the rare deep-harm class. Verdi's proposal: price it at
+-400 for now ("never chosen until it's the only choice left"), refine
+toward something contextual later.
+
+HYPOTHESIS: -400 sits below essentially all of EXP_ELO_075's shallow
+75% band (-100..-50) and below the flagged idx179 ply's own best real
+option (-441.240), so it should still fix the original bug while
+declining to fire on the exact plies that caused the regression.
+
+CHANGE: `src/ai/search/macro_exec.rs` — `ENDTURN_REVIVE_PRICE: f32 = -400.0`
+constant; `rank_plies`'s revive branch now pushes `(ENDTURN_REVIVE_PRICE,
+EndTurnMove)` instead of `(0.0, EndTurnMove)`, gated identically
+(`has_other && lambda != 0.0 && top score < ENDTURN_REVIVE_PRICE`). Pulled
+the branch into a pure `revive_endturn_if_worse_than_floor` helper so the
+threshold is unit-testable against synthetic scores without a real board.
+
+FALSIFIER: (1) the reverted EXP_ELO_075 unit-test fixture (lone
+Defend-ordered garrison, 2-tiles-out threat, every Step vacates the held
+tile) re-verified by direct probe to price every Step around -426..-429 —
+clears the floor, EndTurn wins at exactly -400.0, test
+`forced_garrison_abandonment_prefers_end_turn_below_revive_price` passes.
+(2) new test `endturn_does_not_revive_for_shallow_negative_plies` directly
+encodes the regression this floor exists to prevent: a -50.0 top score
+(EXP_ELO_075's own dominant fire band) must NOT revive EndTurn; a -450.0
+top score must; the boundary (-400.0 exactly) must not (strict `<`);
+`lambda == 0.0` and `has_other == false` must never revive. All pass.
+Full `cargo test --release --lib ai::search::macro_exec::` green (6/6).
+
+**ACTUAL — so far.** Both falsifiers pass. What's NOT yet done: the same
+paired-seed macro-mcts gauge (n=48, matched checkpoint/seed, single-commit
+diff) that caught EXP_ELO_075's regression has not been re-run against
+this floored version. Per this project's own lesson from that exact
+regression (`endturn-flat-price-unfair-vs-shaped-scores` memory) — a
+falsifier passing at the reconstructed state is necessary but not
+sufficient; only the paired gauge tells us whether -400 actually holds up
+across real games, not just the one flagged ply and the fire-distribution
+math. **Disposition: NOT YET SHIPPED to a training run** — paired gauge is
+the next step before this can be called validated.
+
+## EXP_ELO_078 — the GARRISON_49 sequence's real defect: stars burned on Harvests before the forced vacate, foreclosing a legal post-vacate Summon (confirmed mechanism, no fix yet)
+
+CONTEXT: Verdi's sharper read of the same idx177-179 sequence: "the problem
+is not just we stepped off the city but that we sent our last 2 stars and
+THEN stepped off. If we had at least stepped off but had 2 stars left we
+could've made a unit from that city." Checked directly against
+`examples/step_diag.rs` (extended this session with a full ranked-legal-
+moves dump at idx177/178, run via `cargo run --release --example
+step_diag`):
+
+- idx177 (stars=4): 15 legal moves. Every vacating Step from 49 scores
+  39-61; the two Summon options (at cities 41/79, `src:41`/`src:79`) score
+  30; every Harvest scores 18 (tied, undifferentiated); EndTurn 0. The
+  executed move was `Harvest{target:78}` (score 18, ranked #10 of 15).
+  **No legal Summon at city 49 itself** at this ply.
+- idx178 (stars=2, after the first Harvest): same picture, still **no
+  legal Summon at city 49**. Executed `Harvest{target:60}` (score 18,
+  ranked #10 of 14), draining stars to 0.
+- idx179 (stars=0): the already-diagnosed EXP_ELO_075 forced-vacate ply.
+
+Root cause of "no legal Summon at 49," confirmed by reading
+`moves/summon.rs::generate_summon_moves`: city-tile Summon is blocked by
+`is_tile_occupied(state, target_idx)` — Polytopia has no unit stacking, and
+the garrison Warrior was still standing on 49 at both idx177 and idx178.
+**Verdi's proposed sequence (vacate first, Summon after) is mechanically
+correct**: stepping off 49 vacates the tile, which is exactly what makes a
+same-city Summon legal again — but by the time the forced vacate actually
+happens (idx179), the 4 stars that would have paid for it (Warrior costs
+2) were already spent on two undifferentiated-18-score Harvests at idx177
+and 178.
+
+This is a distinct bug from EXP_ELO_075/077 (which is about EndTurn's
+gating/pricing at the vacate ply itself) and from the already-flagged
+Attack-mispricing note (garrison-preserving Attack scoring worse than
+vacating). It's a **turn-sequencing / star-reservation gap**: nothing in
+`rank_plies`'s per-ply scoring or `defend_plan` credits holding 2 stars in
+reserve because a same-turn forced vacate is coming and a post-vacate
+Summon would restore the garrison. Each ply is scored independently
+against the CURRENT board (Summon at 49 illegal → never considered,
+literally invisible to the ply-local ranking at idx177/178); recognizing
+"spend elsewhere now forecloses a better sequence 2 plies later" requires
+either genuine multi-ply lookahead finding the specific (vacate, then
+Summon) trajectory, or an explicit star-reservation signal from
+`defend_plan` when `hold_needed` is live and a same-city Summon is
+affordable-if-deferred.
+
+**Not fixed tonight.** This is a harder problem than a pricing-floor tweak
+(EXP_ELO_077) — the macro-mcts budget (64 sims, k=8, ~8 plies/turn) would
+need to actually explore this specific sequence to find it via search
+alone, or `GoalAux`/`defend_plan` would need a new signal this ply-local
+architecture doesn't currently carry. Registering the confirmed mechanism
+so it isn't lost; a real fix needs its own design pass, not a rushed
+patch on top of tonight's other two changes.
