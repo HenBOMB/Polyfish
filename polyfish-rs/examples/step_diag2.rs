@@ -113,6 +113,31 @@ fn faithful_rank(full: &ModReplay, target_idx: usize, target_turn: i32, goal: &M
         "=== faithful rank @ idx={target_idx} turn={target_turn} gate={gate} aux.recommended_techs={:?} aux.water_dead={} ===",
         aux.recommended_techs, aux.water_dead
     );
+    for t in [48, 50, 51, 61, 62] {
+        let owner = true_game.state.tiles.get(&t).map(|x| x.owner);
+        println!("    tile {t}: owner={owner:?}");
+    }
+    if target_idx == 147 {
+        use polyfish::rules::eco_plan::{plan_city, SCENARIOS};
+        let tribe = true_game.state.tribes.get(&POV).unwrap();
+        let owned: std::collections::HashSet<_> =
+            tribe.tech_vanilla.iter().filter(|t| t.discovered).map(|t| t.tech_type).collect();
+        let num_cities = tribe.cities.len() as i32;
+        for bg in [false, true] {
+            let sc = *SCENARIOS
+                .iter()
+                .find(|s| s.lane == polyfish::rules::eco_plan::Lane::Mine && s.border_growth == bg && !s.convert)
+                .expect("scenario exists");
+            for city_idx in [49, 84] {
+                let city = tribe.cities.iter().find(|c| c.idx == city_idx).unwrap();
+                let p = plan_city(&true_game.state, city_idx, &city._territory, sc, &owned, num_cities, 0);
+                println!(
+                    "    plan_city city={city_idx} border_growth={bg}: hub_site={:?} hub_level={} feasible={} spt={} giants={} cost_per_giant={:.2}",
+                    p.hub_site, p.hub_level, p.feasible, p.spt, p.giants, p.cost_per_giant
+                );
+            }
+        }
+    }
 
     for lambda in [0.0f32, 1.0f32] {
         let ranked = rank_plies(&mut view, POV, goal, &aux, gate, lambda, None);
@@ -124,6 +149,14 @@ fn faithful_rank(full: &ModReplay, target_idx: usize, target_turn: i32, goal: &M
             println!("    (EndTurn survived gating, ranked #{} of {})", pos + 1, ranked.len());
         } else {
             println!("    (EndTurn gated out entirely)");
+        }
+        for (i, (s, m)) in ranked.iter().enumerate() {
+            let j = m.serialize();
+            if j.get("moveType").and_then(|v| v.as_i64()) == Some(6)
+                && j.get("type").and_then(|v| v.as_i64()) == Some(22)
+            {
+                println!("    [Forge build] rank #{} of {}: {s:.3} {j}", i + 1, ranked.len());
+            }
         }
     }
 }
@@ -149,6 +182,20 @@ fn main() {
         save_target: None,
     };
     faithful_rank(&full, 122, 9, &goal9);
+
+    // idx147, turn 10: real picked goal from game0.jsonl.
+    let goal10 = MacroGoal {
+        orders: vec![
+            (OrderKind::Expand, 43),
+            (OrderKind::Expand, 55),
+            (OrderKind::Expand, 79),
+            (OrderKind::Defend, 41),
+            (OrderKind::Defend, 49),
+        ],
+        stance: Stance::Arm,
+        save_target: None,
+    };
+    faithful_rank(&full, 147, 10, &goal10);
 
     // idx179, turn 11: real picked goal from game0.jsonl.
     let goal11 = MacroGoal {

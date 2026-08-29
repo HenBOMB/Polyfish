@@ -9563,6 +9563,61 @@ that don't). Then the same matched no-regression check as EXP_ELO_075
 noise, no SPT/army/expansion regression from over-indexing on hub siting at
 the expense of everything else `score_move` already prices.
 
+**ACTUAL / Disposition (Forge-site half — REFUTED, reverted, not shipped):**
+Implemented per the CHANGE section above (GoalAux gained a per-CITY
+`hub_plans: Vec<(city_idx, hub_site, hub_level)>` — not the tribe-wide
+single-best `eco_plan_best_city` reads elsewhere, since the Build branch
+needs "does the city THIS candidate belongs to have a plan", caught in
+review before it shipped). First pass looked wrong for a boring reason
+(city 49's own `plan_city` read came back `hub_site=Some(48), hub_level=2`
+— agreeing with the engine, not the complaint) — but the first-pass "natural,
+no-border-growth" scenario turned out to be the wrong instrument, not proof
+of anything, so this was re-run as the actual discriminating probe advisor
+proposed: `plan_city` for city 49 under BOTH the natural and the
+`border_growth: true` Mine-lane scenarios, plus direct tile ownership
+checks on 50/51/62 (tile 61's three candidate Mine neighbors). Result:
+**tiles 50, 51, and 62 were ALL already owned by player 1** at idx147 (not
+gated behind border growth the way the geometry-only guess assumed), and
+`plan_city` returns the IDENTICAL answer either way —
+`hub_site=Some(48) hub_level=2 spt=7`, no improvement from having all three
+mountains hypothetically available. **Ground truth, asked the right
+question twice, agrees with the engine's original pick.** The exact reason
+`plan_city`'s solver doesn't favor investing in 3 fresh Mines to reach tile
+61's level-3 over reusing 2 already-standing ones at 48 was NOT traced
+further (a plausible mechanism is the star cost of 3 new Mines vs 0, but per
+this ledger's own `feedback-dont-misattribute-macro-findings` discipline,
+that is a *guess*, not something the actual computation was shown to weigh
+— not asserted here as fact). **Reverted**: the `hub_plans`/`aux`-threading
+changes to `goal_aux.rs`/`scoring.rs`/`macro_exec.rs` were fully backed out
+(`git checkout`) before commit — no evidence justified shipping them, and
+per this project's low-confidence-fix discipline, unverified plumbing
+doesn't ship on the strength of a plausible story alone. `examples/step_diag2.rs`
+keeps the discriminating-probe code (both-scenario `plan_city` calls +
+owner dump) as committed diagnostic evidence.
+
+The reward-choice half (idx122, PopGrowth vs BorderGrowth) was NOT
+implemented — the faithful `rank_plies` re-run (see the CONTEXT section
+above) had already shown the real margin (69 points, PopGrowth 332.342 vs
+BorderGrowth 262.894) is dominated by `goal_potential`'s dev_potential/
+economy_completion pricing of population gain, not primarily the
+`score_reward` heuristic this entry originally targeted, and — now that the
+Forge-site half's "give it eco_plan hub-awareness" mechanism has been
+directly refuted for this same city — there is no remaining evidence-backed
+hypothesis for what a BorderGrowth fix should even look like. **Deferred**,
+alongside EXP_ELO_074's Organization-tech item below: the real driver
+(which specific dev_potential/completion sub-term prices PopGrowth so much
+higher, and whether that pricing is wrong in general or only looks wrong in
+this one instance) needs its own registered investigation, not a rushed
+patch built on an unconfirmed mechanism.
+
+**Net for tonight: EXP_ELO_075 (EndTurn-survival) is the only EXP_ELO_076-
+adjacent code change that shipped.** Two of the four turn-level complaints
+Verdi flagged (Organization tech, Forge site) were checked against this
+project's own ground-truth tools and found to NOT be bugs — the engine's
+original decisions hold up. One (garrison abandonment) was a real,
+now-fixed structural bug. One (reward choice) has a real, identified-but-
+not-yet-actionable mechanism, deferred pending its own investigation.
+
 ## EXP_ELO_074 (T2 continued, deferred item) — Organization tech at turn 7 stays out of scope tonight
 
 Verdi's third flag from the same seed[0] watch: step 92 (turn 7), Research
