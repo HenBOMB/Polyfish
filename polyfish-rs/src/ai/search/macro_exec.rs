@@ -241,7 +241,21 @@ pub fn gate_ok(
 /// dial position, not a final answer — Verdi's own framing is "never chosen
 /// until it's the only choice left," to be relaxed toward something
 /// contextual once this floor is confirmed safe.
-const ENDTURN_REVIVE_PRICE: f32 = -500.0;
+const ENDTURN_REVIVE_PRICE_DEFAULT: f32 = -500.0;
+
+/// EXP_ELO_092 diagnostic: `POLYFISH_ENDTURN_REVIVE_PRICE=<f32>` overrides
+/// the compile-time default, so different floors (e.g. -400 vs -500) can
+/// be A/B'd from one binary without a rebuild -- mirrors
+/// `POLYFISH_ENDTURN_HARD_GATE`'s pattern for the same purpose.
+fn endturn_revive_price() -> f32 {
+    static PRICE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *PRICE.get_or_init(|| {
+        std::env::var("POLYFISH_ENDTURN_REVIVE_PRICE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(ENDTURN_REVIVE_PRICE_DEFAULT)
+    })
+}
 
 /// Rank the current player's plies under a fixed goal, best first. EndTurn is
 /// suppressed while any other move survives the gates (the search backends'
@@ -361,7 +375,7 @@ pub fn rank_plies(
     revive_endturn_if_worse_than_floor(scored, has_other, lambda)
 }
 
-/// EXP_ELO_077: re-admit EndTurn, priced at `ENDTURN_REVIVE_PRICE` (not
+/// EXP_ELO_077: re-admit EndTurn, priced at `ENDTURN_REVIVE_PRICE_DEFAULT` (not
 /// 0.0 — see that constant's doc comment), only when the best surviving
 /// candidate is already worse than that floor. Doing nothing beats doing
 /// deep active harm; it does not beat an ordinary mediocre move. Pulled out
@@ -394,8 +408,9 @@ fn revive_endturn_if_worse_than_floor(
 ) -> Vec<(f32, Box<dyn Move>)> {
     if has_other && lambda != 0.0 && !endturn_hard_gate() {
         ENDTURN_ELIGIBLE_PLIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if scored.first().is_some_and(|(s, _)| *s < ENDTURN_REVIVE_PRICE) {
-            scored.push((ENDTURN_REVIVE_PRICE, Box::new(EndTurnMove) as Box<dyn Move>));
+        let price = endturn_revive_price();
+        if scored.first().is_some_and(|(s, _)| *s < price) {
+            scored.push((price, Box::new(EndTurnMove) as Box<dyn Move>));
             scored.sort_by(|a, b| b.0.total_cmp(&a.0));
             ENDTURN_CHOSEN_WITH_ALTERNATIVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -659,7 +674,7 @@ mod tests {
         let steps: Vec<_> = ranked.iter().filter(|(_, m)| m.move_type() == MoveType::Step).collect();
         assert!(!steps.is_empty(), "fixture should offer the Rider Step options");
         assert!(
-            steps.iter().all(|(s, _)| *s > ENDTURN_REVIVE_PRICE),
+            steps.iter().all(|(s, _)| *s > ENDTURN_REVIVE_PRICE_DEFAULT),
             "test fixture assumption broken: expected every Step to sit ABOVE the -500 floor \
              (i.e. NOT clear it), so this case stays uncovered by design: {:?}",
             steps.iter().map(|(s, m)| (*s, m.serialize())).collect::<Vec<_>>()
@@ -697,7 +712,7 @@ mod tests {
         );
 
         // Boundary: exactly at the floor does not revive (strict `<`).
-        let boundary = vec![(ENDTURN_REVIVE_PRICE, Box::new(StepMove::new(1, 2)) as Box<dyn Move>)];
+        let boundary = vec![(ENDTURN_REVIVE_PRICE_DEFAULT, Box::new(StepMove::new(1, 2)) as Box<dyn Move>)];
         let out = revive_endturn_if_worse_than_floor(boundary, true, 1.0);
         assert!(out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn));
 
