@@ -367,17 +367,28 @@ pub fn rank_plies(
 /// deep active harm; it does not beat an ordinary mediocre move. Pulled out
 /// of `rank_plies` as a pure function so the threshold can be unit-tested
 /// against synthetic scores without a real game board.
+/// EXP_ELO_085 diagnostic (temporary): fire-rate of EndTurn actually
+/// WINNING when real alternatives existed, vs the total number of plies
+/// where that was even possible (has_other && lambda != 0.0). The
+/// "hard-gated" baseline (no revive code at all) is 0/ELIGIBLE by
+/// construction -- these two counters alone answer "how often, compared
+/// to never."
+pub static ENDTURN_ELIGIBLE_PLIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static ENDTURN_CHOSEN_WITH_ALTERNATIVES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 fn revive_endturn_if_worse_than_floor(
     mut scored: Vec<(f32, Box<dyn Move>)>,
     has_other: bool,
     lambda: f32,
 ) -> Vec<(f32, Box<dyn Move>)> {
-    if has_other
-        && lambda != 0.0
-        && scored.first().is_some_and(|(s, _)| *s < ENDTURN_REVIVE_PRICE)
-    {
-        scored.push((ENDTURN_REVIVE_PRICE, Box::new(EndTurnMove) as Box<dyn Move>));
-        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+    if has_other && lambda != 0.0 {
+        ENDTURN_ELIGIBLE_PLIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if scored.first().is_some_and(|(s, _)| *s < ENDTURN_REVIVE_PRICE) {
+            scored.push((ENDTURN_REVIVE_PRICE, Box::new(EndTurnMove) as Box<dyn Move>));
+            scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+            ENDTURN_CHOSEN_WITH_ALTERNATIVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
     }
     scored
 }

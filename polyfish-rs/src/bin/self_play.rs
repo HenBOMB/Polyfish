@@ -5192,6 +5192,16 @@ fn main() -> anyhow::Result<()> {
         "  - EXP_ELO_083 tech-limit no-recommendation rejections (diagnostic, temporary): {} candidates",
         polyfish::ai::search::goal_aux::TECH_LIMIT_REJECTIONS.load(std::sync::atomic::Ordering::Relaxed)
     );
+    {
+        let eligible = polyfish::ai::search::macro_exec::ENDTURN_ELIGIBLE_PLIES
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let chosen = polyfish::ai::search::macro_exec::ENDTURN_CHOSEN_WITH_ALTERNATIVES
+            .load(std::sync::atomic::Ordering::Relaxed);
+        println!(
+            "  - EXP_ELO_085 EndTurn chosen despite alternatives (diagnostic, temporary): {chosen}/{eligible} ({:.3}%)",
+            100.0 * chosen as f64 / (eligible as f64).max(1.0)
+        );
+    }
     // Micro-mcts Phase 0 (throughput/cache-hit probe, POLYFISH_MICRO_PROBE_SIMS):
     // zero unless that env var is set. Note the rank_plies numbers above also
     // inflate while this probe is active -- its own continuation walk calls

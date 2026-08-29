@@ -10486,3 +10486,90 @@ critique) and this gate is now surfacing that pre-existing scoring gap
 rather than causing a new problem. Not distinguished tonight; the next
 step is reading WHICH techs get rejected and whether any look like real
 misses, not just counting how many.
+
+## EXP_ELO_085 — EndTurn fire rate at -400 vs -500: nearly identical, so the paired-gauge "trend" is very likely noise, not a real EndTurn-driven effect
+
+CONTEXT: Verdi's direct question on EXP_ELO_082's own within-noise "wrong
+direction" result: how often is EndTurn actually CHOSEN when real
+alternatives exist, and how does that compare between the two floors
+(and to hard-gated, where it's 0 by construction)?
+
+METHOD: two new atomics in `macro_exec.rs`
+(`ENDTURN_ELIGIBLE_PLIES`/`ENDTURN_CHOSEN_WITH_ALTERNATIVES`), counting
+every `revive_endturn_if_worse_than_floor` call where `has_other &&
+lambda != 0.0` (a real alternative existed) and how many of those
+actually revived-and-won. 16-game batches (same recipe as the paired
+gauges, smaller n since this only needs the rate, not a win/loss read),
+built twice with the constant temporarily set to -400 then -500.
+
+ACTUAL:
+| floor | chosen / eligible | rate |
+|---|---|---|
+| hard-gated (no revive code) | 0 / N | 0% by construction |
+| -400 (EXP_ELO_077) | 88 / 3904 | 2.254% |
+| -500 (EXP_ELO_082) | 68 / 3186 | 2.134% |
+
+Raising the floor by 100 points moved the fire rate by only ~0.12
+percentage points — essentially unchanged. This means the two floors are
+selecting nearly the SAME population of plies (both catching the deep
+tail; the band strictly between -500 and -400 that -500 excludes is
+small relative to the whole tail), which in turn means **EXP_ELO_082's
+observed win-rate move (0.375 -> 0.333) is very unlikely to be caused by
+EndTurn firing differently** — the mechanism this entry measures barely
+changed. The far more likely explanation is plain n=48 sampling noise
+(this project's own established floor is ±7.8-12pp at 64-128 games), and
+the earlier "monotonic trend worth taking seriously" framing in
+EXP_ELO_082's own entry should be read as OVERSTATED — retracted here in
+light of this measurement, not repeated.
+
+The one real, unambiguous fact this does confirm: going from hard-gated
+(0%) to EITHER floor (~2.1-2.3% of all real-trajectory eligible plies) is
+a genuine, non-trivial behavior change from the pre-EXP_ELO_075 baseline
+— roughly 1 in 45-47 real plies now ends its turn via a revived EndTurn
+instead of continuing, in a batch where the average turn appears to run
+~5-8 plies (per this project's own branching-factor note), i.e. this
+fires on a meaningful fraction of TURNS, not just the rare pathological
+case the fix was framed around.
+
+**Disposition: measurement only.** Answers Verdi's question directly;
+does not by itself validate or invalidate either floor. If a definitive
+verdict is wanted, a 128-game gauge is still the honest next step — this
+entry's contribution is ruling out "EndTurn fires much more/less at -500"
+as the explanation for what that gauge would show.
+
+## EXP_ELO_086 — `enumerate_empire`'s 17s cost at 4 cities is the CLI's mixed-lane sweep (1764 extra calls), not the core algorithm
+
+CONTEXT: EXP_ELO_084 measured `eco_plan --cities 4 --goal balanced` at
+17.2s and flagged it as too slow for even an ~8-calls/game live cadence.
+Verdi pushed back on the premise: "I can't believe it takes 17s... that
+algo needs to be much more efficient." Correct to push on — profiled
+before accepting the number.
+
+METHOD/FOUND: `eco_plan --cities 4 --goal balanced --no-mix` (skips the
+CLI's mixed-per-city-lane sweep, keeping only the uniform-scenario sweep
+that calls `enumerate_empire` once per `SCENARIOS` entry, 8 calls total)
+runs in **0.295s** — a 58x speedup. The difference is entirely the
+mixed-lane sweep: its own printed diagnostic reports **"1764 assignments
+(6 per-city scenarios trimmed as dominated)"** at 4 cities — the
+per-city Pareto pre-filter only drops ~1.5 of 8 candidate scenarios per
+city on average, leaving ~6.5 per city, and `6.5^4 ≈ 1764` separate
+`enumerate_empire` calls, each paying its own full combinatorial cost
+(~9-10ms/call, individually reasonable). **The core algorithm is not the
+problem — the CLI tool's default mixed-lane search fans out into ~1764x
+more `enumerate_empire` calls than the uniform sweep needs**, because it
+lets every city independently choose its own lane and enumerates the
+near-full cross product of surviving per-city choices.
+
+**Disposition: root-caused, not yet changed.** For a live per-event
+consumer (Verdi's actual invocation cadence — new territory revealed or
+a new city taken, "less than 8 times per game total," not per-ply) the
+uniform sweep alone (0.3s at 4 cities, cheaper at fewer cities) is very
+likely sufficient — mine-priority signal doesn't obviously need the
+mixed-lane refinement a from-scratch empire-design tool wants. Concrete
+next step: build the live consumer against the uniform-only path (skip
+the CLI's `mix` branch entirely, not just default `--no-mix`), which
+requires no changes to `enumerate_empire`/`allocate_value` themselves —
+only to which code path the live caller invokes. If mixed-lane plans
+turn out to matter for mine selection specifically, the per-city
+Pareto-trim itself (currently weak, ~1.5/8 dropped) is the next place to
+tighten before considering a redesign of the assignment search.
