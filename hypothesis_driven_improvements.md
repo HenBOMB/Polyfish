@@ -10810,3 +10810,72 @@ earlier tonight (EXP_ELO_077 through 090) was measured against this
 non-determinism and should be read as noisier than its own stated
 n-based floor suggested — none of those verdicts should be re-opened
 without a fresh, now-clean rerun, but none should be over-trusted either.
+
+## EXP_ELO_093 — n=128, confirmed 0.0pp baseline spread, clean 3-config EndTurn probe: hard-gate > -500 > -400, monotonic
+
+CONTEXT: post-EXP_ELO_091's determinism fix, re-ran the original EndTurn
+hard-gate/-400/-500 question Verdi asked about several turns ago, this
+time on a foundation actually capable of answering it. Along the way,
+discovered the fix wasn't fully complete — see the staged findings below
+before the final clean result.
+
+STAGE 1 (n=48, 3 baseline replicates + 3-config probe, `--actors 14`):
+baseline replicates were 0.2708/0.2917/0.2917 — 2 of 3 matched exactly,
+one was 1 game (2.08pp) off. Not the 0.0pp EXP_ELO_091 reported from its
+own 2-run check. Probe (single run each): hard-gate 0.2917, -400 0.2292,
+-500 0.2917.
+
+STAGE 2 — isolating the residual: re-ran `--actors 1 --eval-servers 1`
+(fully serialized) with BOTH EXP_ELO_091 fixes in place — **61/62 metric
+fields byte-identical** across two runs. This rules out a third CPU-side
+ordering bug and pins the remaining ~1-in-3, ~2pp residual specifically
+on the CONCURRENT multi-actor eval-server: floating-point results from a
+batched neural-net forward pass are not fully order-invariant, and which
+requests land in the same GPU batch depends on real thread-scheduling
+timing across the 14 actors — inherently non-deterministic run to run,
+a fundamentally different (and harder) class of problem than EXP_ELO_091's
+bugs. Verdi's call: don't chase this (real rabbit hole — would mean
+touching eval-server coalescing, likely at a throughput cost); instead
+scale n up to dilute it, per the plan already in place for detecting
+stacked +5pp improvements (EXP_ELO_090).
+
+STAGE 3 (n=128, `--actors 14`, matching production): 2 baseline
+replicates first — **0.3125 (40/128) both, byte-identical (avg_moves
+221.52, avg_score 4285.66, both fields exact)**. Confirms n=128 dilutes
+the remaining GPU-timing residual below detection in this sample.
+3-config probe, single run each against this confirmed-clean baseline:
+
+| config | anchor_net_wr | vs baseline (-500) |
+|---|---|---|
+| hard-gated EndTurn | 0.3438 (44/128) | +3.13pp |
+| -500 floor (default) | 0.3125 (40/128) | — |
+| -400 floor | 0.2734 (35/128) | -3.91pp |
+
+**Monotonic and coherent**: stricter floor (fewer plies where EndTurn can
+win) tracks directly with higher win rate, all the way to fully removing
+the mechanism (hard-gate scores best of the three). This is the exact
+opposite of what motivated EXP_ELO_075/077/082 in the first place — the
+working hypothesis was that SOME amount of EndTurn revival helps by
+preventing forced self-harm on the rare deep-negative ply; this reading
+says the mechanism looks net harmful at every tested strength, and the
+strictest option (never revive, the pre-075 baseline) wins outright.
+
+**Caveats, both real**: (1) each probe config is a single n=128 run, not
+replicated — STAGE 2's own finding means an individual run can still
+occasionally drift by ~1-2pp from concurrency noise, so this specific
+3.1pp/3.9pp reading carries that residual uncertainty even though the
+paired baseline happened to land exact this time. (2) the underlying
+mechanism EXP_ELO_075/078 identified as real — a Defend-ordered garrison
+sometimes has no non-catastrophic option because this engine has no
+hold/skip move type — is UNCHANGED by this reading; hard-gating doesn't
+fix that bug, it just avoids the more recent revival mechanism's own
+apparent net-negative side effects. The better-fix candidate flagged
+back in EXP_ELO_075 (price a garrison-preserving Attack correctly instead
+of touching EndTurn gating) is still open and untouched.
+
+**Disposition: strong signal, not yet a final verdict.** Recommend, in
+order: (a) if a decision is needed now, revert to hard-gated EndTurn
+(the pre-EXP_ELO_075 default) — it's the only config here that beats the
+committed baseline rather than losing to it; (b) if more confidence is
+wanted first, replicate all three probe configs 2-3x at n=128 (now cheap
+and trustworthy to do, ~5min/run) before committing to a revert.
