@@ -10047,3 +10047,179 @@ alone, or `GoalAux`/`defend_plan` would need a new signal this ply-local
 architecture doesn't currently carry. Registering the confirmed mechanism
 so it isn't lost; a real fix needs its own design pass, not a rushed
 patch on top of tonight's other two changes.
+
+## EXP_ELO_079 — micro-mcts's real emergent depth: measured, and the actual blocker is degenerate priors, not sims budget (measurement only)
+
+CONTEXT: Verdi asked whether micro-mcts (a real, built, integrated
+within-turn PUCT search, `src/ai/search/micro_mcts.rs`, gated by the
+`POLYFISH_MICRO_MCTS_SIMS` env var — off by default everywhere except the
+EXP_ELO_074 overnight run, which set `POLYFISH_MICRO_MCTS_SIMS=64`) gets
+2-3 plies of lookahead as guessed, and if not, whether raising sims toward
+4 plies is worth pursuing. The module's own doc comment cites "depth grew
+4.09->26.32 plies as sims went 64->2048" as a reference point, but that
+number is the OLD GumbelMctsAgent's curve, not a measurement of this
+module — never actually confirmed for `micro_mcts.rs` itself.
+
+METHOD: added three real (non-diagnostic-only, kept) atomics
+(`MICRO_MCTS_DEPTH_SUM`/`_CALLS`/`_MAX_DEPTH_SEEN`) and changed
+`select_and_expand` to return `(value, absolute_depth_reached)` instead of
+just `value`, so `micro_search_pick` can record the deepest line any
+simulation actually reached. New example `examples/micro_depth_probe.rs`
+reconstructs the real GARRISON_49 turn-11 state (idx177/178/179 — a busy,
+14/13/7-candidate real position, not a fresh action-starved mapgen'd
+turn) via the same faithful-executor pattern as `step_diag2.rs`, and
+calls `micro_search_pick` directly with `Evaluator::Dummy` (constant leaf
+value — a mechanics-only, mechanism-isolating measurement) at production
+params (sims=64, k=4) plus a sweep (sims up to 256, k down to 2).
+
+ACTUAL: measured mean_max_depth ~2-3 at idx177/178/179 (3.00, 2.50, 2.00
+respectively — running averages), matching Verdi's own guess. **But the
+sweep is flat**: sims=64/128/256 and k=2/3/4 all produced exactly
+depth=3 at idx177, with zero variation. This flatness is the real finding
+and it is NOT a depth/budget story: `softmax_priors` runs over RAW,
+un-normalized `score_move` scores with no temperature. At idx177 the root
+candidates score 168.400 (Summon@79) vs 58.761/57.761/27.000 (the next
+three) — a gap of ~110, so the softmax prior ratio is `e^-110 ≈ 10^-48`,
+i.e. one-hot. With `Evaluator::Dummy`'s constant leaf value making every
+child's Q identical, PUCT's exploration term is the only thing that could
+pull visits toward a second child, and a `~1e-48` prior makes that
+term's `c_puct * prior * sqrt(total_visits)` contribution to every
+non-top child effectively zero forever — so the "search" degenerates to
+re-walking the single top-prior line every one of the 64-256 simulations,
+regardless of sims or k. This also explains `pick=Some(0)` (never
+overrides `rank_plies`' own top pick) at every probed ply: structurally,
+this search cannot disagree with its own root prior once one candidate's
+score dominates by this much.
+
+**Correction to EXP_ELO_078's own framing**: the garrison-preserving
+sequence is 3 plies, not 4 — `Harvest(78)` [stars 4->2] -> `Step 49->60`
+(vacate) -> `Summon@49` (now legal, 2->0 stars) is exactly the depth
+already measured at idx177 (3.00). Depth was never the blocker for that
+bug; raising sims would not have found it either, because the search's
+own priors would need to actually visit the Step/Summon-adjacent branches
+at all, which the degenerate-softmax issue prevents regardless of budget.
+
+**Caveats, both real limits on how far this measurement generalizes:**
+(1) the probe's `MacroGoal` came from a freshly-recomputed
+`commit_macro_goal`, not the live game's actual committed goal from
+`game0.jsonl` — the root candidate list disagreeing with what was
+actually played (Summon@79 ranks #1 here at 168.4; the real game played
+`Harvest{78}` at 27.0) is likely exactly this mismatch, so the DEPTH
+mechanics measured are trustworthy but the CANDIDATE CONTENT is not a
+literal replay of the live decision. (2) whether
+`POLYFISH_MICRO_MCTS_SIMS` was actually set for the specific manual
+self-play command that generated the watched replay (as opposed to the
+later EXP_ELO_074 overnight training run, which is confirmed to have set
+it) is unverified — it's a raw env var, not inherited automatically
+between different invocations, and no log confirming either way was
+found tonight.
+
+**Disposition: measurement-only, nothing shipped as a behavior change.**
+The instrumentation (atomics + `select_and_expand`'s new return depth) is
+real, kept, and covered by the existing macro_exec/micro_mcts test suite
+(no regression — `select_and_expand` is private, callers unaffected
+beyond the tuple return). **Next real step, registered but not
+implemented tonight**: add temperature (or score normalization) to
+`softmax_priors`, re-run this same probe, and check whether the
+Harvest->vacate->Summon line actually gets visited once priors aren't
+one-hot — before touching sims/k, and before claiming this fixes
+EXP_ELO_078, since the goal-mismatch caveat above means this exact
+sequence hasn't been confirmed present in the search's real root
+candidates yet (only in the freshly-recomputed reconstruction).
+
+## EXP_ELO_080 — Grow-stance tech gate: real bucket found, but Organization is not in it (measurement only)
+
+CONTEXT: Verdi's design principle, prompted by the step-92 Organization
+purchase: "if grow stance is meant to help you grow your eco, we
+obviously should not allow it to buy techs that don't help grow eco at
+all." Checked against `passes_stance_tech_mask`'s actual logic
+(`goal_aux.rs`): `gated = arms && !grows` under `Stance::Grow` — a tech
+is blocked ONLY if it has a combat unit AND is not eco-classified. A tech
+that is NEITHER (a pure utility/mobility/vision pickup) currently passes
+just as freely as a genuine eco tech.
+
+METHOD: `examples/grow_stance_tech_bucket.rs` (new) iterates every
+`TechnologyType`, classifies each via the exact `arms`/`grows` predicates
+`passes_stance_tech_mask` itself uses (`get_tech_effects(tech).combat_units`
+non-empty / `is_eco_tech(tech)`), and buckets them.
+
+ACTUAL: 3 techs are both (Navigation, Mathematics, Smithery — correctly
+never gated either way), 12 are combat-only (correctly gated under Grow),
+14 are eco-only (correctly ungated under Grow) — **and Organization is in
+this eco-only bucket**, confirming it is NOT an instance of the gap Verdi
+flagged; the step-92 purchase's real driver remains the already-
+identified upstream stance-selection issue (Grow picked over Save,
+EXP_ELO_074's deferred item), unchanged by anything found here. The real
+gap is a distinct 11-tech "neither" bucket that DOES pass freely under
+Grow despite not growing eco at all: `Roads, Climbing, Meditation,
+FreeDiving, ForestMagic, Frostwork, Recycling, Diplomacy, IceFishing,
+Waterways, Rituals` (mostly mobility/vision/tribe-signature-swap techs
+plus the vanilla "util" class {Meditation, Diplomacy}).
+
+**Disposition: gap confirmed to exist in code, but NOT yet shown to fire
+in practice — no fix implemented tonight.** Per this project's own
+EXP_ELO_075 lesson (a plausible-looking gate that never actually fires in
+real games is a no-op, not a fix) and the v2.2 gate-everything history
+(`hypothesis_driven_improvements.md`'s own record of over-gating
+suppressing doctrine techs and creating a measured research deficit): before
+tightening this gate, the next step is a fire-rate check — how often, in
+real self-play under Grow stance, does the net actually buy a
+neither-bucket tech at all — on a small real batch, the same discipline
+that caught EXP_ELO_075's regression before it shipped. Registered, not
+implemented.
+
+## EXP_ELO_081 — Mine placement is local/greedy and single-city, never consults `eco_plan`'s hub-value lookahead or cross-city sharing (confirmed mechanism, no fix, no demonstrated failure case yet)
+
+CONTEXT: Verdi's read on the already-refuted EXP_ELO_076 Forge-site
+finding: granted the Forge at 48 (2 built mines) beat 61 (3 fresh
+mountains) given the mines that already existed, the earlier decision —
+WHERE to place those mines in the first place — is the more upstream
+question, and should favor sites that maximize eventual hub (Forge)
+impact, including tiles that could serve a NEIGHBORING city's hub rather
+than only the city that currently owns them.
+
+METHOD/FOUND: `scoring.rs`'s Build/Harvest branch has two adjacency
+heuristics for Mine placement, both local (radius-1) and immediate-state
+only: (1) a "Future Adjacency Prediction" clustering bonus — when
+building a Mine, empty adjacent tiles get `(existing_mine_neighbors + 1)
+* 2.5` credit, rewarding mines that cluster around a tile that ALREADY
+has other built mines nearby; (2) the Forge-build `adj_count` bonus
+(0/1/2/3/4+ built-mine neighbors -> +0/-2/+5/+12/+18), already read in
+EXP_ELO_076. Neither consults `eco_plan::plan_city`'s own forward-looking,
+level-maximizing `hub_site` computation (confirmed zero references to
+`eco_plan` anywhere in `scoring.rs`) — mine placement is driven purely by
+"does an empty tile already have built-mine neighbors," a self-
+reinforcing local signal, not "which mountain, if mined, gets this city's
+Forge to the highest reachable level." **Cross-city is a bigger gap than
+just this heuristic**: `plan_city` itself takes a single city's own
+`territory: &[i32]` as its candidate pool (confirmed, `eco_plan/city.rs`)
+— it has no cross-city reasoning either, so "favor a mine that helps the
+NEIGHBOR city's hub instead" is new capability, not an existing
+ground-truth function this heuristic merely fails to consult.
+
+Checked this game's actual mine-build sequence for a demonstrated
+failure case (`replays/exp074_seed0_watch/...`, pov 1, `Build` moveType=6
+type=21/Mine): the two mines feeding the eventual level-2 Forge at tile
+48 were built at idx43 (turn 4, tile 37) and idx109 (turn 8, tile 38) —
+well before the Forge itself (idx147) or the later mines at 50/51/62
+(idx167-309, turns 11-16, built AFTER the Forge decision and evidently
+for a different purpose). Since EXP_ELO_076 already established (via
+`eco_plan`, ground truth) that the level-2-at-48 outcome these mines fed
+into was economically CORRECT versus the level-3-at-61 alternative, this
+specific game's mine placements are not a demonstrated instance of the
+myopic mechanism producing a wrong outcome — the mechanism gap is real in
+the code, but no failure case has been found yet to motivate a specific
+fix.
+
+**Disposition: confirmed structural gap, no fix designed or implemented.**
+Per the `eco-plan-as-ground-truth-verifier` project memory's own
+discipline, the next step is NOT to redesign the heuristic on intuition
+alone but to find or construct a scenario where the local clustering
+signal and `eco_plan`'s own hub_site disagree (this game's own mine
+plies do not provide one) — most plausibly a map with two cities close
+enough that a shared mountain cluster's best split isn't visible from
+either city's own territory-scoped `plan_city` call. Registered as the
+concrete next step; cross-city hub planning is a real design project
+(extending `plan_city`'s candidate pool across a city pair), not a small
+scoring tweak, and shouldn't be started without Verdi weighing in on
+scope.

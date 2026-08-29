@@ -92,6 +92,15 @@ pub fn micro_mcts_params() -> Option<MicroParams> {
 pub static MICRO_MCTS_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static MICRO_MCTS_OVERRIDES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// EXP_ELO_079 diagnostic: emergent search depth actually reached per real
+/// ply, not assumed from the unrelated old-GumbelMctsAgent depth/sims curve
+/// cited in this module's own doc comment above. `DEPTH_SUM` / `CALLS` give
+/// the mean max-depth-reached-by-any-sim per `micro_search_pick` call;
+/// `MAX_DEPTH_SEEN` is the single deepest line found across the whole run.
+pub static MICRO_MCTS_DEPTH_SUM: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static MICRO_MCTS_DEPTH_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static MICRO_MCTS_MAX_DEPTH_SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Diagnostic: how often a carried-in subtree (see `MicroTreeCarry`) was
 /// actually spliced into this ply's root vs. discarded (predicted move
 /// wasn't the one played, or a new turn started). `ATTEMPTS` counts calls
@@ -197,6 +206,11 @@ fn leaf_value(game: &Game, pov: PlayerId, goal: &MacroGoal, evaluator: &Evaluato
         .unwrap_or(0.0)
 }
 
+/// Returns `(leaf value, absolute depth reached along this path)` — depth
+/// is `params.depth - depth_remaining` at the point a leaf is hit, used by
+/// `micro_search_pick` to measure the search's real emergent depth
+/// (EXP_ELO_079) instead of assuming it from the unrelated GumbelMctsAgent
+/// curve cited in this module's own doc comment.
 #[allow(clippy::too_many_arguments)]
 fn select_and_expand(
     node: &mut MicroNode,
@@ -207,9 +221,10 @@ fn select_and_expand(
     evaluator: &Evaluator,
     params: &MicroParams,
     depth_remaining: usize,
-) -> f32 {
+) -> (f32, usize) {
+    let current_depth = params.depth - depth_remaining;
     if node.is_terminal || depth_remaining == 0 {
-        return leaf_value(&node.game, pov, goal, evaluator);
+        return (leaf_value(&node.game, pov, goal, evaluator), current_depth);
     }
     if node.children.is_empty() {
         let cands = cheap_candidates(&node.game, goal, star_gate, aux, params.k);
@@ -217,7 +232,7 @@ fn select_and_expand(
             // Turn is genuinely over: nothing left to explore, and we never
             // simulate past our own EndTurn into the opponent's turn.
             node.is_terminal = true;
-            return leaf_value(&node.game, pov, goal, evaluator);
+            return (leaf_value(&node.game, pov, goal, evaluator), current_depth);
         }
         let scores: Vec<f32> = cands.iter().map(|(_, s)| *s).collect();
         let priors = softmax_priors(&scores);
@@ -242,7 +257,7 @@ fn select_and_expand(
         }
     }
 
-    let value = if node.children[best_idx].node.is_none() {
+    let (value, depth) = if node.children[best_idx].node.is_none() {
         let mut child_game = node.game.clone();
         let ok = child_game.simulate_move(node.children[best_idx].mv.as_ref()).is_some();
         let terminal = !ok || child_game.state.settings.current_player_turn_id != pov;
@@ -254,14 +269,14 @@ fn select_and_expand(
             children: Vec::new(),
             is_terminal: terminal,
         });
-        v
+        (v, current_depth + 1)
     } else {
         let child = node.children[best_idx].node.as_mut().unwrap();
         select_and_expand(child, pov, goal, star_gate, aux, evaluator, params, depth_remaining - 1)
     };
     node.visits += 1;
     node.value_sum += value;
-    value
+    (value, depth)
 }
 
 /// Root children are `rank_view`'s own top candidates (already paid for,
@@ -322,9 +337,14 @@ pub fn micro_search_pick(
         children,
         is_terminal: false,
     };
+    let mut max_depth_this_call: usize = 0;
     for _ in 0..params.sims {
-        select_and_expand(&mut root, pov, goal, star_gate, aux, evaluator, params, params.depth);
+        let (_, d) = select_and_expand(&mut root, pov, goal, star_gate, aux, evaluator, params, params.depth);
+        max_depth_this_call = max_depth_this_call.max(d);
     }
+    MICRO_MCTS_DEPTH_SUM.fetch_add(max_depth_this_call as u64, std::sync::atomic::Ordering::Relaxed);
+    MICRO_MCTS_DEPTH_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    MICRO_MCTS_MAX_DEPTH_SEEN.fetch_max(max_depth_this_call as u64, std::sync::atomic::Ordering::Relaxed);
     let mut best_idx = 0;
     let mut best_visits: i64 = -1;
     for (i, c) in root.children.iter().enumerate() {
@@ -343,4 +363,63 @@ pub fn micro_search_pick(
     let next_carry =
         if grandchildren.is_empty() { None } else { Some(MicroTreeCarry { mv_key, children: grandchildren }) };
     (Some(best_idx), next_carry)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::eval_server::{DummyEvalHandle, Evaluator};
+    use crate::ai::oracle_macro::compute_macro_goal;
+    use crate::ai::search::goal_aux::compute_goal_aux;
+    use crate::ai::search::macro_exec::rank_plies;
+
+    /// EXP_ELO_079: measure this search's OWN emergent depth at production
+    /// params (sims=64, k=4 -- POLYFISH_MICRO_MCTS_SIMS=64 was the only
+    /// override in EXP_ELO_074's launch config, K/DEPTH/CPUCT stayed at
+    /// their env-var defaults), instead of trusting the unrelated old-
+    /// GumbelMctsAgent depth/sims curve cited in this module's own doc
+    /// comment. Uses `Evaluator::Dummy` (constant leaf value) so this is a
+    /// mechanics-only measurement, independent of any trained checkpoint --
+    /// a real network's sharper Q differences would let PUCT concentrate
+    /// visits (and thus depth) along a preferred line MORE than this
+    /// constant-value floor does, so this measurement is a conservative
+    /// lower bound on production depth, not an exact match.
+    #[test]
+    fn measures_own_emergent_depth_at_production_params() {
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+        let params = MicroParams { sims: 64, depth: 64, k: 4, c_puct: 1.5 };
+
+        for seed in 0..6i64 {
+            let mut game = Game::new();
+            game.state = crate::mapgen::generate(crate::mapgen::MapGenSettings {
+                size: crate::types::MapSize::Tiny,
+                map_type: crate::types::MapType::Drylands,
+                tribes: vec![crate::types::TribeType::Imperius, crate::types::TribeType::Bardur],
+                seed,
+                version: 115,
+            });
+            game.post_load();
+            let pov = game.state.settings.current_player_turn_id;
+            let mut view = game.clone_for_mcts(pov);
+            let goal = compute_macro_goal(&view.state, pov, 0);
+            let aux = compute_goal_aux(&view.state, pov, &goal, 0, 0, None);
+            let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
+            let ranked = rank_plies(&mut view, pov, &goal, &aux, star_gate, 1.0, None);
+            if ranked.len() < 2 {
+                continue;
+            }
+            micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None);
+        }
+
+        let calls = MICRO_MCTS_DEPTH_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+        let sum = MICRO_MCTS_DEPTH_SUM.load(std::sync::atomic::Ordering::Relaxed);
+        let max_seen = MICRO_MCTS_MAX_DEPTH_SEEN.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(calls > 0, "search never actually ran (every root ply was trivial EndTurn-only?)");
+        let mean = sum as f64 / calls as f64;
+        eprintln!(
+            "EXP_ELO_079 measured depth @ sims=64,k=4: calls={calls} mean_max_depth={mean:.2} deepest_line_seen={max_seen}"
+        );
+        // Not a pass/fail assertion on the exact number -- this test's job is
+        // to print the real measurement; see the ledger entry for the read.
+    }
 }
