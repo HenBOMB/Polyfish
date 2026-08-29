@@ -11006,3 +11006,97 @@ refuted (Organization tech, Forge site), root-caused-and-fixed (this
 entry: the garrison-preserving Attack), or root-caused-and-shipped-as-a-
 dial (EndTurn floor, -700). The reward-choice item (PopGrowth vs
 BorderGrowth) remains the one still fully open from that original list.
+
+## EXP_ELO_095 — hard nearest-city attribution replaced with continuous tanh-bounded weight; validated but reveals a deeper, still-open discreteness issue in `defend_cover`
+
+CONTEXT: Verdi's correction to EXP_ELO_094's ship: hard-attributing a
+shared attacker entirely to its nearest city and zeroing it everywhere
+else denies a real possibility — a mobile unit (a Rider using roads to
+reach 4+ tiles) can genuinely choose to skip the near target for a
+farther one. "It's either 0.2 in both cities... or .6 in one, .15 in the
+other" — a continuous, distance-decayed intensity per (unit, city) pair,
+never hard-zeroing a city that's still genuinely reachable, capped only
+by true unreachability (`can_attack_tile`, unchanged).
+
+CHANGE: `CityRisk.attackers: Vec<i32>` → `Vec<(i32, f32)>` (tile, weight).
+New `attack_weight(state, unit, target_tile)`: 1.0 whenever the unit is
+within pure attack range (spends zero movement — full certainty, not a
+discount); beyond that, `tanh((2*movement - movement_needed).max(0.0))`,
+where the `2*movement` budget (not just `movement`) is deliberately
+matched to `can_attack_tile`'s own road-assisted outer bound
+(`2*movement + range`) so the exact Rider-with-roads case Verdi named
+isn't hard-zeroed by an artificially narrow cap. Every consumer
+(`on_garrison`, `need_damage`, `defend_plan`'s must_kill selection and
+greedy fill, `residual_risk`) now scales by this weight uniformly.
+
+CALIBRATION (two rounds, both caught by the existing test suite, not
+guessed): first cut used a flat `movement + range` budget with no
+in-range exemption — discounted even simple, uncontested, single-city
+adjacent attackers (weight ~0.76 for a basic melee unit standing right
+next to an otherwise-uncontested city), breaking 4 of 21 existing
+`combat.rs` tests whose fixtures had no cross-city ambiguity at all and
+no reason to expect ANY discount. Fixed by exempting pure in-range
+attacks entirely (weight = 1.0, no formula involved) and widening the
+stretch-zone budget to `2*movement` to also fix under-crediting the
+road-assisted case. New test
+(`a_shared_attacker_keeps_a_reduced_but_nonzero_weight_at_the_farther_city`)
+replaces EXP_ELO_094's now-incorrect hard-exclusion test: confirms the
+near city gets exactly 1.0 and the far-but-reachable city gets a real,
+bounded, strictly-lower weight — never zero. All 22 `combat.rs` tests +
+full suite green.
+
+**Re-verified against the real flagged idx179 ply — and this is the
+important, humbling finding**: using the actual `goal_potential_breakdown`
+accumulator (not hand-recomputed math, which was caught disagreeing with
+it), dphi for the garrison-preserving Attack is STILL -600, unchanged
+from before this fix. The mechanism moved, not disappeared: fixing
+city 49's own risk read (a real, correct side effect of this change)
+means the freshly-recomputed goal for this ply no longer even carries a
+Defend order for city 49 at all — so its own coverage math is moot here
+regardless. The full -600 now traces entirely to city 41 (still
+Defend-ordered), which still drops from 2 assigned defenders to 1 as the
+weakened attacker's weighted `need_damage` crosses `defend_plan`'s greedy
+fill threshold. **`defend_cover`'s reward is a discrete, per-whole-unit
+sum, not a smooth function of coverage adequacy — any factor that nudges
+`need_damage` down, even correctly, can make a full 600-point credit
+disappear in one step.** This discreteness is a separate, deeper design
+issue from cross-city attribution (hard or continuous) and is NOT
+resolved by this fix. Registered as the concrete next step: `defend_cover`
+should scale smoothly with how well the assigned set covers `need_damage`
+(e.g. a coverage-ratio term) rather than paying a flat 600 per whole
+assigned unit with nothing in between.
+
+FIRE-RATE (n=16 real games): **764,298 partial-weight (< 1.0) entries**
+(~47,769/game) — much higher than EXP_ELO_094's own dedup count, because
+this fires for every attacker beyond PURE range at ANY city, not just
+ones actually shared between two cities. Confirms the mechanism is live
+and broadly exercised, not a narrow edge case.
+
+PAIRED GAUGE (n=128, `--actors 14`, matching production, single-commit
+diff `abae75d` → `3a79ae6`):
+
+| | prefix (hard-attribution, EXP_ELO_094) | fixed (continuous-weight) |
+|---|---|---|
+| anchor_net_wr | 0.3438 (44/128) | 0.3203 (41/128) |
+| avg_moves | 214.24 | 223.70 |
+| avg_score | 4253.67 | 4296.48 |
+
+-2.34pp win rate, essentially flat-to-slightly-higher score, slightly
+longer games. Notably, 0.3203 (41/128) is the EXACT SAME win count as
+EXP_ELO_094's own "prefix" arm (the state with NO city_risks fix at all)
+— not a byte-identical replay (avg_moves/avg_score differ), but a
+reminder that at n=128 single-run reads, a few points of movement in
+either direction should not be over-interpreted, per this session's own
+established residual-noise caveats (EXP_ELO_088/090).
+
+**Disposition: the redesign itself is correct and shipped — it is the
+more physically accurate model Verdi asked for, and the previous
+hard-attribution version's "never hits the second city" behavior was a
+real bug this fixes.** The paired-gauge win-rate read is inconclusive at
+n=128 (small, plausibly-noise move) and should not be read as either
+confirming or refuting the redesign on its own — this is a correctness/
+realism fix, not a tuning change, the same posture EXP_ELO_094 itself
+took. The REAL open item this entry surfaces is `defend_cover`'s
+discreteness, which is what actually still produces the -558/-600
+pathology on the original flagged ply and needs its own investigation
+before that specific complaint can be called closed.
