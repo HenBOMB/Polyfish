@@ -377,12 +377,22 @@ pub static ENDTURN_ELIGIBLE_PLIES: std::sync::atomic::AtomicU64 = std::sync::ato
 pub static ENDTURN_CHOSEN_WITH_ALTERNATIVES: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+/// EXP_ELO_087 diagnostic (temporary): `POLYFISH_ENDTURN_HARD_GATE=1`
+/// disables the revive entirely -- the exact pre-EXP_ELO_075 behavior
+/// (EndTurn always stripped whenever another move survives gating) --
+/// without needing a separate build/checkout, so a hard-gated arm can be
+/// A/B'd against the current floor on the identical binary.
+fn endturn_hard_gate() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("POLYFISH_ENDTURN_HARD_GATE").as_deref() == Ok("1"))
+}
+
 fn revive_endturn_if_worse_than_floor(
     mut scored: Vec<(f32, Box<dyn Move>)>,
     has_other: bool,
     lambda: f32,
 ) -> Vec<(f32, Box<dyn Move>)> {
-    if has_other && lambda != 0.0 {
+    if has_other && lambda != 0.0 && !endturn_hard_gate() {
         ENDTURN_ELIGIBLE_PLIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if scored.first().is_some_and(|(s, _)| *s < ENDTURN_REVIVE_PRICE) {
             scored.push((ENDTURN_REVIVE_PRICE, Box::new(EndTurnMove) as Box<dyn Move>));

@@ -283,6 +283,22 @@ pub fn market_ready(state: &GameState, player: PlayerId) -> bool {
 /// gap was closed; now counts the new rejection instead.
 pub static TECH_LIMIT_REJECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// EXP_ELO_088 diagnostic (temporary): per-tech breakdown of what
+/// `TECH_LIMIT_REJECTIONS` is actually blocking, so a raw count can be
+/// read as "which techs" not just "how many."
+pub static TECH_LIMIT_REJECTIONS_BY_TECH: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<TechnologyType, u64>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// EXP_ELO_088 diagnostic (temporary): `POLYFISH_TECH_GATE_LEGACY=1`
+/// restores the pre-EXP_ELO_083 "empty recommendation -> allowed"
+/// fallthrough, so the gap-closure can be A/B'd against the current
+/// binary without a separate build, mirroring `POLYFISH_ENDTURN_HARD_GATE`.
+fn tech_gate_legacy_fallthrough() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("POLYFISH_TECH_GATE_LEGACY").as_deref() == Ok("1"))
+}
+
 pub fn passes_tech_purchase_limits(m: &dyn Move, aux: &GoalAux) -> bool {
     if m.move_type() != MoveType::Research {
         return true;
@@ -342,8 +358,15 @@ pub fn passes_tech_purchase_limits(m: &dyn Move, aux: &GoalAux) -> bool {
                 // explicitly requested... not something the ply can just
                 // accidentally wander into." No recommendation at all is
                 // the strongest case for "not requested" there is.
-                TECH_LIMIT_REJECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                return false;
+                if tech_gate_legacy_fallthrough() {
+                    // allowed -- pre-EXP_ELO_083 behavior for A/B testing
+                } else {
+                    TECH_LIMIT_REJECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if let Ok(mut m) = TECH_LIMIT_REJECTIONS_BY_TECH.lock() {
+                        *m.entry(tech).or_insert(0) += 1;
+                    }
+                    return false;
+                }
             }
         }
     }

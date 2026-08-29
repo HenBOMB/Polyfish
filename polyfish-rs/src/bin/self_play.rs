@@ -5192,6 +5192,13 @@ fn main() -> anyhow::Result<()> {
         "  - EXP_ELO_083 tech-limit no-recommendation rejections (diagnostic, temporary): {} candidates",
         polyfish::ai::search::goal_aux::TECH_LIMIT_REJECTIONS.load(std::sync::atomic::Ordering::Relaxed)
     );
+    if let Ok(m) = polyfish::ai::search::goal_aux::TECH_LIMIT_REJECTIONS_BY_TECH.lock() {
+        let mut by_tech: Vec<(&polyfish::types::TechnologyType, &u64)> = m.iter().collect();
+        by_tech.sort_by(|a, b| b.1.cmp(a.1));
+        let top: Vec<String> =
+            by_tech.iter().take(12).map(|(t, c)| format!("{t:?}:{c}")).collect();
+        println!("  - EXP_ELO_088 rejections by tech (diagnostic, top 12): {}", top.join(", "));
+    }
     {
         let eligible = polyfish::ai::search::macro_exec::ENDTURN_ELIGIBLE_PLIES
             .load(std::sync::atomic::Ordering::Relaxed);

@@ -10573,3 +10573,99 @@ only to which code path the live caller invokes. If mixed-lane plans
 turn out to matter for mine selection specifically, the per-city
 Pareto-trim itself (currently weak, ~1.5/8 dropped) is the next place to
 tighten before considering a redesign of the assignment search.
+
+## EXP_ELO_087 — hard-gating EndTurn did NOT restore baseline win rate; points at EXP_ELO_083, not EndTurn, as the likelier driver (measurement only)
+
+CONTEXT: Verdi's direct ask after EXP_ELO_085's fire-rate finding: run a
+game with EndTurn fully hard-gated (the exact pre-EXP_ELO_075 behavior)
+to confirm win rate returns to the original baseline.
+
+METHOD: added `POLYFISH_ENDTURN_HARD_GATE=1` (`macro_exec.rs`), which
+skips `revive_endturn_if_worse_than_floor` entirely — byte-identical to
+the pre-077 code path. Ran on current HEAD (has EXP_ELO_083's tech-gate
+fix already applied) against the same paired-gauge recipe, n=48.
+
+ACTUAL — the 2x2 across tonight's five samples:
+
+| | tech-gate off | tech-gate on (083) |
+|---|---|---|
+| EndTurn hard-gated | 0.417 (original baseline, commit caa1843) | 0.3125 (this entry) |
+| EndTurn -500 | 0.333 | 0.333 |
+
+Hard-gating EndTurn did NOT restore 0.417 — it came back at 0.3125, the
+LOWEST reading of the whole table, with EndTurn completely unchanged
+from the original code. The row that moves is "tech-gate off -> on" at
+hard-gated EndTurn (-10.5pp); the row that's flat is "tech-gate off ->
+on" at -500 (0pp). That pattern points at EXP_ELO_083 (the tech-gate
+closure), not the EndTurn floor, as the more likely source of tonight's
+win-rate readings — directly contradicting the working hypothesis that
+prompted this run. **Superseded by EXP_ELO_088 below — do not treat this
+table as settled.**
+
+## EXP_ELO_088 — re-running the SAME comparison same-binary/env-toggle instead of cross-build INVERTS the result; six n=48 samples spanning 0.3125-0.4583 tonight is noise, not a resolved signal
+
+CONTEXT: EXP_ELO_087's comparison mixed two different binaries (current
+HEAD vs commit caa1843) to get its "tech-gate off" cell — a confound
+(anything else that differs between those two builds rides along). To
+isolate the tech-gate variable cleanly, added a second env toggle,
+`POLYFISH_TECH_GATE_LEGACY=1` (restores the pre-083 fallthrough), so both
+arms of the comparison run from the IDENTICAL binary.
+
+**Methodological error, flagged rather than hidden**: the two arms
+(legacy vs closed) were launched CONCURRENTLY (two self_play processes
+sharing the same machine's GPU/Metal resources at once), directly
+violating this project's own established convention from EXP_ELO_071
+("sequential only, never concurrent, per this project's own OOM
+lesson"). Whether contention subtly affected either run's behavior
+(e.g. eval-server batch coalescing under load) is unverified — this
+result should be treated as lower-confidence than tonight's other
+paired gauges for that reason alone, independent of anything else.
+
+ACTUAL (n=48, same binary, `POLYFISH_ENDTURN_HARD_GATE=1` both arms):
+
+| | anchor_net_wr | avg_moves | avg_score | avg_research |
+|---|---|---|---|---|
+| tech-gate legacy (`POLYFISH_TECH_GATE_LEGACY=1`) | 0.396 (19/48) | 238.1 | 4498.1 | 7.25 |
+| tech-gate closed (current default) | **0.458 (22/48)** | 261.4 | 4837.8 | 7.06 |
+
+This is the OPPOSITE direction from EXP_ELO_087's cross-build comparison
+(which had closed losing by 10.5pp; here closed WINS by 6.25pp). Two
+different methodologies measuring nominally the same thing produced
+opposite-signed results at matched n=48 — the honest reading is that
+NEITHER comparison has isolated a real effect; both are inside the
+noise floor for this sample size, and the cross-build result additionally
+carries the concurrency confound. Retracting EXP_ELO_087's causal framing
+("points at EXP_ELO_083... as the likelier driver") — it does not survive
+this cleaner (if still imperfect) rerun.
+
+**One solid, non-contradictory fact this run does establish**:
+`avg_research` is nearly identical between arms (7.25 vs 7.06) despite
+the closed arm logging 630,611 individual candidate rejections. The huge
+rejection COUNT is not a proxy for "techs never bought" — it's the same
+small set of off-plan candidates getting re-rejected on every ply they
+remain legal, not hundreds of forgone purchases. **Per-tech breakdown of
+what's actually being rejected** (top 3 by far: Fishing 144,736,
+Meditation 97,980, FreeSpirit 83,011 — Construction/Mathematics/Farming/
+Climbing appear much further down, 16-48K each): Fishing dominating by
+1.5x over the next-highest tech is consistent with CORRECT behavior on
+these Imperius-mirror maps (a tech with `utility = fish_count*2.5 - 2.0`
+legitimately scores negative on a map without much fish), not a starved
+economy — though this reads the rejection log, not a controlled check of
+whether Fishing was ever actually worth buying on any of these 48 maps
+specifically.
+
+**Disposition, honestly: after six separate n=48 samples tonight
+(0.417, 0.375, 0.333, 0.333, 0.3125, 0.396, 0.458 — a ~13.5pp spread
+across readings that were each supposed to isolate ONE variable), there
+is no clean signal here to act on.** This project's own established
+noise floor at 48-64 games (±7.8-12pp) is large enough that this spread
+is fully consistent with pure sampling noise around some central value,
+not a resolved causal story about either EndTurn's floor or the
+tech-gate closure. **Recommendation: stop chasing this at n=48.** If a
+real verdict is wanted, it needs a much larger, SEQUENTIAL (never
+concurrent), ideally `eval_seeds.json`-based sample — not another quick
+spot check. Absent that, neither EXP_ELO_082 (-500) nor EXP_ELO_083 (tech
+gate) should be read as confirmed-harmful OR confirmed-safe from
+tonight's data; both stay exactly where their own entries left them
+(implemented per explicit instruction / implemented per stated
+principle), pending real validation.
