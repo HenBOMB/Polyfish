@@ -9994,6 +9994,43 @@ across real games, not just the one flagged ply and the fire-distribution
 math. **Disposition: NOT YET SHIPPED to a training run** — paired gauge is
 the next step before this can be called validated.
 
+**PAIRED GAUGE — RUN.** Same recipe as EXP_ELO_075's own gauge
+(`--search-backend macro-mcts --macro-leaf net-asym --macro-sims 64
+--macro-k 8 --macro-rollout-lambda 0.0 --goal-channels --goal-w-tree 1
+--anchor-frac 1.0 --iteration 100 --anchor-decay-start 100 --base-seed
+770425 --tribe1 Imperius --tribe2 Imperius --gamemode 2 --actors 14
+--num-games 48`), two binaries built from `caa1843` (prefix, no -400 fix)
+and current HEAD (`df83a88`, has the fix) against the identical iter51
+checkpoint, isolated in a scratch worktree so the main tree's own working
+state was never touched:
+
+| | prefix (no fix, `caa1843`) | fixed (-400 floor) |
+|---|---|---|
+| anchor_net_wr | 0.417 (20/48) | 0.375 (18/48) |
+| avg_moves | 225.3 | 232.2 |
+| avg_score | 4727.2 | 4555.0 |
+
+Win rate moved -4.2pp, avg_score -3.6%, avg_moves **+3.1% (longer, not
+shorter)**. This is NOT the EXP_ELO_075 regression signature: that arm
+collapsed 25pp with games 24% SHORTER (the tell for EndTurn firing too
+eagerly and truncating turns) — here avg_moves moved the opposite
+direction, no sign of the same passivity pathology. But at n=48, a -4.2pp
+win-rate move is well inside this project's own established noise floor
+for this scale (the seed-770425 harness's own 128-game floor is ±7.8pp;
+this project's broader convention flags the 64-game gauge as a ±12pp
+ruler, and n=48 is smaller still) — this result neither confirms nor
+refutes the fix; it just rules out the specific catastrophic failure mode
+EXP_ELO_075 hit.
+
+**Disposition: no coherent regression detected, but not validated either
+— do not treat this as sufficient evidence to launch training.** Per
+Verdi's own gate ("once we have relatively good evidence it's gonna
+work"), a within-noise dip on 2 of 3 metrics is not that evidence. If
+this fix is to ship as a standing default, the honest next step is a
+larger-n confirmation (128 games, matching the project's own established
+floor) before trusting the direction either way — not implemented
+tonight.
+
 ## EXP_ELO_078 — the GARRISON_49 sequence's real defect: stars burned on Harvests before the forced vacate, foreclosing a legal post-vacate Summon (confirmed mechanism, no fix yet)
 
 CONTEXT: Verdi's sharper read of the same idx177-179 sequence: "the problem
