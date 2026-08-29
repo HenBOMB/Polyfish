@@ -10331,3 +10331,158 @@ read this as "confirmed worse" either (same noise-floor caveat as
 EXP_ELO_077). Real next step if this is to be trusted either way: a
 128-game confirmation run, not another 48-game spot check.
 
+
+## EXP_ELO_084 — correcting EXP_ELO_081: `eco_plan` DOES have cross-city/market-intersection planning (`empire.rs`); it's dormant at inference, not missing (design only, not implemented)
+
+CONTEXT: EXP_ELO_081 claimed "`plan_city` itself is single-city-territory-
+scoped... cross-city is new capability, not an existing function this
+heuristic merely ignores." Verdi corrected this directly, recalling
+building market-capacity logic that optimizes hub/market placement at
+territory intersections. **The correction is right — I missed a whole
+module.** `src/rules/eco_plan/empire.rs` (852 lines, tested) is exactly
+this: `enumerate_empire` enumerates hub sites JOINTLY across a set of
+cities, where partner tiles (e.g. standing Mines) are collected
+EMPIRE-WIDE by structure type (`partners_by_type`) — a hub candidate for
+city A can count a Mine that's geometrically closer to city B, as long as
+it's empire-owned and unoccupied by another structure. Markets are then
+sited per-city to "collect the summed LEVEL of every friendly hub it
+touches, including hubs belonging to other cities... so two sawmills
+sited near a shared border can feed two markets at full value" (module's
+own doc comment) — literally the market-at-the-intersection behavior
+Verdi described. `allocate_value` does joint TERRITORY allocation across
+multiple cities by marginal value (not nearest-city), resolving contested
+tiles by which city's plan gains more from them. All of this feeds
+`EmpirePlan` (whole-empire hub/market/tech/star/pop/giants/spt plan) and
+a Pareto frontier (`pareto`/`frontier_insert`/`dominates`) picked via
+`pick_for_goal` (Eco/Army/Balanced/Spt/Giants).
+
+**What EXP_ELO_081 got right, and still stands**: `enumerate_empire`/
+`EmpirePlan`/`allocate_value` have ZERO references anywhere in `ai/`
+(confirmed by grep) — the live per-ply decision path (`scoring.rs`'s Mine
+clustering bonus, `oracle_macro.rs`, `search/lane.rs`) consults none of
+it. This machinery is real, tested, and sophisticated, but it is
+currently DORMANT at inference — only reachable through the offline
+`bin/eco_plan` diagnostic. The actual finding is "wiring gap," not
+"missing capability" — a materially different (and more encouraging)
+problem than EXP_ELO_081 stated.
+
+**Cost, measured directly** (not assumed from the module's own doc
+comment): `time eco_plan --cities N --goal balanced` on the default seed:
+
+| cities | wall time |
+|---|---|
+| 2 | 0.07s |
+| 3 | 0.59s |
+| 4 | 17.2s |
+
+Confirms the module's own WORK_BUDGET framing — this is emphatically NOT
+callable per-candidate-move, or even safely per-ply once an empire
+crosses ~3 cities. A live consumer needs a TURN-CACHED snapshot (recomputed
+once per real turn, GoalCache-style — see EXP_ELO_056's precedent), not a
+call inside `scoring.rs`'s move-scoring loop, and likely a hard cap on
+how many cities enter the joint enumeration (e.g. only the 2-3 cities
+nearest the candidate move, not the whole empire) once past 3-4 cities.
+
+**Missing piece for the stated goal** ("help us prioritize which mines to
+take given many options"): `EmpirePlan` exposes `hubs`/`levels`/`markets`
+per city but NOT which specific partner tiles (which Mine sites) the
+winning combination actually used — exactly the fact a live Mine-build
+scorer needs ("is THIS candidate tile part of the plan"). Extending
+`BuildOut`/`EmpirePlan` to carry the chosen partner-tile set is the
+concrete first commit this feature needs, before any scoring.rs change is
+possible.
+
+**Village-ownership prediction (Verdi's second ask — treat a >75%-likely
+future capture as already-owned when feeding the territory list)**:
+checked for an existing signal. `VillageGuess`/`guess_villages`
+(`ai/belief/prediction.rs`) answers a different question — "does an
+undiscovered village exist at this fogged tile," with `confidence`
+scoring EXISTENCE evidence, not race-to-capture odds for an already-
+visible village. No P(we own this specific discovered village in N
+turns, uncontested) model exists anywhere in `ai/`. The primitives for
+one would be the ETA/threat math already in `combat.rs` (used by
+`defend_plan`/`city_risks`) and the `tanh`-calibration pattern EXP_ELO_074
+used for defend-order pricing (`(risk/RISK_GARRISON_FALLS).tanh()`) — but
+this is new modeling work, not a lookup.
+
+**Disposition: design only, nothing implemented.** Per the advisor's
+explicit guidance on scope tonight: a crude, unvalidated capture-
+probability signal feeding straight into the empire-wide plan cache is
+exactly how you'd poison this feature before it's even built — build the
+turn-cached `EmpirePlan` foundation and the partner-tile extension first
+(their own review is possible against real games, unlike a probability
+model with no ground truth to check against), treat "which cities enter
+the joint enumeration" as real-owned-cities-only until that foundation is
+solid, and treat predicted-ownership as its own follow-up once there's
+something to validate it against.
+
+## EXP_ELO_083 — close `passes_tech_purchase_limits`'s no-recommendation gap (implemented; fire-rate is huge but paired gauge shows no additional win-rate cost beyond EXP_ELO_082)
+
+CONTEXT: Verdi's principle: "tech should only be bought if explicitly
+requested at the T2 level for eco or military purposes, not something
+the ply can just accidentally wander into." Checked `passes_tech_
+purchase_limits` (`goal_aux.rs`, EXP_ELO_051/052) — it already implements
+almost exactly this: a Research move is only allowed if it's the
+committed lane's own opening tech (`lane_next_tech`), a live save-plan's
+specific next tech (`save_next_tech`), or in `recommended_techs` (an
+explicit whitelist, environment-fit for <2 cities, `evaluate_tech_utility`
+-scored for 2+). This gate is unconditional on stance (runs under Grow,
+Arm, Unlock alike) — EXP_ELO_080's "arms/grows bucket" framing was
+incomplete; it only looked at `passes_stance_tech_mask`, a coarser,
+separate check. The ONE real gap: when `recommended_techs` is EMPTY, the
+code fell through to "allowed" instead of "no opinion, don't buy it."
+
+CHANGE: `goal_aux.rs` — `!aux.recommended_techs.contains(&tech)` now
+rejects unconditionally (empty set means every tech fails `.contains`,
+so it's covered by the same branch, no special-case needed). Fixed 4
+existing tests whose bare-`GoalAux::default()` fixtures relied on the old
+fallthrough to reach unrelated logic they were actually testing (tier3
+ordering, water masking, tech caps) by explicitly recommending the techs
+each exercises. Flipped `banking_gates_research_that_is_not_the_plan`'s
+final assertion, which had pinned the exact old behavior as a
+deliberate, tested feature ("No opinion at all: nothing is gated on lane
+grounds") — Verdi's principle is the opposite of that comment now.
+
+FIRE-RATE CHECK (before trusting this): an 8-game batch showed 117,408
+rejections (vs an early informal spot-check of 304 from a differently-
+built binary and differently-shaped batch — not a valid comparison, see
+below) and a 32% throughput drop in that one run. Root cause: once a
+tribe has 2+ cities, `recommended_techs` switches from the eco_plan-based
+census to a per-tech `evaluate_tech_utility` heuristic that can score
+every remaining line-head negative simultaneously — leaving the set
+empty far more often than assumed. This is a materially bigger
+behavioral change than "close one narrow gap."
+
+PAIRED GAUGE (n=48, same recipe as EXP_ELO_077/082, combined with the
+-500 EndTurn floor since both landed the same commit):
+
+| | prefix (neither fix) | -500 alone (EXP_ELO_082) | -500 + this gap closure |
+|---|---|---|---|
+| anchor_net_wr | 0.417 | 0.333 | 0.333 |
+| avg_moves | 225.3 | 253.4 | 221.4 |
+| avg_score | 4727.2 | 4334.3 | 4482.2 |
+| rejections/game (48-game run) | n/a | n/a | 13,747 |
+
+Win rate is IDENTICAL to the -500-alone arm — this gap closure added no
+further win-rate cost on top of EXP_ELO_082's own (unvalidated, trending-
+wrong) result. avg_moves and avg_score both moved BACK toward the prefix
+baseline relative to -500-alone, the opposite of what the fire-rate
+alarm would predict. The steady ~13,700 rejections/game (matching the
+8-game run's ~14,676/game rate) confirms this is a real, reproducible,
+high-volume gate — not a fluke — but at this sample size it reads as
+inert-to-mildly-helpful on the metrics that matter, not harmful.
+
+**Disposition: implemented, logically correct (full test suite green),
+NOT independently validated as beneficial — but the one clean paired
+comparison available tonight shows it does not add to EXP_ELO_082's own
+regression.** The huge rejection volume is worth a follow-up on its own
+terms regardless of win-rate neutrality here: it means `recommended_techs`
+is empty (i.e. `evaluate_tech_utility` finds nothing worth recommending)
+for a large fraction of the 2+-city midgame, which is either (a) correct
+— genuinely nothing is worth buying that often — or (b) `evaluate_tech_
+utility` itself is too conservative/stingy post-expansion (echoing
+EXP_ELO_074's still-deferred "no opportunity-cost-of-waiting term"
+critique) and this gate is now surfacing that pre-existing scoring gap
+rather than causing a new problem. Not distinguished tonight; the next
+step is reading WHICH techs get rejected and whether any look like real
+misses, not just counting how many.
