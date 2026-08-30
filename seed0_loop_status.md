@@ -218,10 +218,44 @@ EXP_ELO_091's move-gen determinism fix.
      -1.56pp average, comfortably inside the noise floor — baseline
      reproduced 103's own gauge average almost exactly, confirming this
      isn't 103's gain being given back. Committed.
-- Current best game for the next analysis pass: the EXP_ELO_104 game
-  (turn 21, 509 moves, score 8245, 11 lost, 14 killed, 4 giants by t12).
-  Still misses turn-count (<=15) and units-lost (<3) targets, though by
-  a smaller margin than every prior iteration.
+  5. **EXP_ELO_106** (`CityRisk.attackers` frozen-basis + `defend_kill_advance`
+     state-fact term, SHIPPED). Found by an `ml-expert` pass-4 analysis of
+     the EXP_ELO_104 game: 9/11 net-seat deaths traced to one Catapult/
+     Archer force besieging city 49 t9-t17, with EVERY opportunity to
+     remove it priced negative — exactly the "kill-the-besieger" risk
+     pre-registered as untested when EXP_ELO_103 shipped. Two distinct
+     mechanisms: (a) `need_damage`/`defend_cover`'s waterfall budget was
+     derived via a LIVE re-lookup of the attacker's health, so a
+     candidate that itself chipped the attacker shrank its own
+     comparison's budget mid-eval; (b) a melee kill-and-advance vacates
+     the garrison tile the SAME ply it earns `defend_garrison_hold`'s
+     credit hardest. Fixed by storing the frozen `UnitState` snapshot in
+     `CityRisk.attackers` (no more live re-derivation) and adding
+     `defend_kill_advance`, a new state-fact term (042/103 lineage)
+     paying a friendly unit that lands on a frozen attacker's own tile.
+     A third flagged ply (Giant reinforcement) was deliberately left
+     unfixed — it's the same finite-budget zero-sum invariant EXP_ELO_054
+     depends on, not a bug. Ground truth: all 3 flagged plies behave
+     exactly as predicted (2 flip strongly positive, 1 correctly
+     unchanged); 4 must-not-regress reference plies from 101/103/104
+     hold bit-exact or improve. Regenerated game confirms the causal
+     story directly (not just KPIs): the siege is gone by t14-15 (was
+     t17), units_lost 11->7, giants-by-12 4->5 (new high). Two
+     independent seed-block gauges (770425 rerun + disjoint 770553) both
+     read positive: +5.47pp, +4.69pp. Known open risk (registered, not
+     blocking): an age-0 ghost sighting can pass `defend_kill_advance`'s
+     filter the same as a visible unit, so the latch could in principle
+     fire on an empty remembered tile with no actual kill — not observed
+     in any measured game yet. Committed (`ceb429f`).
+- Current best game for the next analysis pass: the **EXP_ELO_106** game
+  (`replays/exp106_seed0_watch/`, turn 23, score 7700, 7 lost, 9 killed,
+  5 giants by t12 — a new high). Still misses turn-count (<=15) and
+  units-lost (<3) targets, though units_lost improved substantially
+  (11->7) and giants-by-12 cleared its target by the widest margin yet.
+  Game length went UP 2 turns (21->23) despite the underlying siege
+  being resolved 3 turns earlier than before — an open loose end (see
+  EXP_ELO_106 ledger entry's Disposition), possibly related to the
+  goal-ballot conversion-indifference lead noted below.
 - **EXP_ELO_105 was attempted and REVERTED** (2026-08-30, see the
   ledger for the full writeup) — the retaliation/exposure pricing gap
   below is still the diagnosed primary lever, but the specific fix
@@ -282,6 +316,20 @@ EXP_ELO_091's move-gen determinism fix.
     ruling out a stale binary. Standing recipe fix: record the
     generating binary's MD5 into the dump dir going forward; keep
     trace-score forensics to mid-turn plies until this is chased down.
+- **Second candidate fix, unproven, flagged by pass-4 `ml-expert`
+  analysis (2026-08-30, not yet investigated)**: goal-ballot
+  near-indifference to conversion. In the EXP_ELO_104 game, `Attack 24`
+  (the enemy capital) was a live ballot candidate every turn t8-t17 but
+  rarely won outright, showing near-ties in the endgame window despite
+  a growing force advantage (8 Giants vs 3 enemy units by the late
+  game). May explain part of the EXP_ELO_106 game's game-length
+  regression (21->23 turns despite the city-49 siege resolving 3 turns
+  earlier) — worth checking whether this is unchanged, better, or worse
+  post-106 before designing a fix. Possible mechanism, unverified:
+  goal-rollout horizon or leaf-value blindness to conversion speed —
+  the search may correctly PRICE the capital as worth attacking without
+  distinguishing "attack now" from "attack in 5 turns" once the
+  attacker's own safety is comparable either way.
 
 ## Log (append one entry per iteration, newest last)
 
@@ -371,3 +419,40 @@ EXP_ELO_091's move-gen determinism fix.
   flagged game, however dramatic. Full writeup and candidate future
   directions in the ledger; diagnosis (Finding 1) still believed
   correct, this specific implementation was not the right fix.
+- **2026-08-30, iteration 7 (pass-4 analysis + EXP_ELO_106)**: `ml-expert`
+  pass-4 analysis of the EXP_ELO_104 game found the pre-registered
+  "kill-the-besieger" risk from EXP_ELO_103 had actually manifested: a
+  Catapult/Archer force besieging city 49 t9-t17 caused 9/11 net-seat
+  deaths, and every candidate that damaged, killed, or reinforced past
+  it priced negative. My first read of the flagged kill ply misattributed
+  it to `attacker_pressure` hitting zero; the advisor corrected this to
+  the real mechanism (a melee kill-and-advance physically vacates the
+  garrison tile, confirmed by `city_train_blocked` flipping in lockstep)
+  and separately identified a SECOND, independent mechanism behind a
+  different flagged ply (a live re-lookup of attacker health letting a
+  chip attack shrink its own comparison's defend_cover budget), plus
+  correctly told me NOT to fix the third flagged ply (a Giant
+  reinforcement) since that's the EXP_ELO_054 finite-budget invariant,
+  not a bug. Fixed both real mechanisms: `CityRisk.attackers` now stores
+  the frozen `UnitState` snapshot instead of a tile index to re-resolve
+  live, and a new `defend_kill_advance` state-fact term pays a friendly
+  unit landing on a frozen attacker's own tile. Ground truth: all 3
+  flagged plies behave exactly as predicted; 4 must-not-regress
+  reference plies from 101/103/104 hold bit-exact or (in one case)
+  improve further via legitimate compounding with the new term. Added 2
+  pinning tests (336/336 total). Regenerated game: siege cleared 3 turns
+  earlier (t14-15 vs t17), units_lost 11->7, giants-by-12 4->5 (new
+  high). Discovered mid-gauge that same-seed reruns are now BIT-EXACT
+  identical (not just "within noise" — every metric matched except the
+  games-file name) — recorded as a methodology finding: same-seed
+  reruns are a determinism check now, not a second noise sample; used a
+  disjoint seed block (770553) for a genuine second data point instead.
+  Both independent seed blocks read positive: +5.47pp, +4.69pp.
+  **SHIPPED** (`ceb429f`). One open risk registered (ghost-tile hole in
+  the new latch, not yet observed in any measured game) and one loose
+  end carried forward (game length went up 2 turns despite the earlier
+  siege resolution — possibly related to the still-open goal-ballot
+  conversion-indifference lead from the pass-4 report). Next: pass 5 on
+  the EXP_ELO_106 game, and/or a fresh attempt at the retaliation/
+  exposure pricing lever (EXP_ELO_105's diagnosis, still believed
+  correct, still without a working implementation).
