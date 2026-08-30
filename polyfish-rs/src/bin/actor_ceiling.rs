@@ -21,6 +21,7 @@
 
 use polyfish::TribeType;
 use polyfish::ai::brain::{Brain, SearchBackend, SearchBackendArg};
+use polyfish::eval_seeds::{CORE_TRIBES, pick_tribes};
 use polyfish::ai::eval_server::{DummyEvalHandle, Evaluator};
 use polyfish::game::Game;
 use polyfish::mapgen::{MapGenSettings, generate};
@@ -174,68 +175,8 @@ fn main() -> anyhow::Result<()> {
             .unwrap_or(4)
     };
 
-    let all_tribes = vec![
-        TribeType::Imperius,
-        TribeType::Bardur,
-        TribeType::Oumaji,
-        TribeType::Kickoo,
-        TribeType::XinXi,
-        TribeType::Zebasi,
-        TribeType::AiMo,
-        TribeType::Vengir,
-        TribeType::Luxidoor,
-        TribeType::Quetzali,
-        TribeType::Hoodrick,
-        TribeType::Yadakk,
-    ];
-
-    fn parse_tribe(s: &str, default: TribeType) -> TribeType {
-        match s.to_lowercase().as_str() {
-            "imperius" => TribeType::Imperius,
-            "bardur" => TribeType::Bardur,
-            "oumaji" => TribeType::Oumaji,
-            "kickoo" => TribeType::Kickoo,
-            "xinxi" => TribeType::XinXi,
-            "zebasi" => TribeType::Zebasi,
-            "aimo" => TribeType::AiMo,
-            "vengir" => TribeType::Vengir,
-            "luxidoor" => TribeType::Luxidoor,
-            "quetzali" => TribeType::Quetzali,
-            "hoodrick" => TribeType::Hoodrick,
-            "yadakk" => TribeType::Yadakk,
-            "aquarion" => TribeType::Aquarion,
-            "elyrion" => TribeType::Elyrion,
-            "polaris" => TribeType::Polaris,
-            "cymanti" => TribeType::Cymanti,
-            _ => {
-                eprintln!("Unknown tribe {}, using {:?}", s, default);
-                default
-            }
-        }
-    }
-
-    fn pick_tribes(
-        rng: &mut impl rand::Rng,
-        all_tribes: &[TribeType],
-        tribe1_arg: &Option<String>,
-        tribe2_arg: &Option<String>,
-    ) -> (TribeType, TribeType) {
-        use rand::seq::SliceRandom;
-        let t1 = match tribe1_arg {
-            Some(s) => parse_tribe(s, TribeType::Imperius),
-            None => *all_tribes.choose(rng).unwrap(),
-        };
-        let t2 = match tribe2_arg {
-            Some(s) => parse_tribe(s, TribeType::Oumaji),
-            None => loop {
-                let t = *all_tribes.choose(rng).unwrap();
-                if t != t1 {
-                    break t;
-                }
-            },
-        };
-        (t1, t2)
-    }
+    // The v1 training pool; special tribes are deliberately excluded.
+    let all_tribes = CORE_TRIBES.to_vec();
 
     // One dummy evaluator shared by both players (self-play). Cloning the
     // handle shares the same uniform row + stats counters (and simulated

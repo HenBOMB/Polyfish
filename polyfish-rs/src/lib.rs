@@ -10,6 +10,7 @@
 pub mod actions;
 pub mod ai;
 pub mod coords;
+pub mod eval_seeds;
 pub mod fow;
 pub mod functions;
 pub mod game;
