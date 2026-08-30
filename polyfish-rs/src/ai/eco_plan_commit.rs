@@ -142,8 +142,19 @@ impl EcoPlanCommit {
             .filter(|&t| village_race_confidence(state, player, t) >= PROSPECTIVE_CONFIDENCE_MIN)
             .collect();
 
+        // Sorted, not raw HashSet iteration: `cities`' ORDER feeds
+        // `extend_for_border_growth`'s tiebreak and `enumerate_empire`'s
+        // combination indexing, and `HashSet`'s iteration order is
+        // randomized per-process (`RandomState`) -- exactly the class of
+        // bug EXP_ELO_091 already found and fixed elsewhere in move
+        // generation. Confirmed by measurement: a paired-gauge rerun of
+        // this exact code produced 39/128 then 38/128 anchor wins from the
+        // identical model and seed, while the (HashSet-free) baseline
+        // reproduced bit-for-bit.
+        let mut prospective_sorted: Vec<i32> = prospective.iter().copied().collect();
+        prospective_sorted.sort_unstable();
         let mut cities = held.clone();
-        cities.extend(prospective.iter().copied());
+        cities.extend(prospective_sorted);
         let sc = plan_scenario();
         let scs: Vec<Scenario> = cities.iter().map(|_| sc).collect();
         let terr = if prospective.is_empty() {
