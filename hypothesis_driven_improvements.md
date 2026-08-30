@@ -11591,10 +11591,113 @@ lesson stands: "matches Verdi's stated vision" and "wins more" are not
 guaranteed to be the same finding, and if they diverge that's Verdi's
 call, not mine.
 
-Disposition: **PAUSED for a design check-in**, not shipped, not
-abandoned. This is the third attempt at connecting `eco_plan` to real
-decisions in one week (098 and 099 both reverted); the remaining work is
-a genuine multi-hour architecture change (the hybrid allocator) with a
-real, not-yet-fully-specified invalidation/hysteresis design — worth
-confirming direction with Verdi before spending that time, rather than
-risking a fourth revert.
+Disposition at the design check-in: **PAUSED**, not shipped, not
+abandoned — see below for what happened after Verdi confirmed direction.
+
+---
+
+**UPDATE — implemented and verified.** Verdi confirmed the direction,
+adding one refinement to the confidence gate: it should specifically
+capture "we are closer than the opponent to an already-visible village,"
+which is exactly what `village_race_confidence` already computes (not
+the separate, lower-confidence fog-guess machinery).
+
+IMPLEMENTATION (four pieces, in dependency order):
+1. `ai::movement::village_race_confidence(state, player, village_tile)`:
+   FOW-honest turns-to-reach race check. Always fog-gates on `player`'s
+   own id (never the enemy's) even when seeding the enemy side of the
+   race with `combat::threat_units`' visible-enemy anchors — confirmed
+   via research that `TileState::explorers` is never redacted by
+   `obscure_fog`, so calling `turns_to_reach` with the enemy's id would
+   silently consult the enemy's own true exploration record, a real
+   leak. 7 unit tests; real-state check on seed0 gives 1.000 (no visible
+   threat) for the exact village Verdi described as "extremely likely
+   ours."
+2. `rules::eco_plan::allocate_value_with_prospective`: plans around a
+   not-yet-captured village — seeded with the same radius-1 square a
+   real capture claims immediately (`get_square_indices(tile, 1, size)`)
+   — only when `village_race_confidence` clears `PROSPECTIVE_CONFIDENCE_MIN
+   = 0.75`, resolved jointly with held cities' real territory through the
+   SAME `extend_for_border_growth` EXP_ELO_099 already proved correct.
+   New regression test reproduces the exact real-seed0 double-claim bug a
+   naive "union two separately-computed allocations" approach hits (a
+   solo held city's own +border sweep grabs ground a soon-to-be-captured
+   neighbour would actually get, since nothing else exists yet to
+   contest it) and confirms the fix avoids it.
+3. `ai::eco_plan_commit::EcoPlanCommit`: per-turn cache (mirrors
+   `MacroMctsAgent`'s existing `plan_key` gate) of which Mine tiles
+   partner a committed Forge hub — pooled from `enumerate_empire`'s joint
+   frontier, `Goal::Balanced`'s own `pick_for_goal`. Momentum: credit
+   ACCUMULATES turn to turn (never overwritten by a fresh recompute),
+   hard-invalidated only when the credited tile's owning city is
+   actually lost — Verdi's own framing ("plan lays out a vision then we
+   gradually start fulfilling it"). Real, not-hypothetical villages only
+   (`still_capturable`/`retakeable_village`, not the broader
+   `expand_target_valid`, which also matches capturable Ruins — including
+   one as a "prospective city" was found, via real-state testing, to zero
+   out `enumerate_empire`'s entire plan set: a Ruin has no territory or
+   hub potential and the combinatorial search choked on it). Mine lane
+   only this round, per plan. 4 unit tests.
+4. `scoring.rs`: Mine dropped from the old reactive "clustering
+   potential" heuristic (replaced, not stacked); a Mine candidate now
+   scores `+MINE_PARTNERS_COMMITTED_HUB_BONUS` (12.0, first-fit magnitude
+   — dial against measurement, not assumed correct; EXP_ELO_098's flat
+   +18 for a similarly-shaped signal was ~2x too strong) when
+   `EcoPlanCommit` credits it. Threaded through `rank_view`/`rank_plies`
+   as a new parameter, following the exact precedent `unit_goals`
+   already set: only `MacroMctsAgent`'s one real per-ply commit path
+   (and its own micro-probe, which is documented as "byte-for-byte the
+   same... for free") gets `Some(&self.eco_plan_commit)`; the frozen
+   comparison arms `MacroScriptAgent`/`MacroLookaheadAgent` and every
+   diagnostic-only `rank_plies` call site keep passing `None`, so past-
+   vs-future measurements on those arms never silently move.
+
+VERIFICATION against the real seed0 XinXi-vs-Imperius game (fresh run,
+current model, reproduced bit-identical twice — 741 moves, score 8480):
+- Mine build order: **39 and 50 both built turn 4** (tied first); **37
+  delayed to turn 7**; **38 never built by the net at all**. The exact
+  two tiles Verdi flagged as wrong (37, 38) are deprioritized or
+  skipped; the two flagged as right (50, 39) go first.
+- Forge placement: **tile 61 for city 49, tile 40 for city 41**, both
+  turn 15 — exact match to Verdi's description on both counts.
+- Fire-rate/scope check (not just the one flagged decision, per the
+  EXP_ELO_075 lesson): credited set stays small and scoped across the
+  game (4 tiles at turn 4, growing to 9 by turn 7 as city 41 becomes
+  real) — not degenerate/everything-credited.
+- Full CI green throughout (329 lib tests after the final piece).
+
+PAIRED GAUGE (n=128, seed 770425 harness, Imperius mirror, worktree-
+isolated, same model.safetensors MD5-verified identical across arms):
+
+First reading: baseline 0.3516 (45/128), treatment 0.3047 (39/128), delta
+**-4.69pp** — reproduced the baseline (bit-identical on a rerun) but NOT
+the treatment (0.2969 / 38/128 on rerun, i.e. non-deterministic). Root
+cause found and fixed same-session: `EcoPlanCommit::update` built its
+`cities` list by extending a `Vec` with a `HashSet<i32>`'s raw iteration
+order (`prospective.iter()`), and `HashSet` iteration order is randomized
+per-process (`RandomState`) — this order feeds
+`extend_for_border_growth`'s contested-tile tiebreak and
+`enumerate_empire`'s combination indexing, so it was a real behavioral
+non-determinism, not cosmetic. Exactly the bug class EXP_ELO_091 already
+found and fixed elsewhere in move generation — fixed the same way, sort
+before use.
+
+Rerun with the fix (treatment arm rebuilt, both worktrees on the fixed
+commit): treatment now reproduces bit-identically across two runs
+(0.3203125 both times, 41/128). Corrected delta vs baseline: **-3.12pp**
+— smaller than the buggy readings suggested, and inside this harness's
+established ~7.8pp noise-floor band. Unlike EXP_ELO_097 (a confirmed,
+reproduced real cost at the edge of/past the noise floor), this reading
+is not distinguishable from sampling noise at n=128 — the paired gauge
+does not show a clear win-rate cost either way.
+
+Disposition: **SHIPPED**. Both stated goals hold up under verification:
+(1) real seed0 behavior matches Verdi's description exactly (mine order,
+forge sites, checked whole-game not just the flagged decision), (2) the
+paired gauge shows no confirmed win-rate cost (delta within noise,
+unlike 097/098's confirmed costs). Chasing a larger n to further narrow
+the noise band is a reasonable next step but not a blocker — there is no
+positive evidence of harm to weigh against the verified behavioral gain.
+Scope stays Mine lane only per the design; Sawmill/Windmill following
+the same pattern is a natural next step once this has more play behind
+it.
