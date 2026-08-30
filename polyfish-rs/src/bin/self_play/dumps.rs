@@ -2,6 +2,7 @@
 //! root ballot, and the EXPAND-plan tripwire that records whether each painted
 //! plan was achieved, contested, or dropped.
 
+use polyfish::ai::brain::Brain;
 use polyfish::states::{GameState, PlayerId};
 use serde_json::json;
 use std::fs::File;
@@ -244,5 +245,138 @@ pub(crate) fn dump_macro_policy_row(
     });
     if let Ok(s) = serde_json::to_string(&rec) {
         let _ = writeln!(file, "{s}");
+    }
+}
+
+/// Opens `<dir>/game<idx>.jsonl`, truncating. Distinct `game_idx` per actor
+/// means no cross-thread contention on the handle. A tag names the flag in
+/// the warning so a failed dump is attributable; failures are non-fatal --
+/// diagnostics never abort a training run.
+pub(crate) fn open_game_jsonl(dir: Option<&str>, tag: &str, game_idx: usize) -> Option<File> {
+    let dir = dir?;
+    let path = std::path::Path::new(dir);
+    if let Err(e) = std::fs::create_dir_all(path) {
+        eprintln!("[{tag}] failed to create {}: {e}", path.display());
+        return None;
+    }
+    match File::create(path.join(format!("game{game_idx}.jsonl"))) {
+        Ok(f) => Some(f),
+        Err(e) => {
+            eprintln!("[{tag}] failed to open game file: {e}");
+            None
+        }
+    }
+}
+
+/// Writes the reward-choice and pop-spend candidate dumps for this ply.
+///
+/// Both consume `take_trace()`, so they only ever produce rows under a
+/// backend that builds one (Gumbel); with a zero-search backend they are
+/// silently inert.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn write_choice_dumps(
+    state: &GameState,
+    pov: PlayerId,
+    agent: &mut Brain<'_>,
+    reward_choice_ply: bool,
+    pop_spend_ply: bool,
+    reward_choice_file: &mut Option<File>,
+    pop_spend_file: &mut Option<File>,
+    pop_spend_dumped: &mut usize,
+    last_pop_spend_turn: &mut i32,
+) {
+    if reward_choice_ply {
+        if let Some(trace) = agent.take_trace() {
+            if let Some(f) = reward_choice_file.as_mut() {
+                let width = state.settings.size as usize;
+                let revealed = state
+                    
+                    .tiles
+                    .values()
+                    .filter(|t| t.explorers.contains(&pov))
+                    .count() as f32;
+                let hidden_frac = (1.0 - revealed / (width * width) as f32).max(0.0);
+                let cands: Vec<serde_json::Value> = trace
+                    .candidates
+                    .iter()
+                    .map(|c| {
+                        json!({
+                            "desc": c.description,
+                            "q": c.q_value,
+                            "visits": c.visits,
+                            "own_value": c.own_value,
+                            "edge_reward": c.edge_reward,
+                            "prior": c.search_prior_prob,
+                            "raw_prob": c.raw_net_prob,
+                        })
+                    })
+                    .collect();
+                let row = json!({
+                    "turn": state.settings.turn,
+                    "player_id": pov,
+                    "hidden_frac": hidden_frac,
+                    "chosen_idx": trace.chosen_candidate_idx,
+                    "root_value": trace.root_search_value,
+                    "candidates": cands,
+                });
+                let _ = writeln!(f, "{row}");
+            }
+        }
+    }
+
+    if pop_spend_ply {
+        if let Some(trace) = agent.take_trace() {
+            if let Some(f) = pop_spend_file.as_mut() {
+                const ECON_TYPES: [&str; 5] =
+                    ["Harvest", "Build", "Summon", "Research", "EndTurn"];
+                let cands: Vec<serde_json::Value> = trace
+                    .candidates
+                    .iter()
+                    .filter(|c| ECON_TYPES.contains(&c.move_type.as_str()))
+                    .map(|c| {
+                        json!({
+                            "desc": c.description,
+                            "move_type": c.move_type,
+                            "q": c.q_value,
+                            "visits": c.visits,
+                            "prior": c.search_prior_prob,
+                            "own_value": c.own_value,
+                        })
+                    })
+                    .collect();
+                if !cands.is_empty() {
+                    let chosen = trace
+                        .candidates
+                        .get(trace.chosen_candidate_idx)
+                        .map(|c| c.description.clone())
+                        .unwrap_or_default();
+                    let tribe = state.tribes.get(&pov);
+                    let cities: Vec<serde_json::Value> = tribe
+                        .map(|t| {
+                            t.cities
+                                .iter()
+                                .map(|c| json!({
+                                    "idx": c.idx,
+                                    "level": c.level,
+                                    "progress": c.progress,
+                                }))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let row = json!({
+                        "turn": state.settings.turn,
+                        "player_id": pov,
+                        "stars": tribe.map(|t| t.stars).unwrap_or(0),
+                        "units": tribe.map(|t| t.units.len()).unwrap_or(0),
+                        "cities": cities,
+                        "chosen": chosen,
+                        "candidates": cands,
+                    });
+                    let _ = writeln!(f, "{row}");
+                    *pop_spend_dumped += 1;
+                    *last_pop_spend_turn = state.settings.turn;
+                }
+            }
+        }
     }
 }

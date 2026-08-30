@@ -21,22 +21,20 @@ use polyfish::states::PlayerId;
 use polyfish::types::MapSize;
 use serde_json::json;
 use std::collections::HashMap;
-use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 
 use crate::crutches::{HEURISTIC_PRIOR_DECAY, HEURISTIC_PRIOR_W0, decay_crutch};
-use crate::dumps::{PlanTracker, dump_macro_policy_row, dump_turn_state, update_plans};
+use crate::dumps::{PlanTracker, open_game_jsonl, write_choice_dumps, dump_macro_policy_row, dump_turn_state, update_plans};
 use crate::labels::{POLICY_TARGET_Q_RAMP_ITERS, macro_ballot_for_history_step,
                     enemy_unit_grid, tech_multihot};
 use crate::result::{DecomposedPolicyData, GameResult, HistoryStep, decompose_visits,
                     group_recap};
-use crate::stats::{is_net_seat, record_spt_at_turn_start, t2c_turn, turn_milestones};
+use crate::stats::{is_net_seat, score_hubs, record_spt_at_turn_start, t2c_turn, turn_milestones};
 use crate::tempo::{TempoTrack, tempo_sample, unit_tally};
-use crate::traces::{TraceTrigger, TracedDecision, dump_failed_game, find_harvest_trigger,
-                    find_village_pursuit_trigger, find_village_trigger, find_wander_trigger,
-                    write_decision_trace};
+use crate::traces::{TraceTrigger, TraceWindows, TracedDecision, dump_failed_game,
+                    write_ply_traces};
 use crate::ProgressMode;
 
 /// Load the main network (and opponent network, defaulting to the main one)
@@ -210,35 +208,13 @@ pub(crate) fn play_single_game(
     // --dump-turn-states: one JSONL file per game, one record per player-turn
     // (written post-search, pre-move — see the Stage 4 dump below). Distinct
     // game_idx => no cross-actor contention; created/truncated once here.
-    let mut turn_dump_file: Option<File> = None;
-    if let Some(dir) = dump_turn_states {
-        let path = std::path::Path::new(dir);
-        if let Err(e) = std::fs::create_dir_all(path) {
-            eprintln!("[dump-turn-states] failed to create {}: {e}", path.display());
-        } else {
-            match File::create(path.join(format!("game{game_idx}.jsonl"))) {
-                Ok(f) => turn_dump_file = Some(f),
-                Err(e) => eprintln!("[dump-turn-states] failed to open game file: {e}"),
-            }
-        }
-    }
+    let mut turn_dump_file = open_game_jsonl(dump_turn_states, "dump-turn-states", game_idx);
     let mut last_dump_key: Option<(i32, PlayerId)> = None;
 
     // --dump-macro-policy: one JSONL file per game, one record per macro
     // root decision (Stage 3b first step — see the Stage 4 dump below for
     // the write, same once-per-(turn,pov) dedup as turn_dump_file).
-    let mut macro_policy_file: Option<File> = None;
-    if let Some(dir) = dump_macro_policy {
-        let path = std::path::Path::new(dir);
-        if let Err(e) = std::fs::create_dir_all(path) {
-            eprintln!("[dump-macro-policy] failed to create {}: {e}", path.display());
-        } else {
-            match File::create(path.join(format!("game{game_idx}.jsonl"))) {
-                Ok(f) => macro_policy_file = Some(f),
-                Err(e) => eprintln!("[dump-macro-policy] failed to open game file: {e}"),
-            }
-        }
-    }
+    let mut macro_policy_file = open_game_jsonl(dump_macro_policy, "dump-macro-policy", game_idx);
     let mut last_macro_policy_key: Option<(i32, PlayerId)> = None;
     // Separate from `last_macro_policy_key`: that tracker only advances
     // inside the `--dump-macro-policy` branch, which is `None` (off) during
@@ -252,18 +228,7 @@ pub(crate) fn play_single_game(
     // forced (generate_reward_moves preempts everything else when a choice
     // is pending — moves/mod.rs), so this is a clean, uncontested read of
     // what the policy actually wants at each level, no Step competition.
-    let mut city_reward_file: Option<File> = None;
-    if let Some(dir) = dump_city_rewards {
-        let path = std::path::Path::new(dir);
-        if let Err(e) = std::fs::create_dir_all(path) {
-            eprintln!("[dump-city-rewards] failed to create {}: {e}", path.display());
-        } else {
-            match File::create(path.join(format!("game{game_idx}.jsonl"))) {
-                Ok(f) => city_reward_file = Some(f),
-                Err(e) => eprintln!("[dump-city-rewards] failed to open game file: {e}"),
-            }
-        }
-    }
+    let mut city_reward_file = open_game_jsonl(dump_city_rewards, "dump-city-rewards", game_idx);
 
     // --dump-star-spend: one JSONL record per Research/Harvest/Build/Summon
     // move actually executed — (turn, player, move type, stars spent =
@@ -277,65 +242,21 @@ pub(crate) fn play_single_game(
     // Per hub type: (chosen tile, builder, every tile it could legally have used).
     let mut first_hub_sites: HashMap<polyfish::types::StructureType, (i32, PlayerId, Vec<i32>)> =
         HashMap::new();
-    let mut star_spend_file: Option<File> = None;
-    if let Some(dir) = dump_star_spend {
-        let path = std::path::Path::new(dir);
-        if let Err(e) = std::fs::create_dir_all(path) {
-            eprintln!("[dump-star-spend] failed to create {}: {e}", path.display());
-        } else {
-            match File::create(path.join(format!("game{game_idx}.jsonl"))) {
-                Ok(f) => star_spend_file = Some(f),
-                Err(e) => eprintln!("[dump-star-spend] failed to open game file: {e}"),
-            }
-        }
-    }
+    let mut star_spend_file = open_game_jsonl(dump_star_spend, "dump-star-spend", game_idx);
     // --dump-reward-choices: one JSONL record per city-reward choice ply with
     // the full search trace of the (modal) candidate pair — per-candidate
     // post-search Q, visits, prior, edge reward — for Q-gap sizing of the
     // reward-choice pricing terms. Not combinable with --dump-failed-dir
     // (that path consumes the trace first).
-    let mut reward_choice_file: Option<File> = None;
-    if let Some(dir) = dump_reward_choices {
-        let path = std::path::Path::new(dir);
-        if let Err(e) = std::fs::create_dir_all(path) {
-            eprintln!("[dump-reward-choices] failed to create {}: {e}", path.display());
-        } else {
-            match File::create(path.join(format!("game{game_idx}.jsonl"))) {
-                Ok(f) => reward_choice_file = Some(f),
-                Err(e) => eprintln!("[dump-reward-choices] failed to open game file: {e}"),
-            }
-        }
-    }
+    let mut reward_choice_file = open_game_jsonl(dump_reward_choices, "dump-reward-choices", game_idx);
 
     // --dump-level-completion: one JSONL record per executed Harvest/Build
     // with owning-city level/progress and stars before/after.
-    let mut level_completion_file: Option<File> = None;
-    if let Some(dir) = dump_level_completion {
-        let path = std::path::Path::new(dir);
-        if let Err(e) = std::fs::create_dir_all(path) {
-            eprintln!("[dump-level-completion] failed to create {}: {e}", path.display());
-        } else {
-            match File::create(path.join(format!("game{game_idx}.jsonl"))) {
-                Ok(f) => level_completion_file = Some(f),
-                Err(e) => eprintln!("[dump-level-completion] failed to open game file: {e}"),
-            }
-        }
-    }
+    let mut level_completion_file = open_game_jsonl(dump_level_completion, "dump-level-completion", game_idx);
 
     // --dump-pop-spend-choices: sampled early-economy ply traces for Q-gap
     // sizing of the completion-discipline and body-count terms.
-    let mut pop_spend_file: Option<File> = None;
-    if let Some(dir) = dump_pop_spend_choices {
-        let path = std::path::Path::new(dir);
-        if let Err(e) = std::fs::create_dir_all(path) {
-            eprintln!("[dump-pop-spend-choices] failed to create {}: {e}", path.display());
-        } else {
-            match File::create(path.join(format!("game{game_idx}.jsonl"))) {
-                Ok(f) => pop_spend_file = Some(f),
-                Err(e) => eprintln!("[dump-pop-spend-choices] failed to open game file: {e}"),
-            }
-        }
-    }
+    let mut pop_spend_file = open_game_jsonl(dump_pop_spend_choices, "dump-pop-spend-choices", game_idx);
     let mut pop_spend_dumped: usize = 0;
     let mut last_pop_spend_turn: i32 = -1;
 
@@ -430,31 +351,10 @@ pub(crate) fn play_single_game(
     let mut tempo: HashMap<PlayerId, TempoTrack> = HashMap::new();
     let mut last_tempo_key: Option<(i32, PlayerId)> = None;
     let mut prev_tally = unit_tally(&game.state);
-
     let mut move_count = 0;
     let mut net_moves = 0; // net-seat plies only (excludes Greedy/opponent seats)
-    // Up to 3 traces per game, spaced >= 3 game-turns apart, to sample several
-    // mid-game stalled decisions rather than only the turn-15 entry ply.
-    let mut traces_this_game = 0usize;
-    let mut last_trace_turn = -100i32;
-    // HarvestReady window state: fires once per game, then captures every
-    // ply belonging to the triggering player for the trigger turn + the
-    // next 3 turns (not just the first ply of each turn — Step and
-    // Harvest/Build aren't exclusive within a turn; the real question is
-    // whether Harvest/Build gets picked up once Step options run dry).
-    let mut harvest_trigger_turn: Option<i32> = None;
-    let mut harvest_trigger_tile: i32 = -1;
-    let mut harvest_trigger_pov: Option<PlayerId> = None;
-    // VillagePursuit window state: same shape as HarvestReady's — fires once
-    // per game, then captures every ply belonging to the triggering player
-    // for the trigger turn + the next 3 turns.
-    let mut pursuit_trigger_turn: Option<i32> = None;
-    let mut pursuit_trigger_village: i32 = -1;
-    let mut pursuit_trigger_pov: Option<PlayerId> = None;
-    // Wander window state: same shape as VillagePursuit's.
-    let mut wander_trigger_turn: Option<i32> = None;
-    let mut wander_trigger_unit: i32 = -1;
-    let mut wander_trigger_pov: Option<PlayerId> = None;
+    // Trace-window state for every trigger kind (see traces::TraceWindows).
+    let mut windows = TraceWindows::new();
     // v2.3 tech-cap counters: Research moves executed per seat (ruin-granted
     // techs never pass through a Research move, so they don't count).
     let mut techs_bought = [0u32; 2];
@@ -544,94 +444,11 @@ pub(crate) fn play_single_game(
         current_agent.set_macro_goal(macro_goal.clone(), star_gate);
         current_agent.set_goal_aux(goal_aux);
 
-        let trigger_info = if trace_villages
-            && !trace_all
-            && !matches!(
-                trace_trigger,
-                TraceTrigger::HarvestReady | TraceTrigger::VillagePursuit | TraceTrigger::Wander
-            )
-            && traces_this_game < 3
-            && game.state.settings.turn >= last_trace_turn + 3
-            && trace_counter.load(Ordering::Relaxed) < trace_max
-        {
-            find_village_trigger(&game.state, pov, &open_villages, trace_trigger)
-        } else {
-            None
-        };
-
-        // HarvestReady: (trigger_tile, turns_since_trigger) for THIS ply, if
-        // it belongs to the triggering player and falls inside the
-        // [trigger_turn, trigger_turn+3] window. Captures EVERY such ply
-        // (not just the first per turn) so post-hoc analysis can bucket by
-        // how many Step candidates were still live at capture time.
-        let harvest_capture = if trace_villages
-            && !trace_all
-            && trace_trigger == TraceTrigger::HarvestReady
-            && trace_counter.load(Ordering::Relaxed) < trace_max
-        {
-            if harvest_trigger_turn.is_none() {
-                if let Some(tile) = find_harvest_trigger(&game.state, pov) {
-                    harvest_trigger_turn = Some(game.state.settings.turn);
-                    harvest_trigger_tile = tile;
-                    harvest_trigger_pov = Some(pov);
-                }
-            }
-            harvest_trigger_turn.and_then(|start| {
-                let turn = game.state.settings.turn;
-                (harvest_trigger_pov == Some(pov) && turn <= start + 3)
-                    .then_some((harvest_trigger_tile, turn - start))
-            })
-        } else {
-            None
-        };
-
-        // VillagePursuit: (trigger_village, turns_since_trigger) for THIS
-        // ply, same window/every-ply shape as HarvestReady above.
-        let pursuit_capture = if trace_villages
-            && !trace_all
-            && trace_trigger == TraceTrigger::VillagePursuit
-            && trace_counter.load(Ordering::Relaxed) < trace_max
-        {
-            if pursuit_trigger_turn.is_none() {
-                if let Some(village) =
-                    find_village_pursuit_trigger(&game.state, pov, &open_villages)
-                {
-                    pursuit_trigger_turn = Some(game.state.settings.turn);
-                    pursuit_trigger_village = village;
-                    pursuit_trigger_pov = Some(pov);
-                }
-            }
-            pursuit_trigger_turn.and_then(|start| {
-                let turn = game.state.settings.turn;
-                (pursuit_trigger_pov == Some(pov) && turn <= start + 3)
-                    .then_some((pursuit_trigger_village, turn - start))
-            })
-        } else {
-            None
-        };
-
-        // Wander: (trigger_unit, turns_since_trigger) for THIS ply, same
-        // window/every-ply shape as VillagePursuit above.
-        let wander_capture = if trace_villages
-            && !trace_all
-            && trace_trigger == TraceTrigger::Wander
-            && trace_counter.load(Ordering::Relaxed) < trace_max
-        {
-            if wander_trigger_turn.is_none() {
-                if let Some(unit) = find_wander_trigger(&game.state, pov, &open_villages) {
-                    wander_trigger_turn = Some(game.state.settings.turn);
-                    wander_trigger_unit = unit;
-                    wander_trigger_pov = Some(pov);
-                }
-            }
-            wander_trigger_turn.and_then(|start| {
-                let turn = game.state.settings.turn;
-                (wander_trigger_pov == Some(pov) && turn <= start + 3)
-                    .then_some((wander_trigger_unit, turn - start))
-            })
-        } else {
-            None
-        };
+        let (trigger_info, harvest_capture, pursuit_capture, wander_capture) =
+            windows.for_ply(
+                &game.state, pov, trace_villages, trace_all, trace_trigger,
+                trace_counter, trace_max, &open_villages,
+            );
 
         // Reward-choice ply? (modal — generate_reward_moves preempts all
         // other moves, so the root is exactly the pending choice pair(s))
@@ -732,208 +549,18 @@ pub(crate) fn play_single_game(
             }
         }
 
-        if reward_choice_ply {
-            if let Some(trace) = current_agent.take_trace() {
-                if let Some(f) = reward_choice_file.as_mut() {
-                    let width = game.state.settings.size as usize;
-                    let revealed = game
-                        .state
-                        .tiles
-                        .values()
-                        .filter(|t| t.explorers.contains(&pov))
-                        .count() as f32;
-                    let hidden_frac = (1.0 - revealed / (width * width) as f32).max(0.0);
-                    let cands: Vec<serde_json::Value> = trace
-                        .candidates
-                        .iter()
-                        .map(|c| {
-                            json!({
-                                "desc": c.description,
-                                "q": c.q_value,
-                                "visits": c.visits,
-                                "own_value": c.own_value,
-                                "edge_reward": c.edge_reward,
-                                "prior": c.search_prior_prob,
-                                "raw_prob": c.raw_net_prob,
-                            })
-                        })
-                        .collect();
-                    let row = json!({
-                        "turn": game.state.settings.turn,
-                        "player_id": pov,
-                        "hidden_frac": hidden_frac,
-                        "chosen_idx": trace.chosen_candidate_idx,
-                        "root_value": trace.root_search_value,
-                        "candidates": cands,
-                    });
-                    let _ = writeln!(f, "{row}");
-                }
-            }
-        }
+        write_choice_dumps(
+            &game.state, pov, current_agent, reward_choice_ply, pop_spend_ply,
+            &mut reward_choice_file, &mut pop_spend_file, &mut pop_spend_dumped,
+            &mut last_pop_spend_turn,
+        );
 
-        if pop_spend_ply {
-            if let Some(trace) = current_agent.take_trace() {
-                if let Some(f) = pop_spend_file.as_mut() {
-                    const ECON_TYPES: [&str; 5] =
-                        ["Harvest", "Build", "Summon", "Research", "EndTurn"];
-                    let cands: Vec<serde_json::Value> = trace
-                        .candidates
-                        .iter()
-                        .filter(|c| ECON_TYPES.contains(&c.move_type.as_str()))
-                        .map(|c| {
-                            json!({
-                                "desc": c.description,
-                                "move_type": c.move_type,
-                                "q": c.q_value,
-                                "visits": c.visits,
-                                "prior": c.search_prior_prob,
-                                "own_value": c.own_value,
-                            })
-                        })
-                        .collect();
-                    if !cands.is_empty() {
-                        let chosen = trace
-                            .candidates
-                            .get(trace.chosen_candidate_idx)
-                            .map(|c| c.description.clone())
-                            .unwrap_or_default();
-                        let tribe = game.state.tribes.get(&pov);
-                        let cities: Vec<serde_json::Value> = tribe
-                            .map(|t| {
-                                t.cities
-                                    .iter()
-                                    .map(|c| json!({
-                                        "idx": c.idx,
-                                        "level": c.level,
-                                        "progress": c.progress,
-                                    }))
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        let row = json!({
-                            "turn": game.state.settings.turn,
-                            "player_id": pov,
-                            "stars": tribe.map(|t| t.stars).unwrap_or(0),
-                            "units": tribe.map(|t| t.units.len()).unwrap_or(0),
-                            "cities": cities,
-                            "chosen": chosen,
-                            "candidates": cands,
-                        });
-                        let _ = writeln!(f, "{row}");
-                        pop_spend_dumped += 1;
-                        last_pop_spend_turn = game.state.settings.turn;
-                    }
-                }
-            }
-        }
-
-        if let Some((trigger_unit_idx, trigger_village_idx)) = trigger_info {
-            if let Some(trace) = current_agent.take_trace() {
-                if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
-                    let mut visible_villages: Vec<i32> = open_villages
-                        .iter()
-                        .copied()
-                        .filter(|idx| {
-                            game.state
-                                .tiles
-                                .get(idx)
-                                .map_or(false, |t| t.explorers.contains(&pov))
-                        })
-                        .collect();
-                    // Sorted: `open_villages` is a std HashSet, so its iteration order is
-                    // randomized per process and would otherwise leak into this dump.
-                    visible_villages.sort_unstable();
-                    write_decision_trace(
-                        "decision_traces",
-                        &trace,
-                        iteration,
-                        game_idx,
-                        game.state.settings.turn,
-                        move_count,
-                        pov,
-                        trigger_unit_idx,
-                        trigger_village_idx,
-                        &visible_villages,
-                        None,
-                    );
-                }
-                traces_this_game += 1;
-                last_trace_turn = game.state.settings.turn;
-            }
-        }
-
-        if let Some((trigger_tile, turns_since)) = harvest_capture {
-            if let Some(trace) = current_agent.take_trace() {
-                if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
-                    write_decision_trace(
-                        "decision_traces_harvest",
-                        &trace,
-                        iteration,
-                        game_idx,
-                        game.state.settings.turn,
-                        move_count,
-                        pov,
-                        trigger_tile,
-                        -1,
-                        &[],
-                        Some(turns_since),
-                    );
-                }
-            }
-        }
-
-        if let Some((trigger_village, turns_since)) = pursuit_capture {
-            if let Some(trace) = current_agent.take_trace() {
-                if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
-                    write_decision_trace(
-                        "decision_traces_pursuit",
-                        &trace,
-                        iteration,
-                        game_idx,
-                        game.state.settings.turn,
-                        move_count,
-                        pov,
-                        -1,
-                        trigger_village,
-                        &[],
-                        Some(turns_since),
-                    );
-                }
-            }
-        }
-
-        if let Some((trigger_unit, turns_since)) = wander_capture {
-            if let Some(trace) = current_agent.take_trace() {
-                if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
-                    let mut visible_villages: Vec<i32> = open_villages
-                        .iter()
-                        .copied()
-                        .filter(|idx| {
-                            game.state
-                                .tiles
-                                .get(idx)
-                                .map_or(false, |t| t.explorers.contains(&pov))
-                        })
-                        .collect();
-                    // Sorted: `open_villages` is a std HashSet, so its iteration order is
-                    // randomized per process and would otherwise leak into this dump.
-                    visible_villages.sort_unstable();
-                    write_decision_trace(
-                        "decision_traces_wander",
-                        &trace,
-                        iteration,
-                        game_idx,
-                        game.state.settings.turn,
-                        move_count,
-                        pov,
-                        trigger_unit,
-                        -1,
-                        &visible_villages,
-                        Some(turns_since),
-                    );
-                }
-            }
-        }
+        write_ply_traces(
+            &game.state, pov, current_agent, &open_villages, trace_counter,
+            trace_max, iteration, game_idx, move_count, trigger_info,
+            harvest_capture, pursuit_capture, wander_capture,
+            &mut windows.traces_this_game, &mut windows.last_trace_turn,
+        );
 
         let map_size = game.state.settings.size as usize;
 
@@ -1031,8 +658,7 @@ pub(crate) fn play_single_game(
                                 "reward": format!("{:?}", reward_type),
                             });
                             if let Ok(s) = serde_json::to_string(&line) {
-                                use std::io::Write;
-                                let _ = writeln!(f, "{s}");
+                                                                let _ = writeln!(f, "{s}");
                             }
                         }
                     }
@@ -1274,8 +900,7 @@ pub(crate) fn play_single_game(
                     "stars_spent": (stars_before - stars_after).max(0),
                 });
                 if let Ok(s) = serde_json::to_string(&line) {
-                    use std::io::Write;
-                    let _ = writeln!(f, "{s}");
+                                        let _ = writeln!(f, "{s}");
                 }
             }
             if let (
@@ -1312,8 +937,7 @@ pub(crate) fn play_single_game(
                         "threatened": threatened,
                     });
                     if let Ok(s) = serde_json::to_string(&line) {
-                        use std::io::Write;
-                        let _ = writeln!(f, "{s}");
+                                                let _ = writeln!(f, "{s}");
                     }
                 }
             }
@@ -1448,87 +1072,8 @@ pub(crate) fn play_single_game(
         })
         .sum();
 
-    // Realized level of the hubs the net BUILT (see `built_hubs`), scored at
-    // game end so a hub that grows as later partners go down is credited —
-    // partners are counted the way `build_structure` pays them, but against the
-    // BUILDER's ownership, so value lost with the territory reads as lost.
-    let mut hub_levels: HashMap<polyfish::types::StructureType, (u32, i64, u32, u32)> =
-        HashMap::new();
-    for (idx, s_type, builder) in &built_hubs {
-        let settings = polyfish::settings::structures::get_structure_setting(*s_type);
-        let still_held = game
-            .state
-            .tiles
-            .get(idx)
-            .is_some_and(|t| t.owner == *builder);
-        let partners = polyfish::functions::get_adjacent_indices(&game.state, *idx, 1)
-            .into_iter()
-            .filter(|adj| {
-                game.state.tiles.get(adj).is_some_and(|t| t.owner == *builder)
-                    && polyfish::functions::get_structure_at(&game.state, *adj)
-                        .is_some_and(|p| settings.adjacent_types.contains(&p.structure_type))
-            })
-            .count() as i64;
-        let e = hub_levels.entry(*s_type).or_insert((0, 0, 0, 0));
-        e.0 += 1;
-        e.1 += partners;
-        e.2 += u32::from(partners <= 1);
-        e.3 += u32::from(!still_held);
-    }
-
-    // Rank the tile the net actually used against every tile it could have used,
-    // both scored on partners standing at game end.
-    let mut first_hub_rank: HashMap<polyfish::types::StructureType, (i64, i64, u32, u32, i64, i64)> =
-        HashMap::new();
-    for (s_type, (chosen, builder, cands)) in &first_hub_sites {
-        let settings = polyfish::settings::structures::get_structure_setting(*s_type);
-        let partners_at = |idx: i32| -> i64 {
-            polyfish::functions::get_adjacent_indices(&game.state, idx, 1)
-                .into_iter()
-                .filter(|adj| {
-                    game.state.tiles.get(adj).is_some_and(|t| t.owner == *builder)
-                        && polyfish::functions::get_structure_at(&game.state, *adj)
-                            .is_some_and(|p| settings.adjacent_types.contains(&p.structure_type))
-                })
-                .count() as i64
-        };
-        // TERRAIN ceiling: adjacent tiles that could ever host a partner, by
-        // terrain + resource alone. Independent of what the net actually built,
-        // so it does not inherit the hut-building policy the way `partners_at`
-        // does — this is the site's potential, which is the real question.
-        let ceiling_at = |idx: i32| -> i64 {
-            polyfish::functions::get_adjacent_indices(&game.state, idx, 1)
-                .into_iter()
-                .filter(|&adj| {
-                    let Some(tile) = game.state.tiles.get(&adj) else { return false };
-                    settings.adjacent_types.iter().any(|p| {
-                        let ps = polyfish::settings::structures::get_structure_setting(*p);
-                        if !ps.terrain_types.contains(&tile.terrain_type) || tile.is_algae() {
-                            return false;
-                        }
-                        match ps.resource_type {
-                            Some(r) => game
-                                .state
-                                .resources
-                                .get(&adj)
-                                .and_then(|o| o.as_ref())
-                                .is_some_and(|res| res.resource_type == r),
-                            None => true,
-                        }
-                    })
-                })
-                .count() as i64
-        };
-        let got = partners_at(*chosen);
-        let best = cands.iter().map(|&c| partners_at(c)).max().unwrap_or(got).max(got);
-        let n_better = cands.iter().filter(|&&c| partners_at(c) > got).count() as u32;
-        let ceil_got = ceiling_at(*chosen);
-        let ceil_best = cands.iter().map(|&c| ceiling_at(c)).max().unwrap_or(ceil_got).max(ceil_got);
-        first_hub_rank.insert(
-            *s_type,
-            (got, best, n_better, cands.len() as u32, ceil_got, ceil_best),
-        );
-    }
+    let (hub_levels, first_hub_rank) =
+        score_hubs(&game.state, &built_hubs, &first_hub_sites);
 
     let mut final_cities = HashMap::new();
     let mut total_cities = 0;

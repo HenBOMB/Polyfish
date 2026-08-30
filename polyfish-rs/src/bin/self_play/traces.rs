@@ -5,7 +5,9 @@
 use polyfish::TribeType;
 use polyfish::ai::brain::SearchBackend;
 use polyfish::replayer::ModReplay;
+use polyfish::ai::brain::Brain;
 use polyfish::states::{GameState, PlayerId};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -335,5 +337,273 @@ pub(crate) fn dump_failed_game(
             }
         }
         Err(e) => eprintln!("[dump-failed] failed to serialize decisions: {e}"),
+    }
+}
+
+/// Writes whichever trigger fired on this ply, in a fixed order.
+///
+/// `take_trace()` CONSUMES the search's captured trace, so at most one of
+/// these branches can produce output per ply and the order they are tested in
+/// is the priority order. Do not reorder or merge them.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn write_ply_traces(
+    state: &GameState,
+    pov: PlayerId,
+    agent: &mut Brain<'_>,
+    open_villages: &std::collections::HashSet<i32>,
+    trace_counter: &AtomicUsize,
+    trace_max: usize,
+    iteration: usize,
+    game_idx: usize,
+    move_count: usize,
+    trigger_info: Option<(i32, i32)>,
+    harvest_capture: Option<(i32, i32)>,
+    pursuit_capture: Option<(i32, i32)>,
+    wander_capture: Option<(i32, i32)>,
+    traces_this_game: &mut usize,
+    last_trace_turn: &mut i32,
+) {
+    if let Some((trigger_unit_idx, trigger_village_idx)) = trigger_info {
+        if let Some(trace) = agent.take_trace() {
+            if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
+                let mut visible_villages: Vec<i32> = open_villages
+                    .iter()
+                    .copied()
+                    .filter(|idx| {
+                        state
+                            .tiles
+                            .get(idx)
+                            .map_or(false, |t| t.explorers.contains(&pov))
+                    })
+                    .collect();
+                // Sorted: `open_villages` is a std HashSet, so its iteration order is
+                // randomized per process and would otherwise leak into this dump.
+                visible_villages.sort_unstable();
+                write_decision_trace(
+                    "decision_traces",
+                    &trace,
+                    iteration,
+                    game_idx,
+                    state.settings.turn,
+                    move_count,
+                    pov,
+                    trigger_unit_idx,
+                    trigger_village_idx,
+                    &visible_villages,
+                    None,
+                );
+            }
+            *traces_this_game += 1;
+            *last_trace_turn = state.settings.turn;
+        }
+    }
+
+    if let Some((trigger_tile, turns_since)) = harvest_capture {
+        if let Some(trace) = agent.take_trace() {
+            if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
+                write_decision_trace(
+                    "decision_traces_harvest",
+                    &trace,
+                    iteration,
+                    game_idx,
+                    state.settings.turn,
+                    move_count,
+                    pov,
+                    trigger_tile,
+                    -1,
+                    &[],
+                    Some(turns_since),
+                );
+            }
+        }
+    }
+
+    if let Some((trigger_village, turns_since)) = pursuit_capture {
+        if let Some(trace) = agent.take_trace() {
+            if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
+                write_decision_trace(
+                    "decision_traces_pursuit",
+                    &trace,
+                    iteration,
+                    game_idx,
+                    state.settings.turn,
+                    move_count,
+                    pov,
+                    -1,
+                    trigger_village,
+                    &[],
+                    Some(turns_since),
+                );
+            }
+        }
+    }
+
+    if let Some((trigger_unit, turns_since)) = wander_capture {
+        if let Some(trace) = agent.take_trace() {
+            if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
+                let mut visible_villages: Vec<i32> = open_villages
+                    .iter()
+                    .copied()
+                    .filter(|idx| {
+                        state
+                            .tiles
+                            .get(idx)
+                            .map_or(false, |t| t.explorers.contains(&pov))
+                    })
+                    .collect();
+                // Sorted: `open_villages` is a std HashSet, so its iteration order is
+                // randomized per process and would otherwise leak into this dump.
+                visible_villages.sort_unstable();
+                write_decision_trace(
+                    "decision_traces_wander",
+                    &trace,
+                    iteration,
+                    game_idx,
+                    state.settings.turn,
+                    move_count,
+                    pov,
+                    trigger_unit,
+                    -1,
+                    &visible_villages,
+                    Some(turns_since),
+                );
+            }
+        }
+    }
+}
+
+/// Per-game trace-window state.
+///
+/// Three of the six triggers are *windows*: they fire once, then keep
+/// capturing every ply of the triggering seat for the next three game turns.
+/// The other two are single-shot and rate-limited by `traces_this_game` /
+/// `last_trace_turn`. All of it is per-game, so it lives here rather than as
+/// eleven loose locals in the ply loop.
+#[derive(Default)]
+pub(crate) struct TraceWindows {
+    pub(crate) traces_this_game: usize,
+    pub(crate) last_trace_turn: i32,
+    harvest_trigger_turn: Option<i32>,
+    harvest_trigger_tile: i32,
+    harvest_trigger_pov: Option<PlayerId>,
+    pursuit_trigger_turn: Option<i32>,
+    pursuit_trigger_village: i32,
+    pursuit_trigger_pov: Option<PlayerId>,
+    wander_trigger_turn: Option<i32>,
+    wander_trigger_unit: i32,
+    wander_trigger_pov: Option<PlayerId>,
+}
+
+impl TraceWindows {
+    /// `last_trace_turn` starts far in the past so the first eligible ply is
+    /// not blocked by the >= 3-turn spacing rule.
+    pub(crate) fn new() -> Self {
+        Self { last_trace_turn: -100, ..Default::default() }
+    }
+
+    /// Which triggers, if any, fire on this ply:
+    /// `(village, harvest, pursuit, wander)`. Opens a window the first time
+    /// its condition holds, then reports every ply inside it.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn for_ply(
+        &mut self,
+        state: &GameState,
+        pov: PlayerId,
+        trace_villages: bool,
+        trace_all: bool,
+        trace_trigger: TraceTrigger,
+        trace_counter: &AtomicUsize,
+        trace_max: usize,
+        open_villages: &std::collections::HashSet<i32>,
+    ) -> (Option<(i32, i32)>, Option<(i32, i32)>, Option<(i32, i32)>, Option<(i32, i32)>) {
+    let trigger_info = if trace_villages
+        && !trace_all
+        && !matches!(
+            trace_trigger,
+            TraceTrigger::HarvestReady | TraceTrigger::VillagePursuit | TraceTrigger::Wander
+        )
+        && self.traces_this_game < 3
+        && state.settings.turn >= self.last_trace_turn + 3
+        && trace_counter.load(Ordering::Relaxed) < trace_max
+    {
+        find_village_trigger(&state, pov, &open_villages, trace_trigger)
+    } else {
+        None
+    };
+
+    // HarvestReady: (trigger_tile, turns_since_trigger) for THIS ply, if
+    // it belongs to the triggering player and falls inside the
+    // [trigger_turn, trigger_turn+3] window. Captures EVERY such ply
+    // (not just the first per turn) so post-hoc analysis can bucket by
+    // how many Step candidates were still live at capture time.
+    let harvest_capture = if trace_villages
+        && !trace_all
+        && trace_trigger == TraceTrigger::HarvestReady
+        && trace_counter.load(Ordering::Relaxed) < trace_max
+    {
+        if self.harvest_trigger_turn.is_none() {
+            if let Some(tile) = find_harvest_trigger(&state, pov) {
+                self.harvest_trigger_turn = Some(state.settings.turn);
+                self.harvest_trigger_tile = tile;
+                self.harvest_trigger_pov = Some(pov);
+            }
+        }
+        self.harvest_trigger_turn.and_then(|start| {
+            let turn = state.settings.turn;
+            (self.harvest_trigger_pov == Some(pov) && turn <= start + 3)
+                .then_some((self.harvest_trigger_tile, turn - start))
+        })
+    } else {
+        None
+    };
+
+    // VillagePursuit: (trigger_village, turns_since_trigger) for THIS
+    // ply, same window/every-ply shape as HarvestReady above.
+    let pursuit_capture = if trace_villages
+        && !trace_all
+        && trace_trigger == TraceTrigger::VillagePursuit
+        && trace_counter.load(Ordering::Relaxed) < trace_max
+    {
+        if self.pursuit_trigger_turn.is_none() {
+            if let Some(village) =
+                find_village_pursuit_trigger(&state, pov, &open_villages)
+            {
+                self.pursuit_trigger_turn = Some(state.settings.turn);
+                self.pursuit_trigger_village = village;
+                self.pursuit_trigger_pov = Some(pov);
+            }
+        }
+        self.pursuit_trigger_turn.and_then(|start| {
+            let turn = state.settings.turn;
+            (self.pursuit_trigger_pov == Some(pov) && turn <= start + 3)
+                .then_some((self.pursuit_trigger_village, turn - start))
+        })
+    } else {
+        None
+    };
+
+    // Wander: (trigger_unit, turns_since_trigger) for THIS ply, same
+    // window/every-ply shape as VillagePursuit above.
+    let wander_capture = if trace_villages
+        && !trace_all
+        && trace_trigger == TraceTrigger::Wander
+        && trace_counter.load(Ordering::Relaxed) < trace_max
+    {
+        if self.wander_trigger_turn.is_none() {
+            if let Some(unit) = find_wander_trigger(&state, pov, &open_villages) {
+                self.wander_trigger_turn = Some(state.settings.turn);
+                self.wander_trigger_unit = unit;
+                self.wander_trigger_pov = Some(pov);
+            }
+        }
+        self.wander_trigger_turn.and_then(|start| {
+            let turn = state.settings.turn;
+            (self.wander_trigger_pov == Some(pov) && turn <= start + 3)
+                .then_some((self.wander_trigger_unit, turn - start))
+        })
+    } else {
+        None
+    };
+        (trigger_info, harvest_capture, pursuit_capture, wander_capture)
     }
 }

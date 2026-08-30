@@ -4,7 +4,7 @@
 //! seats are excluded so mixed games report the training net alone.
 
 use polyfish::game::STARTING_OWNER_ID;
-use polyfish::states::PlayerId;
+use polyfish::states::{GameState, PlayerId};
 use std::collections::HashMap;
 
 /// Up to 5 evenly spaced turn thresholds for periodic in-game progress.
@@ -119,4 +119,102 @@ pub(crate) fn t2c_turn(capture_turns: &[i32], initial: usize, frac: f64, censor:
         .get(needed - 1)
         .map(|&t| t as f32)
         .unwrap_or(censor as f32)
+}
+
+/// Scores the adjacency hubs a net seat actually built.
+///
+/// Returns `(hub_levels, first_hub_rank)`: realized partner counts per
+/// structure type, and how the first site of each type ranked against every
+/// site that seat could legally have used. Attribution is by BUILDER, not by
+/// end-of-game tile owner -- the latter would credit captured anchor hubs.
+pub(crate) fn score_hubs(
+    state: &GameState,
+    built_hubs: &[(i32, polyfish::types::StructureType, PlayerId)],
+    first_hub_sites: &HashMap<polyfish::types::StructureType, (i32, PlayerId, Vec<i32>)>,
+) -> (
+    HashMap<polyfish::types::StructureType, (u32, i64, u32, u32)>,
+    HashMap<polyfish::types::StructureType, (i64, i64, u32, u32, i64, i64)>,
+) {
+// Realized level of the hubs the net BUILT (see `built_hubs`), scored at
+// game end so a hub that grows as later partners go down is credited —
+// partners are counted the way `build_structure` pays them, but against the
+// BUILDER's ownership, so value lost with the territory reads as lost.
+let mut hub_levels: HashMap<polyfish::types::StructureType, (u32, i64, u32, u32)> =
+    HashMap::new();
+for (idx, s_type, builder) in built_hubs {
+    let settings = polyfish::settings::structures::get_structure_setting(*s_type);
+    let still_held = state
+        
+        .tiles
+        .get(idx)
+        .is_some_and(|t| t.owner == *builder);
+    let partners = polyfish::functions::get_adjacent_indices(&state, *idx, 1)
+        .into_iter()
+        .filter(|adj| {
+            state.tiles.get(adj).is_some_and(|t| t.owner == *builder)
+                && polyfish::functions::get_structure_at(&state, *adj)
+                    .is_some_and(|p| settings.adjacent_types.contains(&p.structure_type))
+        })
+        .count() as i64;
+    let e = hub_levels.entry(*s_type).or_insert((0, 0, 0, 0));
+    e.0 += 1;
+    e.1 += partners;
+    e.2 += u32::from(partners <= 1);
+    e.3 += u32::from(!still_held);
+}
+
+// Rank the tile the net actually used against every tile it could have used,
+// both scored on partners standing at game end.
+let mut first_hub_rank: HashMap<polyfish::types::StructureType, (i64, i64, u32, u32, i64, i64)> =
+    HashMap::new();
+for (s_type, (chosen, builder, cands)) in first_hub_sites {
+    let settings = polyfish::settings::structures::get_structure_setting(*s_type);
+    let partners_at = |idx: i32| -> i64 {
+        polyfish::functions::get_adjacent_indices(&state, idx, 1)
+            .into_iter()
+            .filter(|adj| {
+                state.tiles.get(adj).is_some_and(|t| t.owner == *builder)
+                    && polyfish::functions::get_structure_at(&state, *adj)
+                        .is_some_and(|p| settings.adjacent_types.contains(&p.structure_type))
+            })
+            .count() as i64
+    };
+    // TERRAIN ceiling: adjacent tiles that could ever host a partner, by
+    // terrain + resource alone. Independent of what the net actually built,
+    // so it does not inherit the hut-building policy the way `partners_at`
+    // does — this is the site's potential, which is the real question.
+    let ceiling_at = |idx: i32| -> i64 {
+        polyfish::functions::get_adjacent_indices(&state, idx, 1)
+            .into_iter()
+            .filter(|&adj| {
+                let Some(tile) = state.tiles.get(&adj) else { return false };
+                settings.adjacent_types.iter().any(|p| {
+                    let ps = polyfish::settings::structures::get_structure_setting(*p);
+                    if !ps.terrain_types.contains(&tile.terrain_type) || tile.is_algae() {
+                        return false;
+                    }
+                    match ps.resource_type {
+                        Some(r) => state
+                            
+                            .resources
+                            .get(&adj)
+                            .and_then(|o| o.as_ref())
+                            .is_some_and(|res| res.resource_type == r),
+                        None => true,
+                    }
+                })
+            })
+            .count() as i64
+    };
+    let got = partners_at(*chosen);
+    let best = cands.iter().map(|&c| partners_at(c)).max().unwrap_or(got).max(got);
+    let n_better = cands.iter().filter(|&&c| partners_at(c) > got).count() as u32;
+    let ceil_got = ceiling_at(*chosen);
+    let ceil_best = cands.iter().map(|&c| ceiling_at(c)).max().unwrap_or(ceil_got).max(ceil_got);
+    first_hub_rank.insert(
+        *s_type,
+        (got, best, n_better, cands.len() as u32, ceil_got, ceil_best),
+    );
+}
+    (hub_levels, first_hub_rank)
 }
