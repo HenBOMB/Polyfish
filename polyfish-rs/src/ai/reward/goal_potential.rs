@@ -775,35 +775,129 @@ fn goal_potential_inner(
                     } else {
                         SHAPE_GOAL_EXPLORER_LIGHTHOUSE * dark_corners.len() as f32
                     };
-                    let mut bonus = SHAPE_GOAL_EXPLORER + lighthouse;
+                    let bonus = SHAPE_GOAL_EXPLORER + lighthouse;
+                    // hidden² (Jul 31): the reveal itself drains this part
+                    // of the term (the potential telescopes to the
+                    // horizon's h), and a linear ramp priced Explorer too
+                    // high on mostly-lit maps. Quadratic keeps the dark-map
+                    // edge dominant and the lit-map edge below Workshop's
+                    // measured Q lead. Scoped to base+lighthouse only as of
+                    // EXP_ELO_097 round 2 — see the frontier term below for
+                    // why it doesn't share this decay.
+                    let mut scaled = bonus * hidden_frac * hidden_frac;
                     // Frontier weighting (Verdi, Aug 2026): favors a city
                     // whose dark neighborhood leans enemy-facing over one
                     // that mostly reveals ground a walking unit could get
                     // for free. `belief` is hoisted per-ply (see
                     // `goal_potential_with_belief`'s doc); without one this
                     // is a no-op and behavior is byte-identical to legacy.
+                    //
+                    // EXP_ELO_097 round 2 (Verdi, Aug 2026): deliberately
+                    // NOT scaled by the GLOBAL hidden_frac² above.
+                    // `avg_frontier_in_reach` already decays on its own as
+                    // THIS city's specific neighborhood gets revealed (it
+                    // averages only over still-dark tiles there) — folding
+                    // in the whole-map fraction too double-counts "is there
+                    // still something to find" and crushed a strong, real
+                    // signal: city 49's avg_frontier_in_reach measured 4.81
+                    // (genuinely enemy-facing) at the seed0 turn-4 ply, but
+                    // hidden_frac was already down to ~0.31 map-wide, so
+                    // the old shared scaling cut a 300+ point signal to 47
+                    // — Workshop won a pick that should have gone the other
+                    // way (reward_choice_probe2.rs, verified against the
+                    // real accumulator, not hand math).
                     if let Some(belief) = belief {
                         let avg = avg_frontier_in_reach(state, belief, city, EXPLORER_WALK_RANGE);
-                        bonus += SHAPE_GOAL_EXPLORER_FRONTIER * (avg - FRONTIER_W_FOG).max(0.0);
+                        scaled += SHAPE_GOAL_EXPLORER_FRONTIER * (avg - FRONTIER_W_FOG).max(0.0);
                     }
                     // EXP_ELO_097: the capital is discounted every reward,
                     // not just its first — "Capital almost always
                     // workshop" (Verdi). Checked on the tile's own
                     // `capital_of`, not city count (see the constant's doc
                     // for why the old `cities.len() <= 1` proxy broke).
+                    // Applied to the frontier component too — "almost
+                    // always", not a hard exemption for the capital.
                     let is_capital = state
                         .tiles
                         .get(&city)
                         .map_or(false, |t| t.capital_of == player);
                     if is_capital {
-                        bonus *= SHAPE_GOAL_EXPLORER_CAPITAL_SCALE;
+                        scaled *= SHAPE_GOAL_EXPLORER_CAPITAL_SCALE;
                     }
-                    // hidden² (Jul 31): the reveal itself drains this Φ term
-                    // (the potential telescopes to the horizon's h), and a
-                    // linear ramp priced Explorer too high on mostly-lit
-                    // maps. Quadratic keeps the dark-map edge dominant and
-                    // the lit-map edge below Workshop's measured Q lead.
-                    acc.add("explorer", bonus * hidden_frac * hidden_frac);
+                    acc.add("explorer", scaled);
+                    // EXP_ELO_097 round 2: the "lighthouse" nudge above
+                    // (v4, a few dozen lines up) pays SHAPE_GOAL_LIGHTHOUSE
+                    // per revealed corner regardless of cause — including a
+                    // corner this city's OWN Explorer pick just revealed.
+                    // That's `moves/reward.rs`'s real engine effect
+                    // (`predict_explorer` + `discover_tiles`, executed
+                    // immediately, not a search-side approximation), so
+                    // it's real, certain value the capital discount above
+                    // never touches, since it lives in a different Φ term
+                    // entirely. Left uncorrected, a capital whose Explorer
+                    // happens to path through a corner silently un-does
+                    // "almost always workshop" the instant it's picked —
+                    // confirmed against the real accumulator at the seed0
+                    // turn-3 capital ply (reward_choice_probe2.rs): a
+                    // single corner hit (+120, undiscounted) was enough by
+                    // itself to flip the choice back to Explorer. Correct
+                    // it here rather than in the generic term, which must
+                    // stay agnostic to cause for the (correct, undiscounted)
+                    // non-capital and ordinary-exploration cases.
+                    //
+                    // This is a STANDING correction, not a one-shot: it
+                    // reads as "corner is within this city's explorer reach
+                    // AND already revealed", true both before and after any
+                    // LATER candidate move once the corner has been
+                    // revealed — so it nets to zero delta on every ply
+                    // except the exact pick ply itself, where the `explorer`
+                    // term's own gate (`c.rewards.contains(Explorer)`)
+                    // flips this whole per-city block from absent (pre) to
+                    // present (post), matching the generic lighthouse
+                    // term's own pre/post asymmetry exactly.
+                    //
+                    // Not distance-gated: `predict_explorer`'s real 12-step
+                    // walk can reach corners well beyond `EXPLORER_WALK_RANGE`
+                    // (that constant is calibrated for the CHANCE-based
+                    // lighthouse term above, a different question) — a first
+                    // attempt gated on it missed the seed0 capital's actual
+                    // revealed corner (distance 7, "in reach" only to 5) and
+                    // measured zero correction (reward_choice_probe2.rs).
+                    // Re-deriving via a fresh `predict_explorer` call doesn't
+                    // work either: that call reads CURRENT fog, and by the
+                    // post-pick state the corner is already lit, so a fresh
+                    // simulated walk reroutes toward remaining darkness and
+                    // never claims the very corner it just revealed (also
+                    // confirmed empirically before this cut). Any corner
+                    // revealed while this capital holds Explorer is
+                    // credited to it. Two known, accepted imprecisions: a
+                    // later, wholly unrelated corner reveal (an ordinary
+                    // unit wandering there turns 20+) gets slightly
+                    // under-priced too, since a single state snapshot can't
+                    // distinguish cause; and a second Explorer-holding city
+                    // at the same corner is a rare enough overlap to accept
+                    // for now. Both are minor next to the bug this fixes
+                    // (an undiscounted capital pick) and cheaper than
+                    // diffing state transitions inside a pure potential
+                    // function.
+                    if is_capital {
+                        let lit_corners = crate::coords::map_corners(width)
+                            .into_iter()
+                            .filter(|&c| {
+                                state
+                                    .tiles
+                                    .get(&c)
+                                    .map_or(false, |t| t.explorers.contains(&player))
+                            })
+                            .count();
+                        if lit_corners > 0 {
+                            let full = SHAPE_GOAL_LIGHTHOUSE * lit_corners as f32;
+                            acc.add(
+                                "explorer_capital_lighthouse_correction",
+                                full * (SHAPE_GOAL_EXPLORER_CAPITAL_SCALE - 1.0),
+                            );
+                        }
+                    }
                 }
             }
         }

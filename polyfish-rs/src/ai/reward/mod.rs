@@ -99,7 +99,7 @@ pub(crate) fn cheb(a: i32, b: i32, width: i32) -> i32 {
 mod dev_potential;
 mod economy_completion;
 mod goal_potential;
-mod goal_shape_consts;
+pub mod goal_shape_consts;
 
 pub use dev_potential::*;
 pub use economy_completion::*;
