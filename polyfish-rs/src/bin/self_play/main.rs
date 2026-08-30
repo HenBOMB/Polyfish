@@ -4,35 +4,34 @@
 use polyfish::ai::brain::{SearchBackend, SearchBackendArg};
 use polyfish::ai::macro_agent::{MacroLeaf, MacroParams};
 use polyfish::ai::eval_backend::{self, EvalBackendKind, PlayerBackend};
-use polyfish::ai::eval_server::{EvalServerConfig, EvalServerStats};
+use polyfish::ai::eval_server::EvalServerConfig;
 use polyfish::replayer::ModReplay;
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 mod crutches;
-use crutches::{ANCHOR_FRAC_DECAY, decay_crutch};
 mod result;
+mod runner;
+mod summary;
+use summary::print_run_summary;
+use runner::{report_eval_stats, run_games};
 mod labels;
-use result::GameResult;
 mod stats;
 mod tempo;
-use stats::{finish_milestones, is_net_seat};
+use stats::is_net_seat;
 mod traces;
 mod shard;
 mod game;
-use game::{load_networks, play_single_game};
+use game::load_networks;
 mod cli;
 mod dataset;
 use dataset::ShardBuffers;
 use cli::Args;
 mod dumps;
-use polyfish::eval_seeds::{CORE_TRIBES, SeedEntry, load_seed_file, parse_tribe,
-                            resolve_tribes, seed_for_game, tribes_for_game};
+use polyfish::eval_seeds::{SeedEntry, load_seed_file, parse_tribe, CORE_TRIBES};
 
 /// Console verbosity for long self-play runs.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -294,285 +293,14 @@ fn main() -> anyhow::Result<()> {
         device,
     );
 
-    let job_counter = Arc::new(AtomicUsize::new(0));
-    let games_completed = Arc::new(AtomicUsize::new(0));
-    let trace_counter = Arc::new(AtomicUsize::new(0));
-    let finish_milestones = finish_milestones(args.num_games);
-    let results_mutex: Arc<std::sync::Mutex<Vec<GameResult>>> =
-        Arc::new(std::sync::Mutex::new(Vec::with_capacity(args.num_games)));
-
-    std::thread::scope(|scope| {
-        for _ in 0..num_actors {
-            let job_counter = job_counter.clone();
-            let results_mutex = results_mutex.clone();
-            let games_completed = games_completed.clone();
-            let trace_counter = trace_counter.clone();
-            let finish_milestones = finish_milestones.clone();
-            let network1 = &network1;
-            let network2 = &network2;
-            let eval1 = &eval1;
-            let eval2 = &eval2;
-            let args = &args;
-            let all_tribes = &all_tribes;
-            let seed_list = &seed_list;
-            let seed_entries = &seed_entries;
-            scope.spawn(move || {
-                loop {
-                    let i = job_counter.fetch_add(1, Ordering::Relaxed);
-                    if i >= args.num_games {
-                        break;
-                    }
-
-                    let seed = seed_for_game(i, base_seed, seed_list.as_deref());
-                    let swap_players = i % 2 == 1; // Swap every other game
-                    let (p1_net, p2_net, p1_eval, p2_eval) = if swap_players {
-                        (&**network2, &**network1, eval2, eval1)
-                    } else {
-                        (&**network1, &**network2, eval1, eval2)
-                    };
-
-                    // Anchor games: evenly spread across the run at rate
-                    // anchor_frac (decayed from its starting value the same
-                    // way prior_heuristic_weight is — see decay_crutch);
-                    // the anchor's seat alternates by anchor ordinal (game
-                    // parity alone would pin it to one seat at e.g. frac
-                    // 0.25, where anchor games are all odd-i).
-                    let anchor_frac = decay_crutch(
-                        args.anchor_frac,
-                        ANCHOR_FRAC_DECAY,
-                        args.iteration.saturating_sub(args.anchor_decay_start),
-                        args.decay_last_iter,
-                        args.force_zero_crutches,
-                    );
-                    let anchor_ordinal = (((i + 1) as f32) * anchor_frac).floor() as usize;
-                    let is_anchor = anchor_frac > 0.0
-                        && anchor_ordinal > ((i as f32) * anchor_frac).floor() as usize;
-                    // Greedy (score_move argmax), not the rollout Heuristic MCTS:
-                    // measured first-village capture 1.00/t6.5 vs 0.94/t8.9 — the
-                    // rollout noise drowned the ordering gradient. Greedy is also
-                    // the exact distribution blend_heuristic_prior injects into the
-                    // net's root, so anchor data and search priors agree.
-                    // --anchor-seat pins the Greedy seat; otherwise it
-                    // alternates so neither seat accumulates a side bias.
-                    let anchor_first = match args.anchor_seat {
-                        Some(1) => true,
-                        Some(2) => false,
-                        _ => anchor_ordinal % 2 == 0,
-                    };
-                    let (backend_seat1, backend_seat2) = if is_anchor {
-                        if anchor_first {
-                            (SearchBackend::Greedy, backend)
-                        } else {
-                            (backend, SearchBackend::Greedy)
-                        }
-                    } else {
-                        (backend, backend)
-                    };
-
-                    // Seat roles for tempo aggregation: "model" (mirror seat),
-                    // "model_vs_anchor" (net seat racing the anchor — the
-                    // contested population), "anchor" (Greedy reference
-                    // curve), "opponent" (league checkpoint seat).
-                    let seat_roles: [&'static str; 2] = if is_anchor {
-                        if anchor_first {
-                            ["anchor", "model_vs_anchor"]
-                        } else {
-                            ["model_vs_anchor", "anchor"]
-                        }
-                    } else if has_opponent {
-                        if swap_players {
-                            ["opponent", "model"]
-                        } else {
-                            ["model", "opponent"]
-                        }
-                    } else {
-                        ["model", "model"]
-                    };
-
-                    // Sample this game's own tribe pair, seeded off its game
-                    // seed so runs stay reproducible while each game gets a
-                    // distinct matchup. See `resolve_tribes` for the
-                    // CLI > seed-file > random precedence.
-                    use rand::SeedableRng;
-                    let mut tribe_rng = rand::rngs::StdRng::seed_from_u64(seed as u64);
-                    let seed_file_tribes = tribes_for_game(i, seed_entries.as_deref());
-                    let (t1, t2) = resolve_tribes(
-                        &mut tribe_rng,
-                        all_tribes,
-                        &args.tribe1,
-                        &args.tribe2,
-                        seed_file_tribes,
-                    );
-                    let game_tribes = vec![t1, t2];
-
-                    // Ensure panicking game doesnt kill the whole run
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        play_single_game(
-                            p1_net,
-                            p2_net,
-                            p1_eval,
-                            p2_eval,
-                            args.mcts_iters,
-                            i,
-                            seed,
-                            game_tribes,
-                            args.iteration,
-                            args.decay_last_iter,
-                            args.force_zero_crutches,
-                            args.gamemode,
-                            backend_seat1,
-                            backend_seat2,
-                            args.value_trust,
-                            args.leaf_batch,
-                            progress_mode,
-                            args.trace_villages,
-                            args.trace_trigger,
-                            args.trace_max,
-                            &trace_counter,
-                            args.dump_failed_dir.as_deref(),
-                            args.dump_games_dir.as_deref(),
-                            args.dump_turn_states.as_deref(),
-                            args.dump_city_rewards.as_deref(),
-                            args.dump_star_spend.as_deref(),
-                            args.dump_reward_choices.as_deref(),
-                            args.dump_level_completion.as_deref(),
-                            args.dump_pop_spend_choices.as_deref(),
-                            args.dump_macro_policy.as_deref(),
-                            seat_roles,
-                            args.shape_w_label,
-                            args.shape_w_tree,
-                            args.pursuit_w_label,
-                            args.pursuit_w_tree,
-                            args.unfreeze_opponent,
-                            args.dagger_alpha,
-                            args.goal_channels,
-                            args.goal_w_tree,
-                            macro_params,
-                            args.max_turns,
-                        )
-                    }))
-                    .unwrap_or_else(|_| {
-                        eprintln!("[ERROR] Game {i} (seed {seed}) panicked — discarding its data");
-                        None
-                    });
-
-                    if let Some(result) = result {
-                        if progress_mode == ProgressMode::SampledFinish {
-                            let done = games_completed.fetch_add(1, Ordering::Relaxed) + 1;
-                            if finish_milestones.contains(&done) {
-                                eprintln!(
-                                    "[Progress] {}/{} games complete (game {} — {} moves, winner score {})",
-                                    done,
-                                    args.num_games,
-                                    i,
-                                    result.moves,
-                                    result.winner_score,
-                                );
-                            }
-                        }
-                        results_mutex.lock().unwrap().push(result);
-                    }
-                }
-            });
-        }
-    });
-
-    let results: Vec<GameResult> = match Arc::try_unwrap(results_mutex) {
-        Ok(mutex) => mutex.into_inner().unwrap(),
-        Err(_) => {
-            panic!("BUG: actor threads still hold a results_mutex reference after scope exit")
-        }
-    };
-
+    let results = run_games(
+        num_actors, &args, &network1, &network2, &eval1, &eval2, &all_tribes,
+        &seed_list, &seed_entries, base_seed, backend, macro_params, progress_mode,
+        has_opponent,
+    );
     let games_duration = games_start.elapsed();
-    println!(
-        "Game generation completed in: {:.2}s ({} games)",
-        games_duration.as_secs_f32(),
-        results.len()
-    );
-    println!(
-        "  Average: {:.2}s per game",
-        games_duration.as_secs_f32() / results.len().max(1) as f32
-    );
-    let total_moves_now: usize = results.iter().map(|r| r.moves).sum();
-    let moves_per_sec = total_moves_now as f64 / games_duration.as_secs_f64().max(1e-9);
-    println!(
-        "  Throughput: {:.2} moves/sec ({} moves over {:.2}s)",
-        moves_per_sec,
-        total_moves_now,
-        games_duration.as_secs_f32()
-    );
 
-    // Eval-server stats: aggregate across all shards (the number to compare
-    // against the single-server baseline).
-    let mut all_shard_stats: Vec<(&str, &EvalServerStats)> = Vec::new();
-    for s in p1_servers.iter() {
-        all_shard_stats.push(("p1", s.stats()));
-    }
-    if let Some(p2) = p2_servers.as_ref() {
-        for s in p2 {
-            all_shard_stats.push(("p2", s.stats()));
-        }
-    }
-
-    let wall_s = games_duration.as_secs_f64().max(1e-9);
-
-    // Aggregate across shards.
-    let (mut agg_forwards, mut agg_rows, mut agg_max_batch, mut agg_busy_us) =
-        (0u64, 0u64, 0u64, 0u64);
-    let (mut agg_hits, mut agg_misses) = (0u64, 0u64);
-    let (mut agg_compiles, mut agg_compile_us) = (0u64, 0u64);
-    let (mut agg_prep_us, mut agg_wait_us, mut agg_post_us) = (0u64, 0u64, 0u64);
-    for (_, s) in &all_shard_stats {
-        agg_forwards += s.forwards.load(Ordering::Relaxed);
-        agg_rows += s.rows.load(Ordering::Relaxed);
-        agg_max_batch = agg_max_batch.max(s.max_batch.load(Ordering::Relaxed));
-        agg_busy_us += s.busy_us.load(Ordering::Relaxed);
-        agg_hits += s.cache_hits.load(Ordering::Relaxed);
-        agg_misses += s.cache_misses.load(Ordering::Relaxed);
-        agg_compiles += s.compiles.load(Ordering::Relaxed);
-        agg_compile_us += s.compile_us.load(Ordering::Relaxed);
-        agg_prep_us += s.prep_us.load(Ordering::Relaxed);
-        agg_wait_us += s.wait_us.load(Ordering::Relaxed);
-        agg_post_us += s.post_us.load(Ordering::Relaxed);
-    }
-    let agg_busy_s = agg_busy_us as f64 / 1e6;
-    let agg_compile_s = agg_compile_us as f64 / 1e6;
-    let agg_avg_batch = if agg_forwards > 0 {
-        agg_rows as f64 / agg_forwards as f64
-    } else {
-        0.0
-    };
-    let agg_cache_total = agg_hits + agg_misses;
-    let agg_cache_hit_rate = if agg_cache_total > 0 {
-        agg_hits as f64 / agg_cache_total as f64
-    } else {
-        0.0
-    };
-    println!(
-        "EVAL_SERVER_STATS_AGG: {{\"shards\": {}, \"forwards\": {}, \"rows\": {}, \"avg_batch\": {:.2}, \"max_batch\": {}, \"busy_s\": {:.2}, \"busy_frac\": {:.3}, \"prep_s\": {:.2}, \"wait_s\": {:.2}, \"post_s\": {:.2}, \"cache_hits\": {}, \"cache_misses\": {}, \"cache_hit_rate\": {:.3}, \"compiles\": {}, \"compile_s\": {:.3}, \"compile_frac_wall\": {:.4}, \"compile_frac_busy\": {:.4}}}",
-        all_shard_stats.len(),
-        agg_forwards,
-        agg_rows,
-        agg_avg_batch,
-        agg_max_batch,
-        agg_busy_s,
-        agg_busy_s / wall_s,
-        agg_prep_us as f64 / 1e6,
-        agg_wait_us as f64 / 1e6,
-        agg_post_us as f64 / 1e6,
-        agg_hits,
-        agg_misses,
-        agg_cache_hit_rate,
-        agg_compiles,
-        agg_compile_s,
-        agg_compile_s / wall_s,
-        if agg_busy_s > 0.0 {
-            agg_compile_s / agg_busy_s
-        } else {
-            0.0
-        }
-    );
+    report_eval_stats(games_duration, &results, &p1_servers, p2_servers.as_ref());
 
 
     let mut max_score = 0;
@@ -1164,134 +892,7 @@ fn main() -> anyhow::Result<()> {
         serde_json::to_string(&metrics)?,
     )?;
 
-    let total_duration = start_time.elapsed();
-    println!("\n=== Self-Play Complete ===");
-    println!("Total time: {:.2}s", total_duration.as_secs_f32());
-    println!("Breakdown:");
-    println!(
-        "  - Game generation: {:.2}s ({:.1}%)",
-        games_duration.as_secs_f32(),
-        100.0 * games_duration.as_secs_f32() / total_duration.as_secs_f32()
-    );
-    let final_moves_per_sec = total_moves as f64 / games_duration.as_secs_f64().max(1e-9);
-    println!(
-        "  - Throughput: {:.2} moves/sec ({} moves)",
-        final_moves_per_sec, total_moves
-    );
-    // How often search crossed a turn boundary in-tree (simulated EndTurn
-    // edges only; real played moves don't count). ~0/move decision means the
-    // tree essentially never sees beyond the current turn.
-    let sim_end_turns =
-        polyfish::game::SIM_END_TURN_EDGES.load(std::sync::atomic::Ordering::Relaxed);
-    println!(
-        "  - Sim EndTurn edges: {} total ({:.2} per move decision)",
-        sim_end_turns,
-        sim_end_turns as f64 / (total_moves as f64).max(1.0)
-    );
-    // How often a simulated move failed to execute against the replayed state
-    // (tree-reuse staleness in Gumbel MCTS — see SIM_MOVE_FAILURES doc comment
-    // in game.rs). Set POLYFISH_VERBOSE_SIM_FAILURES=1 for illegal_moves/*.json dumps.
-    let sim_move_failures =
-        polyfish::game::SIM_MOVE_FAILURES.load(std::sync::atomic::Ordering::Relaxed);
-    println!(
-        "  - Sim move failures: {} total ({:.2} per move decision)",
-        sim_move_failures,
-        sim_move_failures as f64 / (total_moves as f64).max(1.0)
-    );
-    // Ply-distillation throughput envelope input (EXP_ELO_061 GPU-ply-work
-    // plan, Phase 0): how many rank_plies calls (rollout + real-commit)
-    // and candidate moves per real move decision under macro-mcts. Zero
-    // under gumbel (rank_plies is macro-mcts-only).
-    let rank_plies_calls =
-        polyfish::ai::search::macro_exec::RANK_PLIES_CALLS.load(std::sync::atomic::Ordering::Relaxed);
-    let rank_plies_candidates = polyfish::ai::search::macro_exec::RANK_PLIES_CANDIDATES
-        .load(std::sync::atomic::Ordering::Relaxed);
-    println!(
-        "  - rank_plies calls: {} total ({:.2} per move decision), {} candidates total ({:.1} per call)",
-        rank_plies_calls,
-        rank_plies_calls as f64 / (total_moves as f64).max(1.0),
-        rank_plies_candidates,
-        rank_plies_candidates as f64 / (rank_plies_calls as f64).max(1.0)
-    );
-    println!(
-        "  - EXP_ELO_083 tech-limit no-recommendation rejections (diagnostic, temporary): {} candidates",
-        polyfish::ai::search::goal_aux::TECH_LIMIT_REJECTIONS.load(std::sync::atomic::Ordering::Relaxed)
-    );
-    if let Ok(m) = polyfish::ai::search::goal_aux::TECH_LIMIT_REJECTIONS_BY_TECH.lock() {
-        let mut by_tech: Vec<(&polyfish::types::TechnologyType, &u64)> = m.iter().collect();
-        by_tech.sort_by(|a, b| b.1.cmp(a.1));
-        let top: Vec<String> =
-            by_tech.iter().take(12).map(|(t, c)| format!("{t:?}:{c}")).collect();
-        println!("  - EXP_ELO_088 rejections by tech (diagnostic, top 12): {}", top.join(", "));
-    }
-    {
-        let eligible = polyfish::ai::search::macro_exec::ENDTURN_ELIGIBLE_PLIES
-            .load(std::sync::atomic::Ordering::Relaxed);
-        let chosen = polyfish::ai::search::macro_exec::ENDTURN_CHOSEN_WITH_ALTERNATIVES
-            .load(std::sync::atomic::Ordering::Relaxed);
-        println!(
-            "  - EXP_ELO_085 EndTurn chosen despite alternatives (diagnostic, temporary): {chosen}/{eligible} ({:.3}%)",
-            100.0 * chosen as f64 / (eligible as f64).max(1.0)
-        );
-    }
-    println!(
-        "  - EXP_ELO_095 shared-attacker partial weights (diagnostic, temporary): {} entries",
-        polyfish::ai::combat::SHARED_ATTACKER_PARTIAL_WEIGHTS.load(std::sync::atomic::Ordering::Relaxed)
-    );
-    {
-        let cover_total =
-            polyfish::ai::combat::DEFEND_CREDIT_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
-        let cover_partial =
-            polyfish::ai::combat::DEFEND_CREDIT_PARTIAL.load(std::sync::atomic::Ordering::Relaxed);
-        let hold_total =
-            polyfish::ai::combat::DEFEND_HOLD_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
-        let hold_partial =
-            polyfish::ai::combat::DEFEND_HOLD_PARTIAL.load(std::sync::atomic::Ordering::Relaxed);
-        println!(
-            "  - EXP_ELO_096 defend_cover fractional credit (diagnostic, temporary): {cover_partial}/{cover_total} ({:.3}%) assignments partial",
-            100.0 * cover_partial as f64 / (cover_total as f64).max(1.0)
-        );
-        println!(
-            "  - EXP_ELO_096 defend_hold fractional margin (diagnostic, temporary): {hold_partial}/{hold_total} ({:.3}%) evaluations partial",
-            100.0 * hold_partial as f64 / (hold_total as f64).max(1.0)
-        );
-    }
-    // Micro-mcts Phase 0 (throughput/cache-hit probe, POLYFISH_MICRO_PROBE_SIMS):
-    // zero unless that env var is set. Note the rank_plies numbers above also
-    // inflate while this probe is active -- its own continuation walk calls
-    // rank_view/rank_plies, so that's the probe's real CPU cost showing up in
-    // already-existing instrumentation, not contamination to filter out.
-    let micro_probe_evals =
-        polyfish::ai::search::macro_mcts::MICRO_PROBE_EVALS.load(std::sync::atomic::Ordering::Relaxed);
-    let micro_probe_failures = polyfish::ai::search::macro_mcts::MICRO_PROBE_SIM_FAILURES
-        .load(std::sync::atomic::Ordering::Relaxed);
-    println!(
-        "  - micro-probe evals: {} total ({:.2} per move decision), {} sim failures",
-        micro_probe_evals,
-        micro_probe_evals as f64 / (total_moves as f64).max(1.0),
-        micro_probe_failures
-    );
-    let micro_mcts_calls =
-        polyfish::ai::search::micro_mcts::MICRO_MCTS_CALLS.load(std::sync::atomic::Ordering::Relaxed);
-    let micro_mcts_overrides = polyfish::ai::search::micro_mcts::MICRO_MCTS_OVERRIDES
-        .load(std::sync::atomic::Ordering::Relaxed);
-    println!(
-        "  - micro-mcts calls: {} total, {} overrode rank_view's top pick ({:.1}%)",
-        micro_mcts_calls,
-        micro_mcts_overrides,
-        micro_mcts_overrides as f64 / (micro_mcts_calls as f64).max(1.0) * 100.0
-    );
-    let micro_carry_attempts = polyfish::ai::search::micro_mcts::MICRO_CARRY_ATTEMPTS
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let micro_carry_hits =
-        polyfish::ai::search::micro_mcts::MICRO_CARRY_HITS.load(std::sync::atomic::Ordering::Relaxed);
-    println!(
-        "  - micro-mcts root-advancement: {} carries offered, {} candidate children spliced in ({:.2} avg per carry)",
-        micro_carry_attempts,
-        micro_carry_hits,
-        micro_carry_hits as f64 / (micro_carry_attempts as f64).max(1.0)
-    );
-    polyfish::ai::search::macro_exec::dphi_probe_flush();
+    print_run_summary(start_time, games_duration, total_moves);
 
     // Deterministic teardown. Drop the evaluator handles first — these hold the
     // only remaining request-channel senders, so dropping them makes each eval
