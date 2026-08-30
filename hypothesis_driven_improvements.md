@@ -11430,3 +11430,104 @@ budget-dependent, not purely geometric, so a real fix needs to reason
 about cost-efficiency across the whole candidate set, not just
 partnership) is worth preserving for whoever picks this up next; the
 specific implementation attempted here is not.
+
+## EXP_ELO_099 — `eco_plan`'s own forge-site ranking was wrong at the source: a contested BorderGrowth tile went to whichever city was nearest, not whichever actually needed it
+
+CONTEXT: after EXP_ELO_098 was reverted, Verdi pushed back directly on
+the ground truth itself: "if eco_plan doesnt recognize the optimal forge
+spot at tile 61, we need to fix that, it's probably a flaw in how we
+compute this." Verdi's stated expectation, from the seed0 XinXi game:
+city 49's forge belongs at tile 61 with enough partners to reach level 3,
+built toward with mines at 50 then 39; city 41's forge (already correct
+in the real trace) sits at tile 40, level 5.
+
+INVESTIGATION: re-derived the exact real game state at the seed0
+decision point (`examples/dump_state_at_step.rs` + a new
+`examples/hub_site_probe2.rs` calling `site_value`/`city_build_on`
+directly) and confirmed `eco_plan --explain` on the REAL turn-7 state
+already computed tile 61 as tied-best with tile 48 (2 partners: the
+standing Mine at 50, plus the standing Mine at 51 credited cross-city via
+`city_build_on`'s player-owned-standing-structure fallback) — `build_out`
+then tie-broke to the lower tile index (48), never 61. The missing third
+partner was tile 62 (Metal, unowned/neutral at that point in the game) —
+adjacent to 61, and geometrically equidistant between city 49 and city 84
+(both chebyshev-2). Root cause: for a REAL loaded state (the only case
+self-play ever plans from — `engine_territory` returns `Some` from turn 0
+since the capital already rules its own ground),
+`empire::extend_for_border_growth` resolved a BorderGrowth tile contested
+between two of our own cities by pure nearest-city-then-array-index
+tiebreak, with zero awareness of hub/forge value. The correct algorithm
+already existed one function up: `allocate_value`'s own synthetic
+(no-real-state) contested-tile loop already ranks by marginal SPT/giants
+gain (a fix from earlier in Aug 2026) — it was simply never reused for
+the real-state path, which is the path that matters.
+
+CHANGE: extracted the marginal-value comparison into a shared
+`marginal_value(state, city_idx, tiles, sc, monuments, idx)` helper and
+made `extend_for_border_growth` use it for any tile contested between two
+of our own growing cities (falls back to distance/index only as the
+final tiebreak among genuinely equal-value claims). Contested-tile
+resolution order is now sorted by tile index rather than HashMap
+iteration order, since one tile's winner can now change what the next
+contested tile is worth (a completed partner set makes a second Mine
+redundant) — this project's own prior non-determinism incident
+(EXP_ELO_091) is exactly the failure mode an unsorted HashMap walk would
+have reintroduced here.
+
+VERIFICATION (against the real state, not just the unit test):
+- `eco_plan --explain 1 --state <turn-7 state>`, "forge +border": tile 62
+  now allocates to city 49, `hub_sites by partner count` shows `(61, 2)`
+  as the new top display entry, and `build_out` now genuinely chooses
+  `Some(61) at level 3` — matches Verdi's stated expectation exactly.
+- `eco_plan --verify` on the same real state: `0 failing (city, scenario)
+  pairs`, `forge +border 49 61 3 3 3 yes ok` (engine-legal, order-
+  invariant), and `forge +border 41 40 5 5 5 yes ok` confirms city 41's
+  forge is untouched at level 5, also matching Verdi's description.
+- `eco_plan --verify` across 5 more generated-map seeds (1, 42, 770425,
+  4102, 9999): 0 failing pairs on all.
+- Checked city 84 isn't harmed by losing tile 62: its own best "+border"
+  forge site (95, level 4) draws from a completely different metal
+  cluster (63/64/106/107) and never used 62 as a partner either before or
+  after.
+- New regression test
+  (`contested_border_tile_goes_to_the_city_that_gains_more_not_the_nearer_one`,
+  `rules::eco_plan::empire::tests`): a synthetic fixture where the
+  contested tile is literally CLOSER to the city that gains less from it
+  (delta spt=1, giants=0) than to the city that gains more (delta spt=2,
+  giants=1) — confirmed it fails against the pre-fix `min_by_key`
+  distance-only logic (swapped in temporarily, reverted after) and passes
+  against the fix.
+- Full CI: 308 lib tests (was 307), 0 failures; one Gumbel MCTS test
+  (`test_gumbel_tree_reuse_on_consecutive_same_player_search`) failed
+  once inside the full run and passed twice in isolation — a pre-existing,
+  self-documented flake (unseeded `thread_rng` in Gumbel noise draws),
+  unrelated to this change.
+
+SCOPE, CHECKED NOT ASSUMED: exhaustively grepped for every caller of
+`allocate_value`/`extend_for_border_growth` and every `plan_city` call
+site. Both live ONLY in `src/bin/eco_plan.rs` (the offline CLI) and this
+module's own tests. The one hot-path consumer, `eco_plan_best_city`
+(`ai/economy.rs`, called from `ai/search/lane.rs` and `ai/economy.rs`'s
+own tech-line scoring), always selects the scenario via `!s.border_growth
+&& !s.convert` — natural only — and reads a city's territory from the
+pre-computed `_territory` field, never through `allocate_value` at all.
+`extend_for_border_growth` itself no-ops immediately when no scenario
+passed to it has `border_growth = true`. **This fix therefore changes
+`eco_plan`'s own ground-truth answer but provably touches zero self-play/
+training behavior** — there is nothing for a paired win-rate gauge to
+measure here, and running one would have burned time on a guaranteed
+null result.
+
+Disposition: **SHIPPED**. Correct, tested against the real named
+benchmark end-to-end (not just the unit test), zero hot-path exposure so
+zero risk to training. Deliberately did NOT also wire `scoring.rs`'s
+real-time mine/hub heuristic to consult this (now-correct) ranking this
+round: EXP_ELO_098, one entry up, is the direct precedent for why that
+speculative a step needs its own measurement before shipping (fixing
+eco_plan's ground truth alone did not move real behavior there either,
+and the actual integration attempt cost a further measured -2.34pp for
+zero benefit). Whoever revisits "should real self-play mine/forge
+decisions consult the border-growth-aware planner" should budget for the
+`+border` scenario's cost on the hot path specifically (today it is
+deliberately avoided there) and re-run a fresh paired gauge rather than
+assuming this fix carries over automatically.

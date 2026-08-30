@@ -45,7 +45,7 @@ pub fn allocate_value(
     // into, without touching the "believe reality" rule for tiles it already
     // rules.
     if let Some(real) = engine_territory(state, cities) {
-        return extend_for_border_growth(state, cities, scs, real);
+        return extend_for_border_growth(state, cities, scs, monuments, real);
     }
 
     let mut claimants: HashMap<i32, Vec<usize>> = HashMap::new();
@@ -107,24 +107,14 @@ pub fn allocate_value(
         // Market is worth more than one that adds raw population, and pop could
         // not see the difference. Distance and index break ties, so the
         // allocation stays deterministic and reproducible.
-        let value_of = |ci: usize, tiles: &[i32]| -> (i32, i32) {
-            let hub = build_out(state, cities[ci], tiles, scs[ci], monuments, Goal::Balanced)
-                .hub_site;
-            let (spt, giants, _stars, _pop) =
-                site_value(state, cities[ci], tiles, scs[ci], monuments, hub);
-            (spt, giants)
-        };
         let mut ranked: Vec<(i32, i32, i32, usize)> = who
             .iter()
             .map(|&ci| {
-                let (base_spt, base_g) = value_of(ci, &terr[ci]);
-                let mut with = terr[ci].clone();
-                with.push(idx);
-                with.sort();
-                let (spt, g) = value_of(ci, &with);
+                let (dspt, dg) =
+                    marginal_value(state, cities[ci], &terr[ci], scs[ci], monuments, idx);
                 (
-                    -(spt - base_spt),
-                    -(g - base_g),
+                    -dspt,
+                    -dg,
                     get_chebyshev_distance(idx, cities[ci], state.settings.size),
                     ci,
                 )
@@ -139,17 +129,50 @@ pub fn allocate_value(
     terr
 }
 
+/// SPT/giants a city's plan gains by adding one tile to its territory — the
+/// axes every contested-tile decision in this module ranks on. A tile that
+/// lifts a hub a level or feeds a Market is worth more than one that only
+/// adds population, and pop cannot see the difference. Shared by the
+/// synthetic radius model's `open` loop above and the real-state
+/// `extend_for_border_growth` below, so a contested tile is judged the same
+/// way regardless of which allocator is planning it.
+fn marginal_value(
+    state: &GameState,
+    city_idx: i32,
+    tiles: &[i32],
+    sc: Scenario,
+    monuments: i32,
+    idx: i32,
+) -> (i32, i32) {
+    let value_of = |t: &[i32]| -> (i32, i32) {
+        let hub = build_out(state, city_idx, t, sc, monuments, Goal::Balanced).hub_site;
+        let (spt, giants, _stars, _pop) = site_value(state, city_idx, t, sc, monuments, hub);
+        (spt, giants)
+    };
+    let (base_spt, base_g) = value_of(tiles);
+    let mut with = tiles.to_vec();
+    with.push(idx);
+    with.sort();
+    let (spt, g) = value_of(&with);
+    (spt - base_spt, g - base_g)
+}
+
 /// Adds the not-yet-owned radius-2 ring to any city whose scenario plans to
 /// take BorderGrowth. Only unclaimed tiles (`owner == 0`) are eligible --
 /// real Polytopia border growth claims neutral ground, never a tile anyone
 /// (friend or foe) already rules, so a tile another real city of ours holds
-/// is left alone rather than reassigned. Contested rings between two of
-/// OUR OWN growing cities resolve to the nearer one, same tie-break as the
-/// synthetic radius model below.
+/// is left alone rather than reassigned. Contested rings between two of OUR
+/// OWN growing cities resolve by `marginal_value`, same as the synthetic
+/// radius model -- nearest-city used to win outright, which cannot tell a
+/// tile that completes a hub's partner set (e.g. the third Mine a Forge
+/// needs to clear a level) from one that only adds bare pop. A real position
+/// is exactly the case self-play always plans from, so this was the
+/// consequential half of the two allocators, not an edge case.
 fn extend_for_border_growth(
     state: &GameState,
     cities: &[i32],
     scs: &[Scenario],
+    monuments: i32,
     mut real: Vec<Vec<i32>>,
 ) -> Vec<Vec<i32>> {
     if !scs.iter().any(|s| s.border_growth) {
@@ -171,12 +194,33 @@ fn extend_for_border_growth(
             candidates.entry(idx).or_default().push(ci);
         }
     }
-    for (idx, who) in candidates {
-        let winner = who
-            .iter()
-            .copied()
-            .min_by_key(|&ci| (get_chebyshev_distance(idx, cities[ci], state.settings.size), ci))
-            .unwrap();
+    // Sorted for determinism: claiming a tile can change what the NEXT
+    // contested tile is worth (one Mine can finish a hub's partner set and
+    // make a second Mine redundant), so resolution order now affects the
+    // outcome and a HashMap's iteration order is not stable across runs.
+    let mut sorted: Vec<(i32, Vec<usize>)> = candidates.into_iter().collect();
+    sorted.sort_by_key(|(idx, _)| *idx);
+
+    for (idx, who) in sorted {
+        let winner = if who.len() == 1 {
+            who[0]
+        } else {
+            let mut ranked: Vec<(i32, i32, i32, usize)> = who
+                .iter()
+                .map(|&ci| {
+                    let (dspt, dg) =
+                        marginal_value(state, cities[ci], &real[ci], scs[ci], monuments, idx);
+                    (
+                        -dspt,
+                        -dg,
+                        get_chebyshev_distance(idx, cities[ci], state.settings.size),
+                        ci,
+                    )
+                })
+                .collect();
+            ranked.sort();
+            ranked[0].3
+        };
         real[winner].push(idx);
     }
     for v in real.iter_mut() {
@@ -847,5 +891,101 @@ mod tests {
         let mut expected = inner.clone();
         expected.sort();
         assert_eq!(natural[0], expected);
+    }
+
+    /// Regression for the real seed0 XinXi-vs-Imperius bug (Aug 2026): a
+    /// BorderGrowth tile contested between two of our own cities used to go
+    /// to whichever was NEAREST, full stop -- even when it is strictly
+    /// closer to a city with no use for it than to one it would complete a
+    /// hub's partner set for. City A's Forge candidate has one standing Mine
+    /// partner already; the contested Metal tile is its second, crossing a
+    /// city-level threshold. City B is CLOSER to the same tile but walled
+    /// off (Water) from ever partnering it, so B's only gain is the tile's
+    /// own flat resource pop -- never enough to move its level. The fix must
+    /// still hand it to A.
+    #[test]
+    fn contested_border_tile_goes_to_the_city_that_gains_more_not_the_nearer_one() {
+        let size = 11;
+        let a_center = 5 * 11 + 5; // 60
+        let h_a = 5 * 11 + 6; // 61 -- A's forge candidate
+        let m1 = 4 * 11 + 6; // 50 -- A's standing Mine, adjacent to h_a
+        let a_crops = [4 * 11 + 4, 4 * 11 + 5, 5 * 11 + 4, 6 * 11 + 4, 6 * 11 + 5, 6 * 11 + 6];
+        let x = 4 * 11 + 7; // 51 -- contested Metal/Mountain, unowned
+        let b_center = 4 * 11 + 8; // 52 -- one tile closer to X than A is
+        let b_blocked = [3 * 11 + 7, 3 * 11 + 8, 5 * 11 + 7, 5 * 11 + 8]; // Water: never partners X
+        let b_crops = [3 * 11 + 9, 4 * 11 + 9, 5 * 11 + 9];
+
+        let mut state = GameState::default();
+        state.settings.size = size;
+        state.settings.current_player_turn_id = 1;
+
+        let owned_field = |ruling: i32| -> TileState {
+            let mut t = TileState::default();
+            t.terrain_type = TerrainType::Field;
+            t.owner = 1;
+            t.ruling_city_coords = Some(crate::coords::Coords::from_index(ruling, size));
+            t
+        };
+        let owned_water = |ruling: i32| -> TileState {
+            let mut t = TileState::default();
+            t.terrain_type = TerrainType::Water;
+            t.owner = 1;
+            t.ruling_city_coords = Some(crate::coords::Coords::from_index(ruling, size));
+            t
+        };
+        let metal_resource = || Some(crate::states::ResourceState { resource_type: ResourceType::Metal, ..Default::default() });
+        let crop_resource = || Some(crate::states::ResourceState { resource_type: ResourceType::Crop, ..Default::default() });
+
+        state.tiles.insert(a_center, owned_field(a_center));
+        state.tiles.insert(h_a, owned_field(a_center));
+        let mut m1_tile = owned_field(a_center);
+        m1_tile.terrain_type = TerrainType::Mountain;
+        state.tiles.insert(m1, m1_tile);
+        state.resources.insert(m1, metal_resource());
+        state.structures.insert(
+            m1,
+            Some(crate::states::StructureState { structure_type: StructureType::Mine, level: 1, founded: 0 }),
+        );
+        for &idx in &a_crops {
+            state.tiles.insert(idx, owned_field(a_center));
+            state.resources.insert(idx, crop_resource());
+        }
+
+        state.tiles.insert(b_center, owned_field(b_center));
+        for &idx in &b_blocked {
+            state.tiles.insert(idx, owned_water(b_center));
+        }
+        for &idx in &b_crops {
+            state.tiles.insert(idx, owned_field(b_center));
+            state.resources.insert(idx, crop_resource());
+        }
+
+        let mut x_tile = TileState::default();
+        x_tile.terrain_type = TerrainType::Mountain;
+        state.tiles.insert(x, x_tile);
+        state.resources.insert(x, metal_resource());
+
+        assert_eq!(get_chebyshev_distance(x, b_center, size), 1, "fixture: X must be closer to B");
+        assert_eq!(get_chebyshev_distance(x, a_center, size), 2, "fixture: X must be farther from A");
+
+        let mut tribe = TribeState::default();
+        tribe.id = 1;
+        let mut a_terr: Vec<i32> = vec![a_center, h_a, m1];
+        a_terr.extend(a_crops.iter().copied());
+        let city_a = CityState { idx: a_center, owner: 1, _territory: a_terr, ..Default::default() };
+        let mut b_terr: Vec<i32> = vec![b_center];
+        b_terr.extend(b_blocked.iter().copied());
+        b_terr.extend(b_crops.iter().copied());
+        let city_b = CityState { idx: b_center, owner: 1, _territory: b_terr, ..Default::default() };
+        // B first, so the old ci-order tiebreak would also have favoured B.
+        tribe.cities.push(city_b);
+        tribe.cities.push(city_a);
+        state.tribes.insert(1, tribe);
+
+        let cities = [b_center, a_center];
+        let sc = SCENARIOS[7]; // forge +border
+        let terr = allocate_value(&state, &cities, &[sc, sc], 0);
+        assert!(terr[1].contains(&x), "the tile A gains more from must go to A, got A={:?} B={:?}", terr[1], terr[0]);
+        assert!(!terr[0].contains(&x), "B must not receive the tile it barely benefits from");
     }
 }
