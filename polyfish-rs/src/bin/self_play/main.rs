@@ -24,28 +24,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use strum::IntoEnumIterator;
 
-const HEURISTIC_PRIOR_W0: f32 = 0.5; // net & heur blended 50/50 at start
-const HEURISTIC_PRIOR_DECAY: f32 = 0.97; // decays 0.5 -> 0.1 floor by ~iteration 53
-const ANCHOR_FRAC_DECAY: f32 = 0.97; // same rate as HEURISTIC_PRIOR_DECAY, own start value
-const CRUTCH_FLOOR: f32 = 0.1; // intermediate plateau shared by both crutches below
-
-/// Exponential decay from `w0` toward `CRUTCH_FLOOR`, then a hard cutover to
-/// 0 once `iteration >= decay_last_iter` (or immediately if `force_zero`).
-/// Shared by `prior_heuristic_weight` (self-play search prior blend) and
-/// `anchor_frac` (heuristic-anchor game rate) — both are training-time
-/// crutches meant to fully phase out, not asymptote at a permanent floor.
-fn decay_crutch(
-    w0: f32,
-    decay_rate: f32,
-    iteration: usize,
-    decay_last_iter: usize,
-    force_zero: bool,
-) -> f32 {
-    if force_zero || iteration >= decay_last_iter {
-        return 0.0;
-    }
-    (w0 * decay_rate.powi(iteration as i32)).max(CRUTCH_FLOOR)
-}
+mod crutches;
+use crutches::{ANCHOR_FRAC_DECAY, HEURISTIC_PRIOR_DECAY, HEURISTIC_PRIOR_W0, decay_crutch};
 
 // Absolute yardstick for the value target; 8K points is a good place to end a 30T game
 const GOOD_BOT_FINAL_SCORE: f32 = 8000.0;
@@ -5550,56 +5530,6 @@ mod td_lambda_tests {
             macro_ballot_for_history_step((7, 2), &mut last_key2, ballot).is_some(),
             "must retry on the same (turn,pov) after an empty offer"
         );
-    }
-}
-
-#[cfg(test)]
-mod decay_crutch_tests {
-    use super::*;
-
-    #[test]
-    fn decays_toward_floor_before_taper() {
-        let w0 = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 0, 150, false);
-        assert!(
-            (w0 - HEURISTIC_PRIOR_W0).abs() < 1e-6,
-            "iteration 0 should equal w0, got {w0}"
-        );
-
-        let mid = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 23, 150, false);
-        assert!(
-            (mid - 0.25).abs() < 0.01,
-            "iteration 23 should be ~0.25, got {mid}"
-        );
-
-        let floored = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 100, 150, false);
-        assert!(
-            (floored - CRUTCH_FLOOR).abs() < 1e-6,
-            "past-decay iteration should sit at the floor, got {floored}"
-        );
-    }
-
-    #[test]
-    fn hard_cuts_to_zero_at_decay_last_iter() {
-        let at_cutoff = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 150, 150, false);
-        assert_eq!(at_cutoff, 0.0);
-
-        let past_cutoff = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 500, 150, false);
-        assert_eq!(past_cutoff, 0.0);
-
-        let just_before = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 149, 150, false);
-        assert!((just_before - CRUTCH_FLOOR).abs() < 1e-6);
-    }
-
-    #[test]
-    fn force_zero_overrides_regardless_of_iteration() {
-        let forced = decay_crutch(
-            HEURISTIC_PRIOR_W0,
-            HEURISTIC_PRIOR_DECAY,
-            0,
-            usize::MAX,
-            true,
-        );
-        assert_eq!(forced, 0.0);
     }
 }
 
