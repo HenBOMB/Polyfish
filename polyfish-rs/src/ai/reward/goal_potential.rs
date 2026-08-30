@@ -641,6 +641,20 @@ fn goal_potential_inner(
                     }
                 }
             }
+            // EXP_ELO_106: a melee kill-and-advance vacates the garrison
+            // tile the same ply it earns `defend_garrison_hold`'s credit
+            // hardest, forfeiting it. A friendly unit can only be standing
+            // on a frozen-listed attacker's own tile because that attacker
+            // died to THIS candidate's move -- nothing else acts between
+            // the frozen assessment and this eval -- so this is a safe,
+            // state-pure signal to pay the same latch back on the kill tile.
+            for (u, w) in &th.attackers {
+                if crate::functions::get_unit_at(state, u.coords.idx)
+                    .map_or(false, |occ| occ.owner == player)
+                {
+                    acc.add("defend_kill_advance", SHAPE_GOAL_DEFEND_COVER * w);
+                }
+            }
             // EXP_ELO_103: cover/hold/recall all read the OPEN-framing plan
             // (need_damage computed as if no garrison existed), not
             // `defend_plan`'s real, garrison-collapsing one. The real plan's

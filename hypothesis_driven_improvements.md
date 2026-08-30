@@ -12442,3 +12442,280 @@ fixture fixes in `goal_potential_tests.rs` were NOT kept (see commit
 history -- this entry stands as the historical record of what was
 tried and why it didn't ship, per this project's append-only ledger
 discipline).
+
+## EXP_ELO_106 — the defend pool scales with the LIVE besieger's remaining threat, so damaging, killing, or reinforcing past one gets punished instead of rewarded
+
+CONTEXT: pass-4 `ml-expert` analysis of the EXP_ELO_104 game
+(`exp104_seed0_watch`, turn 21, 509 moves, 11 lost/14 killed, 4 giants
+by t12) found 9 of 11 net-seat deaths came from a single enemy Catapult
+(and supporting Archers) besieging city 49 for turns t9-t17, with the
+net's own reward pricing actively suppressing every opportunity to
+remove the threat. This is exactly the risk pre-registered as untested
+when EXP_ELO_103 shipped ("killing a city's last besieger could deflate
+the same defend pool the same way a garrison landing used to").
+
+The agent flagged three reference plies. Each was independently
+reproduced bit-exact via `attack_pricing_probe3` against the shipped
+HEAD (`fcf6728`) before any code was written, per this loop's standing
+discipline of never trusting an agent's claim without ground truth:
+
+1. t16 idx291 (global command index), `Attack 49->37`: the garrison
+   kills an adjacent 4hp Archer besieging the city. Recorded score
+   -272.781 vs the safe `Recover` alternative's +40.0.
+2. t18 idx358 (the agent's own numbering differed slightly, "372" --
+   reconciled by matching the recorded score, the authoritative check,
+   not the index label), `Attack 48->36`: a non-lethal chip on the
+   Catapult (15hp->1hp). Recorded score -54.625.
+3. t16 idx299, `Step 58->48`: an idle Giant reinforcing toward both
+   besiegers. Recorded score -212.555 vs the actually-chosen `Step
+   58->70` (retreating) at +39.0 flat.
+
+ROOT CAUSE, two distinct mechanisms sharing one family (`combat.rs`,
+`goal_potential.rs`'s Defend-order block) -- my first read of ply 1
+wrongly attributed it to `attacker_pressure` hitting zero (it can't:
+the Catapult stays alive and in range, pressure stays 1.0); the
+advisor caught this and pointed at the actual mechanism before any fix
+was designed:
+
+**(a) Live re-lookup, not frozen basis (drives idx358's chip
+regression).** `city_risks_with_threats` builds `CityRisk.attackers`
+from the frozen `threats: &[(UnitState, f32)]` snapshot (`threat_units`
+is computed once per ply, per its own doc comment -- exactly the
+frozen-assessment doctrine `a_frozen_assessment_still_prices_the_garrison`
+already documents), but had been narrowing it down to `(tile_idx: i32,
+weight: f32)` at construction, discarding the frozen `UnitState` itself.
+`on_garrison`, `need_damage`, and `defend_plan_impl`'s `contribs`/
+`sieger` waterfall inputs then all re-derived the attacker's health via
+a LIVE `get_true_unit_at(state, tile_idx)` lookup -- meaning a candidate
+that itself wounds the attacker (this ply's own move) sees a SMALLER
+`need_damage` in its post-move evaluation than in its pre-move one,
+shrinking `defend_cover`'s shared waterfall budget for every OTHER
+covering unit's credit too, mid-comparison. Ground truth on idx358:
+`defend_cover` was the entire story (`total -54.625`, all from the
+chip shrinking the pool).
+
+**(b) Kill-and-advance vacates the tile the SAME ply it earns
+`defend_garrison_hold`'s credit hardest (drives idx291's kill
+regression).** `defend_garrison_hold` (EXP_ELO_103) pays
+`SHAPE_GOAL_DEFEND_COVER * attacker_pressure` only while a friendly
+unit still occupies the city tile (`get_unit_at(state, *idx)`). A
+melee kill that ends by advancing onto the victim's tile (Polytopia's
+kill-and-advance) physically vacates the garrison slot the instant it
+lands the kill -- confirmed by `city_train_blocked` flipping
+-200->0 in lockstep (only fires when the tile is vacated). Ground
+truth on idx291: `defend_garrison_hold` 600->0 (Δ-600) dwarfs the
+correctly-improving `city_risk` (+17.2) and `city_train_blocked`
+(+200), driving the total to -272.781 despite a favorable base score
+(+110, already reflecting the kill).
+
+Idx299 (the Giant reinforcement) is a THIRD, structurally different
+mechanism: the advisor identified it as the same finite-budget
+zero-sum property EXP_ELO_054 depends on (a defend pool that pays every
+arrival regardless of need over-recruited bystanders and lost 31
+cities against a 19 gate) -- "cover credit monotone in reinforcement"
+is not a bug to fix, it's the invariant that keeps the pool from
+recruiting the whole roster onto one threatened city. Deliberately left
+unaddressed this pass; re-probed post-fix to confirm it stays
+unaffected (see VERIFICATION).
+
+FIX, `combat.rs` + `goal_potential.rs`:
+
+1. **`CityRisk.attackers`: `Vec<(i32, f32)>` -> `Vec<(UnitState, f32)>`.**
+   Stores the frozen snapshot itself, not a tile index to re-resolve.
+   `on_garrison`, `need_damage`, and `defend_plan_impl`'s
+   `contribs`/`sieger` now read the attacker's health directly off the
+   frozen unit -- no live lookup, so a candidate's own effect on the
+   attacker can't move its own comparison's denominator.
+   `residual_risk` (T3's own live re-read of T2's assessment, by
+   design -- see its doc comment) keeps its live lookup, just adapted
+   to pull the tile index off the now-richer tuple (`u.coords.idx`
+   instead of a bare `i`). `UnitState` needed `#[derive(PartialEq)]`
+   added (`states.rs`) since `CityRisk` derives it and all fields were
+   already trivially derivable (f32, enums, `Option`, `Coords`, and an
+   `FxHashSet<UnitEffect>` that already required `Eq`+`Hash` for set
+   membership).
+2. **`defend_kill_advance`** (`goal_potential.rs`, new state-fact
+   term, 042/103 lineage): for each frozen attacker `(u, w)` of a
+   Defend-ordered city, if a friendly unit now occupies `u.coords.idx`,
+   pay `SHAPE_GOAL_DEFEND_COVER * w`. Within one candidate's ply, only
+   the acting unit moves -- for a friendly unit to land on a tile a
+   frozen-listed ENEMY attacker occupied at turn start, that attacker
+   must have died to THIS candidate's own move and the actor advanced
+   onto its tile; no other sequence reaches that state. This is the
+   direct defense-side mirror of `attack_siege_hold`'s unconditional
+   state-fact design (offense side, EXP_ELO_042): pay for the
+   condition, don't gate on momentary reachability collapsing to zero.
+
+VERIFICATION -- `cargo test --lib`: 336/336 passed (was 334; two new
+pinning tests added, see below).
+
+VERIFICATION -- ground truth, all three flagged plies, `HEAD` with the
+fix applied, `attack_pricing_probe3` against `exp104_seed0_watch`:
+
+| ply | pre-fix (recorded) | post-fix | mechanism |
+|---|---|---|---|
+| idx291, kill | -272.781 | **+327.219** | `defend_kill_advance` 0->600 exactly offsets `defend_garrison_hold` 600->0 |
+| idx358, chip | -54.625 | **+75.230** | `defend_cover` no longer appears in the breakdown at all (frozen basis holds it constant); only `city_risk` moves (+10.230) |
+| idx299, reinforce | -212.555 | -212.555 (unchanged, `[MATCH]`) | out of scope by design (finite-budget invariant, see ROOT CAUSE) |
+
+Idx291's post-fix value (+327.219) lands almost exactly on the
+game's own t17 no-order natural control (the same kill executed one
+turn later under a lapsed Defend order scored +314.8) -- the fix
+doesn't just flip the sign, it converges the priced value toward what
+the SAME action is worth once the pricing artifact is absent entirely.
+
+VERIFICATION -- must-not-regress, the four established reference plies
+from EXP_ELO_101/103/104, re-probed against their ORIGINAL diagnostic
+games (`exp100_seed0_watch` for 101, `exp101_seed0_watch` for 103,
+`exp103_seed0_watch` for 104 -- using `exp104_seed0_watch` for these
+older indices silently reconstructs a DIFFERENT ply, since the game's
+own trajectory changes once earlier fixes are applied; caught before
+trusting a spurious "NOT LEGAL" result):
+
+- EXP_ELO_103's `Step 61->49` (turn8 idx110): **-95.413**, bit-exact
+  unchanged from its own post-104 recorded value.
+- EXP_ELO_103's `Summon@49`: **+715.813**, bit-exact unchanged.
+- EXP_ELO_104's t6 heal (`Recover` at 49): Δφ **0.000** exactly,
+  bit-exact unchanged (healing still costs nothing on the defend
+  terms).
+- EXP_ELO_101's capture chain (`Attack 68->79`, turn22 idx447):
+  **+899.582**, UP from the post-101 recorded +299.582 -- the same
+  kill also happened to eliminate a unit independently listed as a
+  city-49 threat, so `defend_kill_advance` fires an ADDITIONAL +600 on
+  top of the already-fixed `unit_goal_contest_second` credit. Checked
+  and confirmed this is compounding, not double-counting: the two
+  terms price genuinely different things (contest-second prices
+  capture-readiness at the ATTACKED city, kill-advance prices threat
+  removal at the DEFENDED city) and both fire off the same base score.
+
+VERIFICATION -- regenerated game (`exp106_seed0_watch`, same seed
+1787500020, XinXi vs Imperius, canonical recipe): `game_kpis.rs` --
+last turn 23 (was 21), units_lost 11->**7**, units_killed 14->9, giants
+by turn 12 4->**5** (a new high for this loop). `city49_probe.rs`
+turn-by-turn confirms the mechanism directly, not just the aggregate:
+enemy units near city 49 (the Catapult/Archer force) are present and
+actively wounding the garrison turns 3-14 (garrison health swings
+10->1->7->6->8->40 as the fight is engaged rather than passively
+absorbed), with the last wounded sighting at turn 14 (hp 3 and hp 6);
+from turn 15 onward NO enemy unit appears near city 49 for the rest of
+the game -- the siege that persisted through t17 in the EXP_ELO_104
+baseline is gone by t14-15, matching the pass-4 agent's prediction
+almost exactly. Game length went UP by 2 turns (21->23) despite the
+earlier siege resolution; not investigated further this pass (units
+lost/killed and giants-by-12 all improved, and turn count is not
+regressed relative to EXP_ELO_103's own 23-turn game) -- flagged as a
+loose end for whoever looks at the endgame-conversion-speed lead noted
+below.
+
+NEW TESTS (`combat.rs::risk_tests`):
+- `need_damage_reads_the_frozen_attacker_not_the_live_board`: builds
+  one `threats` snapshot, then clears the live attacker from
+  `state.tribes` between two `city_risks_with_threats` calls reusing
+  the same snapshot; asserts `need_damage` is identical. Pins fix (a).
+- `defend_kill_advance_pays_a_kill_and_advance_onto_the_attackers_tile`:
+  friendly unit relocated onto a frozen attacker's tile (attacker
+  removed from live state); asserts the term appears with a positive
+  value pre-move-absent, post-move-present. Pins fix (b).
+
+This block has been reworked three times in three days (103->104->106)
+by ply-level ground truth alone; these two tests exist so the next
+refactor gets a compile-time-adjacent signal instead of relying on a
+fourth round of probe archaeology.
+
+KNOWN RISK, pre-registered per the advisor's review, NOT yet
+triggered in any measured game -- **register, don't block**, same
+posture as EXP_ELO_103's own carried-forward risk that this entry
+resolves:
+
+1. **Ghost-tile hole in `defend_kill_advance`.** `threat_units` seeds
+   ghost entries with trust `GHOST_TRUST.powi(age)`; an age-0 ghost
+   (spotted leaving vision THIS turn) gets `powi(0) == 1.0`, identical
+   to a live visible unit, and passes the `attackers` filter's
+   `trust >= 1.0` gate the same way. If a friendly unit later occupies
+   that ghost's last-seen tile through ordinary movement (the enemy
+   walked away under fog, not died), the latch cannot tell "killed it"
+   from "it's not there and I walked up" and pays the same +600
+   regardless. The one-move-per-ply argument that makes the latch safe
+   for VISIBLE attackers (nothing else can act between the frozen
+   assessment and this eval, so occupancy implies a kill) does not
+   extend to ghosts, which are already absent from the board by
+   construction. Sketch fix for a future pass: carry a
+   visible/ghost provenance flag through `CityRisk.attackers` and
+   skip ghost entries in the latch. Falsifier: a trace ply where the
+   latch fires on a tile with no actual kill that turn. The n=128
+   gauge already includes 256 games of whatever ghost-tile exposure
+   exists in real play and read positive on both independent seed
+   blocks, so this is not blocking, but the mechanism is real and
+   should be closed before this term is trusted at face value in a
+   future analysis pass.
+2. **Dual-latch stacking.** A melee siege-break of one's OWN city tile
+   (the garrison kills its besieger and advances) pays
+   `defend_kill_advance` (+600ish) AND, if the SAME candidate somehow
+   also satisfies `defend_garrison_hold`'s gate some other way, both
+   could fire together. Checked: this doesn't happen in practice
+   (advancing off the tile is exactly what zeroes `defend_garrison_hold`
+   in the first place -- the two are structurally exclusive for the
+   SAME tile), but a garrison at one city killing a listed THREAT TO A
+   DIFFERENT city (as EXP_ELO_101's capture-chain ply above
+   demonstrates) can legitimately stack `defend_kill_advance` with
+   unrelated terms from the attacked city's own pricing. Bounded,
+   directionally correct (both terms price real, independent value),
+   noted per EXP_ELO_103's own "minor, noted not fixed" precedent for
+   `defend_garrison_hold`/`defend_hold` double-paying the same
+   garrison.
+
+METHODOLOGY NOTE: rerunning the SAME seed (770425) twice for
+cross-pairing produced BIT-EXACT identical `anchor_net_wr` and every
+other metric on both arms (the only differing field across the two
+runs was the games-file timestamp) -- confirmed genuinely independent
+processes, not a stale cache read. This is very likely
+EXP_ELO_091's fix (HashMap/HashSet iteration determinism) finally
+showing up clean, compounded by each worktree's own per-process eval
+cache replaying identical inference results on a same-seed rerun.
+EXP_ELO_103/104/105 saw real run-to-run variance on same-seed reruns;
+this run didn't. Conclusion for future gauges on this harness: **a
+same-seed rerun is now a determinism check (did the binary/config
+change break reproducibility), not a second independent sample.** To
+get a genuine second data point, use a DISJOINT seed block instead
+(`--base-seed <prior + num_games>`, e.g. 770425 -> 770553 for
+num-games=128) -- done below.
+
+PAIRED GAUGE (n=128 per block, seed 770425 harness, Imperius mirror,
+worktree-isolated at commit `fcf6728` (EXP_ELO_105 revert, prior
+shipped state) for both arms, model.safetensors MD5-verified identical,
+binaries MD5-confirmed distinct):
+
+| seed block | baseline | treatment | Δ |
+|---|---|---|---|
+| 770425 (rerun 1) | 0.453125 (58/128) | 0.507813 (65/128) | +5.47pp |
+| 770425 (rerun 2, determinism check) | 0.453125 (58/128) | 0.507813 (65/128) | +5.47pp (bit-exact repeat) |
+| 770553 (disjoint block) | 0.500000 (64/128) | 0.546875 (70/128) | +4.69pp |
+
+Pre-registered rule (set before launching the disjoint block, per the
+advisor's guidance): ship unless the disjoint block reads <= -7.8pp
+(this harness's established noise floor), reconcile otherwise. Both
+independent seed blocks read positive and land within 0.8pp of each
+other (+5.47pp, +4.69pp) -- consistent, not a single lucky draw.
+Throughput: baseline 377 mv/s vs treatment 340 mv/s on the 770425
+block, but the two arms ran concurrently on one machine with different
+game lengths, so this is confounded by system contention, not the
+every-treatment-below-every-baseline pattern EXP_ELO_105 showed on
+serialized runs -- noted, not treated as a throughput regression.
+
+Disposition: **SHIPPED**. Ground-truth ply verification (all three
+flagged plies behave exactly as the diagnosed mechanism predicts,
+including the near-exact convergence to the game's own no-order
+natural control on idx291), four must-not-regress reference plies
+bit-exact preserved or correctly improved, a regenerated-game
+behavioral verification that directly confirms the causal story (siege
+cleared 3 turns earlier, units lost -36%, new giants-by-12 high), two
+new pinning tests plus the full suite (336/336), and a paired gauge on
+TWO independent seed blocks both reading positive (+5.47pp, +4.69pp,
+comfortably clear of the -7.8pp reconcile bar) together clear this for
+shipping. Two items carried forward, not blocking: the ghost-tile hole
+in `defend_kill_advance` (KNOWN RISK above), and the unexplained
+2-turn game-length increase despite the earlier siege resolution
+(possibly related to the still-open "goal-ballot near-indifference to
+conversion" lead from the pass-4 report -- `Attack 24` sat as a ballot
+candidate every turn t8-t17 in the EXP_ELO_104 game but rarely won
+outright despite a growing force advantage; worth its own pass).

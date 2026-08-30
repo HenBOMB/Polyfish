@@ -200,7 +200,15 @@ pub struct CityRisk {
     /// one), so every reachable city keeps a reduced, distance-decayed
     /// share of the threat rather than the nearest city getting all of it
     /// and the rest getting none.
-    pub attackers: Vec<(i32, f32)>,
+    ///
+    /// EXP_ELO_106: stores the frozen `UnitState` snapshot (from `threats`
+    /// at assessment time), not a tile index to re-resolve live. `defend_plan`
+    /// and this struct's own `on_garrison`/`need_damage` price "how much can
+    /// this attacker do", which must stay constant across a ply's own
+    /// before/after comparison — a live re-lookup by tile silently zeroes an
+    /// attacker THIS candidate itself wounds or kills, shrinking the very
+    /// budget the candidate should be credited against.
+    pub attackers: Vec<(UnitState, f32)>,
     /// Threats that could END their move on the tile inside the horizon.
     pub enterers: Vec<Enterer>,
     /// P(lose the city) proxy in [0,1], as assessed at turn start.
@@ -453,7 +461,7 @@ pub fn city_risks_with_threats(
         sieged: bool,
         open: bool,
         enterers: Vec<Enterer>,
-        attackers: Vec<(i32, f32)>,
+        attackers: Vec<(UnitState, f32)>,
         arrives_next_turn: bool,
         breakable: bool,
     }
@@ -481,10 +489,12 @@ pub fn city_risks_with_threats(
         };
         // EXP_ELO_095: weighted, not a bare tile list -- `attack_weight`
         // below is the tanh-bounded, distance-decayed commitment intensity.
-        let attackers: Vec<(i32, f32)> = threats
+        // EXP_ELO_106: keeps the frozen `e` snapshot itself (not just its
+        // tile), so downstream damage math never has to re-resolve it live.
+        let attackers: Vec<(UnitState, f32)> = threats
             .iter()
             .filter(|(e, trust)| *trust >= 1.0 && can_attack_tile(state, e, idx))
-            .map(|(e, _)| (e.coords.idx, attack_weight(state, e, idx)))
+            .map(|(e, _)| (e.clone(), attack_weight(state, e, idx)))
             .collect();
 
         let threat_unit: Option<&UnitState> = if sieged {
@@ -564,7 +574,6 @@ pub fn city_risks_with_threats(
         let on_garrison: f32 = garrison.map_or(0.0, |g| {
             attackers
                 .iter()
-                .filter_map(|&(i, w)| get_true_unit_at(state, i).map(|e| (e, w)))
                 .map(|(e, w)| hypo_damage(state, &probe(e), g, idx) * w)
                 .sum()
         });
@@ -601,7 +610,7 @@ pub fn city_risks_with_threats(
         } else {
             attackers
                 .iter()
-                .filter_map(|&(i, w)| get_true_unit_at(state, i).map(|u| u.health * w))
+                .map(|(u, w)| u.health * w)
                 .fold(0.0, f32::max)
         };
         out.push(CityRisk {
@@ -689,7 +698,7 @@ pub fn residual_risk(state: &GameState, player: PlayerId, d: &CityRisk) -> f32 {
             let dmg: f32 = d
                 .attackers
                 .iter()
-                .filter_map(|&(i, w)| live(i).map(|e| (e, w)))
+                .filter_map(|(u, w)| live(u.coords.idx).map(|e| (e, *w)))
                 .map(|(e, w)| hypo_damage(state, &probe(e), g, d.city) * w)
                 .sum();
             garrison_risk(dmg, g.health, standing.is_empty())
@@ -810,10 +819,9 @@ fn defend_plan_impl(
         let mut contribs: Vec<(UnitState, f32, f32)> = threat // (unit, weighted dmg, weight)
             .attackers
             .iter()
-            .filter_map(|&(i, w)| get_true_unit_at(state, i).map(|u| (u, w)))
             .map(|(u, w)| {
                 let dmg = hypo_damage(state, &probe(u), g, threat.city) * w;
-                (u.clone(), dmg, w)
+                (u.clone(), dmg, *w)
             })
             .collect();
         contribs.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -838,9 +846,8 @@ fn defend_plan_impl(
         let sieger: Vec<(UnitState, f32)> = threat
             .attackers
             .iter()
-            .filter_map(|&(i, w)| get_true_unit_at(state, i).map(|u| (u, w)))
             .max_by(|(a, wa), (b, wb)| (a.health * wa).total_cmp(&(b.health * wb)))
-            .map(|(u, w)| (u.clone(), w))
+            .map(|(u, w)| (u.clone(), *w))
             .into_iter()
             .collect();
         let need = sieger.first().map_or(threat.need_damage, |(u, w)| u.health * w);
@@ -956,8 +963,9 @@ fn defend_plan_impl(
 mod risk_tests {
     use super::tests::{board, unit_at};
     use super::*;
-    use crate::ai::oracle_macro::MacroGoal;
+    use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
     use crate::ai::reward::goal_potential;
+    use crate::coords::Coords;
     use crate::states::{CityState, TileState, TribeState};
     use crate::types::{TerrainType, UnitType};
 
@@ -1030,6 +1038,65 @@ mod risk_tests {
         );
     }
 
+    /// EXP_ELO_106 pin: `need_damage` must read the frozen attacker snapshot,
+    /// not re-resolve it against live state. Build one `threats` snapshot,
+    /// then remove the attacker from the LIVE board (as this ply's own
+    /// candidate move would if it killed it) while reusing the same frozen
+    /// snapshot — the budget must not move.
+    #[test]
+    fn need_damage_reads_the_frozen_attacker_not_the_live_board() {
+        let mut state = board(49);
+        state.tribes.get_mut(&1).unwrap().units.push(unit_at(49, UnitType::Warrior, 1));
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(48, UnitType::Warrior, 2));
+        let threats = threat_units(&state, 1);
+        let before = city_risks_with_threats(&state, 1, &threats);
+        let need_before = before.iter().find(|c| c.city == 49).unwrap().need_damage;
+
+        state.tribes.get_mut(&2).unwrap().units.clear();
+        let after = city_risks_with_threats(&state, 1, &threats);
+        let need_after = after.iter().find(|c| c.city == 49).unwrap().need_damage;
+
+        assert_eq!(
+            need_before, need_after,
+            "need_damage must not shrink when this ply's own move kills the frozen attacker: before {need_before} after {need_after}"
+        );
+    }
+
+    /// EXP_ELO_106 pin: a friendly unit can only be standing on a
+    /// frozen-listed attacker's own tile because it killed that attacker
+    /// and advanced onto its tile this ply — `defend_kill_advance` must
+    /// credit it, compensating `defend_garrison_hold`'s forfeited credit.
+    #[test]
+    fn defend_kill_advance_pays_a_kill_and_advance_onto_the_attackers_tile() {
+        let mut state = board(49);
+        state.tribes.get_mut(&1).unwrap().units.push(unit_at(49, UnitType::Warrior, 1));
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(37, UnitType::Warrior, 2));
+        let goal = MacroGoal { orders: vec![(OrderKind::Defend, 49)], stance: Stance::Arm, save_target: None };
+        let aux = crate::ai::oracle_macro::compute_goal_aux(&state, 1, &goal, 0, 0, None);
+        let threats = threat_units(&state, 1);
+
+        let (_, bd_before) = crate::ai::reward::goal_potential_breakdown(
+            &state, 1, &goal, Some(&aux), Some(&threats), None, None,
+        );
+        assert!(
+            !bd_before.iter().any(|(k, _)| *k == "defend_kill_advance"),
+            "latch must not fire before the kill: {bd_before:?}"
+        );
+
+        // This ply's move: kill the attacker at 37 and advance the garrison
+        // onto its tile (melee kill-and-advance).
+        state.tribes.get_mut(&2).unwrap().units.clear();
+        state.tribes.get_mut(&1).unwrap().units[0].coords = Coords::from_index(37, 11);
+        let (_, bd_after) = crate::ai::reward::goal_potential_breakdown(
+            &state, 1, &goal, Some(&aux), Some(&threats), None, None,
+        );
+        let fired = bd_after.iter().find(|(k, _)| *k == "defend_kill_advance");
+        assert!(
+            fired.is_some_and(|(_, v)| *v > 0.0),
+            "latch must fire once a friendly unit occupies the frozen attacker's tile: {bd_after:?}"
+        );
+    }
+
     /// Killing the unit that would walk in is a defense too — the attackers
     /// T2 named are looked up live, so their death shows up in the price.
     #[test]
@@ -1087,8 +1154,8 @@ mod risk_tests {
         let risks = city_risks(&state, 1);
         let a = risks.iter().find(|r| r.city == 61).expect("city A must be in city_risks");
         let b = risks.iter().find(|r| r.city == 62).expect("city B must be in city_risks");
-        let wa = a.attackers.iter().find(|&&(t, _)| t == 60).map(|&(_, w)| w);
-        let wb = b.attackers.iter().find(|&&(t, _)| t == 60).map(|&(_, w)| w);
+        let wa = a.attackers.iter().find(|(u, _)| u.coords.idx == 60).map(|(_, w)| *w);
+        let wb = b.attackers.iter().find(|(u, _)| u.coords.idx == 60).map(|(_, w)| *w);
         assert!(wa.is_some(), "the nearer city must list the attacker: {:?}", a.attackers);
         assert!(
             wb.is_some(),

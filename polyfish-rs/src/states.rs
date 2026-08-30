@@ -209,7 +209,7 @@ pub struct ResourceState {
 }
 
 /// State of a unit
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnitState {
     pub owner: PlayerId,
