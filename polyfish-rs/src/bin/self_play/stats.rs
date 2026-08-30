@@ -228,6 +228,9 @@ pub(crate) struct Adjudication {
     pub(crate) winner_score: i32,
     /// True when the game ended by elimination rather than the turn cap.
     pub(crate) is_decisive: bool,
+    /// Kept for callers that need to distinguish elimination from a timeout
+    /// beyond the `is_decisive` summary.
+    #[allow(dead_code)]
     pub(crate) alive_tribes: Vec<PlayerId>,
 }
 
