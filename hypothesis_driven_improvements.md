@@ -12846,3 +12846,130 @@ shipped), and a paired gauge on two independent seed blocks both
 showing the same "tied win rate, shorter games" shape (not a
 regression, and directionally exactly what the verified mechanism
 predicts) together clear this for shipping.
+
+## EXP_ELO_108 — a pursuer's own death un-claimed its target mid-comparison, subsidizing suicide via a different unit's sudden "unassigned" credit
+
+CONTEXT: pass-6 `ml-expert` analysis of the EXP_ELO_107 game
+(`exp107_seed0_watch`, turn 18, 7 lost/9 killed, 5 giants by t12) --
+launched specifically to check whether the still-open EXP_ELO_105
+retaliation/exposure diagnosis was still the dominant units-lost cause
+(units-lost was, by this point, the only KPI target not close to being
+met). It confirmed 6 of 7 losses trace to that family, but ALSO found a
+DISTINCT, previously-unseen bug while investigating: turn 10, a 6hp
+Warrior (id1, actively `Pursuing` an Expand goal) attacked a Defender
+KNOWING it would die to retaliation (`preview.attacker_dies` true, base
+score floored at 1.0) -- and the ply still won outright, 101.000 vs a
+safe Step's 48.104, both bit-exact `[MATCH]` against the recorded
+trace. This is not the general retaliation-pricing gap (base already
+correctly reads near-zero for a known-suicide attack); it's a
+SEPARATE, sharper bug that makes the suicide look actively profitable
+on top of that.
+
+ROOT CAUSE (`goal_potential.rs`'s per-unit-goal `Some(store)` branch):
+`unit_goal_approach_unassigned` pays the closest IDLE unit's approach
+gradient for any Expand-ordered target with no unit currently assigned
+to it. "Currently assigned" (`assigned`) was derived from `pairs`,
+which is built by iterating LIVE `tribe.units` and looking up each
+unit's store entry -- so a unit that dies THIS candidate's own move
+simply isn't in `tribe.units` anymore, and its target silently drops
+out of `assigned` in the POST-move evaluation even though nothing
+external changed and the `UnitGoalStore` itself still lists that
+unit's goal (the store is frozen for the whole ply -- real
+reconciliation, including pruning dead units via `retain_ids`, only
+runs between real plies, per `unit_goals.rs`'s own doc comment). The
+result: killing your own pursuer frees its target for
+`unit_goal_approach_unassigned` to pay a DIFFERENT idle unit, and if
+that unit is closer than the dead pursuer was, the new credit can
+exceed both the pursuer's own lost `unit_goal_approach` credit and its
+`arm_value` death charge combined. Ground truth, the flagged ply:
+`arm_value` 2200->2100 (Δ-100, the death charge), `unit_goal_approach`
+2000->1000 (Δ-1000, the dead pursuer's own credit gone, correctly),
+`unit_goal_approach_unassigned` 0->1200 (Δ+1200, a DIFFERENT idle unit
+suddenly "closest" to the now-unassigned target) -- net +100 on top of
+base 1.0. Same collapse-on-transition family as EXP_ELO_101/103/104/
+106/107, but inverted: instead of a success forfeiting its own credit,
+a death is subsidized by someone else's.
+
+FIX (`goal_potential.rs`): `assigned` now reads
+`store.active_targets()` directly -- the `UnitGoalStore`'s own record
+of every currently-claimed target, independent of whether the claiming
+unit is alive in THIS specific candidate's simulated state. The store
+is frozen for the whole ply, so this stays identical across a single
+candidate's pre/post comparison regardless of whether that candidate
+kills its own pursuer, closing exactly the gap the live-`pairs`
+derivation left open. `active_targets()` doesn't filter by goal kind,
+but the module's own doc comment ("Phase 1 only ever mints Expand
+goals") means this is a non-issue in practice; noted in-code in case a
+future goal kind changes that invariant.
+
+VERIFICATION -- ground truth, the flagged ply
+(`attack_pricing_probe3`, `exp107_seed0_watch`, trace-line 74, turn10
+idx149): total **101.000 -> -1099.000**, matching the agent's own
+independent hand-estimate (~-1099) essentially exactly.
+`unit_goal_approach_unassigned` no longer appears in the breakdown at
+all (the frozen store still lists the dying pursuer's goal as active,
+so no other unit's credit fires); only `arm_value` (-100) and
+`unit_goal_approach` (-1000) remain, both correctly reflecting the
+pursuer's own loss. The safe Step (48.104) now wins by a wide margin.
+
+VERIFICATION -- must-not-regress, re-probed against this fix:
+- EXP_ELO_101's capture chain (turn22 idx447, `exp100_seed0_watch`):
+  **+899.582**, bit-exact unchanged.
+- EXP_ELO_107's capture ply (turn18 idx369, `exp106_seed0_watch`):
+  **+590.000**, bit-exact unchanged.
+
+`cargo test --lib`: 338/338 passed (337 + 1 new). New test
+`a_pursuers_own_death_does_not_unassign_its_target`
+(`goal_potential_tests.rs`): a pursuing unit is removed from
+`tribe.units` (simulating its own death this ply) while its goal stays
+in the `UnitGoalStore`; asserts `unit_goal_approach_unassigned` never
+appears in the breakdown for a different idle unit as a result. The
+pre-existing `unassigned_target_gradient_ignores_a_unit_with_its_own_goal`
+regression test (a related but distinct mechanism -- the idle-only
+filter on the min-distance search, not the `assigned` set itself) still
+passes unchanged, since it never involves a unit dying.
+
+VERIFICATION -- regenerated game (`exp108_seed0_watch`, same seed
+1787500020, XinXi vs Imperius, canonical recipe): `game_kpis.rs` --
+units_lost **7 -> 5** (real progress toward the <3 target, the KPI
+this fix specifically targets), last turn 18 -> 17 (also improved,
+though not this fix's direct target), units_killed 9 (unchanged),
+giants by turn 12 5 (unchanged, still the loop's high).
+
+PAIRED GAUGE (n=128 per block, seed 770425 harness + disjoint block
+770553, Imperius mirror, worktree-isolated at commit `5988fe7`
+(EXP_ELO_107 shipped) for both arms, model.safetensors MD5-verified
+identical, binaries MD5-confirmed distinct):
+
+| seed block | baseline anchor_net_wr | treatment anchor_net_wr | Δ | avg_units_lost (base -> treat) |
+|---|---|---|---|---|
+| 770425 | 0.507813 | 0.500000 | -0.78pp | 19.62 -> 19.55 |
+| 770553 | 0.546875 | 0.539063 | -0.78pp | 20.82 -> 20.90 |
+
+Both independent blocks land on the identical small delta (-0.78pp,
+exactly one game out of 128 in each), well inside the ~7.8pp noise
+floor and smaller in magnitude than EXP_ELO_104's own shipped -1.56pp
+wash. `avg_units_lost`/`avg_kills` are flat within rounding on both
+blocks -- consistent with this being a narrow, low-fire-rate fix (it
+only matters on the specific ply where a unit's own death would
+otherwise reassign its target) rather than a broad behavioral shift,
+which is the expected shape given how rarely this exact collision
+(dying pursuer + closer idle unit + unassigned-gradient math tipping a
+ply) occurs on a symmetric mirror matchup versus the asymmetric seed0
+game where it was found.
+
+Disposition: **SHIPPED**. Ground-truth ply verification (bit-exact
+match to the agent's independent hand-estimate), two must-not-regress
+reference plies from EXP_ELO_101/107 held bit-exact, a new pinning
+test plus the full suite (338/338), a real regenerated-game units-lost
+improvement (7->5, directly on this loop's most stubborn remaining
+KPI), and a paired gauge on two independent seed blocks both showing
+the same negligible, sub-noise-floor delta (-0.78pp, half the
+magnitude of a fix already shipped this loop) together clear this for
+shipping. Next candidate lever, per the agent's own recommendation: a
+narrower, move-level (not potential-based) post-move lethality penalty
+for the ACTING unit only, reusing the already-frozen `threat_units`
+snapshot rather than EXP_ELO_105's broad per-unit-per-candidate
+`hypo_damage` rescan -- aimed at the remaining retaliation/exposure
+losses (id14's gratuitous chip, id9's unpriced exposure Step) that this
+fix does not touch.

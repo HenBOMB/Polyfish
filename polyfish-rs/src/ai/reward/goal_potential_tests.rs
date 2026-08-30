@@ -1105,6 +1105,48 @@ use crate::types::UnitType;
         );
     }
 
+    /// EXP_ELO_108: a pursuer's own death (this candidate's own effect)
+    /// must not free up its target for `unit_goal_approach_unassigned` --
+    /// ground truth found this subsidizing a known-lethal suicide attack
+    /// (+101 over a safe alternative's +48) purely through a different
+    /// idle unit's sudden "closest to an unassigned target" credit.
+    #[test]
+    fn a_pursuers_own_death_does_not_unassign_its_target() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        use crate::ai::search::unit_goals::{UnitGoal, UnitGoalStore};
+
+        const TARGET: i32 = 115;
+        const PURSUER_ID: u32 = 1;
+        const IDLE_ID: u32 = 2;
+
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        add_visible_village(&mut state, TARGET);
+        let mut t1 = TribeState::default();
+        t1.units.push(UnitState { id: PURSUER_ID, ..unit_at(110, UnitType::Warrior) });
+        t1.units.push(UnitState { id: IDLE_ID, ..unit_at(114, UnitType::Warrior) });
+        state.tribes.insert(1, t1);
+
+        let goal = MacroGoal {
+            orders: vec![(OrderKind::Expand, TARGET)],
+            stance: Stance::Grow,
+            save_target: None,
+        };
+        let mut store = UnitGoalStore::default();
+        store.assign(PURSUER_ID, UnitGoal { kind: OrderKind::Expand, target: TARGET });
+
+        // The pursuer dies THIS ply -- removed from tribe.units, store left
+        // untouched (frozen for the whole ply; real reconciliation runs
+        // between real plies, not mid-comparison).
+        state.tribes.get_mut(&1).unwrap().units.retain(|u| u.id != PURSUER_ID);
+
+        let (_, bd) = goal_potential_breakdown(&state, 1, &goal, None, None, Some(&store), None);
+        assert!(
+            !bd.iter().any(|(k, _)| *k == "unit_goal_approach_unassigned"),
+            "a dead pursuer's target must not free up unassigned-gradient credit for a different unit mid-comparison: {bd:?}"
+        );
+    }
+
     /// Regression for the turn-1 capital-return incident (seed 1787500002):
     /// a unit sitting on an owned city that still has open Train capacity
     /// must cost potential on the real trajectory, refunded the instant it

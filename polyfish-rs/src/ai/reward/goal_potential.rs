@@ -497,8 +497,23 @@ fn goal_potential_inner(
                 // reaching an adjacent village). Only a genuinely idle unit
                 // could ever end up claiming this target, so only idle
                 // units should move its gradient.
-                let assigned: std::collections::HashSet<i32> =
-                    pairs.iter().map(|(_, t)| *t).collect();
+                //
+                // EXP_ELO_108: reads the STORE's own record of claimed
+                // targets, not `pairs` (derived from LIVE `tribe.units`).
+                // A pursuer that dies mid-comparison simply drops out of
+                // `tribe.units`, so `pairs`-derived `assigned` un-claims its
+                // target for the SAME candidate that killed it -- letting a
+                // different idle unit's sudden "closest to an unassigned
+                // target" credit subsidize the pursuer's own suicide (ground
+                // truth: a known-lethal Attack scored +101 over a safe
+                // Step's +48, entirely from this reassignment, not the
+                // attack itself). The store is frozen for the whole ply
+                // (real reconciliation, including pruning dead units, only
+                // runs between real plies -- see `unit_goals.rs`'s own doc
+                // comment), so `active_targets()` stays identical across a
+                // single candidate's pre/post comparison regardless of
+                // whether that candidate kills its own pursuer.
+                let assigned: rustc_hash::FxHashSet<i32> = store.active_targets();
                 for target in approach_targets.iter().filter(|t| !assigned.contains(t)) {
                     let d = tribe
                         .units
