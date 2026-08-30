@@ -841,6 +841,58 @@ use crate::types::UnitType;
             "latch delta wrong: on {phi_on} off {phi_off}"
         );
     }
+    /// EXP_ELO_107: the ply that finishes an Attack order (Capture)
+    /// forfeits `attack_siege_hold`'s credit for the same state-fact reason
+    /// it was paid -- the target must still be enemy-owned.
+    /// `attack_capture_complete` must pick up exactly the forfeited rate
+    /// the instant ownership flips to the player.
+    #[test]
+    fn attack_capture_complete_replaces_the_forfeited_siege_hold() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        let mut state = defense_board(29);
+        state.tribes.get_mut(&2).unwrap().cities.push(crate::states::CityState {
+            owner: 2,
+            idx: 79,
+            ..Default::default()
+        });
+        state.tribes.get_mut(&1).unwrap().units.push(combat_unit(79, UnitType::Rider, 1));
+        let goal = MacroGoal {
+            orders: vec![(OrderKind::Attack, 79)],
+            stance: Stance::Grow,
+            save_target: None,
+        };
+        let (_, bd_before) = goal_potential_breakdown(&state, 1, &goal, None, None, None, None);
+        let siege_before: f32 = bd_before
+            .iter()
+            .filter(|(k, _)| *k == "attack_siege_hold")
+            .map(|(_, v)| v)
+            .sum();
+        assert!(siege_before > 0.0, "fixture sanity: siege_hold must be paying pre-capture");
+        assert!(
+            !bd_before.iter().any(|(k, _)| *k == "attack_capture_complete"),
+            "must not pay before the city is ours: {bd_before:?}"
+        );
+
+        // Simulate a successful Capture: ownership flips, unit stays put
+        // (get_city_at scans every tribe's list by tile idx and callers
+        // check the returned CityState's own .owner -- which Vec holds it
+        // is not consulted).
+        state.tribes.get_mut(&2).unwrap().cities[0].owner = 1;
+        let (_, bd_after) = goal_potential_breakdown(&state, 1, &goal, None, None, None, None);
+        let capture_after: f32 = bd_after
+            .iter()
+            .filter(|(k, _)| *k == "attack_capture_complete")
+            .map(|(_, v)| v)
+            .sum();
+        assert!(
+            !bd_after.iter().any(|(k, _)| *k == "attack_siege_hold"),
+            "siege_hold must not also fire once the target is ours: {bd_after:?}"
+        );
+        assert!(
+            (capture_after - siege_before).abs() < 1e-3,
+            "attack_capture_complete must replace exactly the forfeited rate: siege_before {siege_before} capture_after {capture_after}"
+        );
+    }
     /// EXP_ELO_042: the shortfall recall gradient never conscripts an
     /// attack-committed unit — the same unit at the same distance from the
     /// threatened city pays recall when free and nothing when committed.

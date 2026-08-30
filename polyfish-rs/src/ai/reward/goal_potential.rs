@@ -744,6 +744,22 @@ fn goal_potential_inner(
                 }
             }
         }
+        // EXP_ELO_107: `attack_siege_hold` requires the target to still be
+        // enemy-owned, so the exact ply that finishes the order (Capture)
+        // forfeits its own credit -- the same collapse-on-success shape as
+        // EXP_ELO_101/103/104/106, on the offense side's terminal action.
+        // Pay the same rate once the ordered target is OURS -- ownership,
+        // not occupancy, so stepping off the captured tile later can't
+        // re-forfeit it (the order generator also stops re-issuing Attack
+        // for cities that are now ours, since it only scans OTHER tribes'
+        // `cities`, so this can't accumulate turn over turn).
+        for &h in &attack_targets {
+            if let Some(c) = crate::functions::get_city_at(state, h) {
+                if c.owner == player {
+                    acc.add("attack_capture_complete", SHAPE_GOAL_ATTACK_PRESS * SHAPE_GOAL_SIEGE_HOLD_MULT);
+                }
+            }
+        }
         for &h in &attack_targets {
             let mut cands: Vec<(i32, f32, i32)> = Vec::new(); // (tile, sat, dist)
             for u in &tribe.units {

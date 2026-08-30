@@ -12719,3 +12719,130 @@ in `defend_kill_advance` (KNOWN RISK above), and the unexplained
 conversion" lead from the pass-4 report -- `Attack 24` sat as a ballot
 candidate every turn t8-t17 in the EXP_ELO_104 game but rarely won
 outright despite a growing force advantage; worth its own pass).
+
+## EXP_ELO_107 — `attack_siege_hold` is forfeited by the exact ply that finishes the order: capturing the target zeroes the "still enemy-owned" latch mid-comparison
+
+CONTEXT: pass-5 `ml-expert` analysis of the EXP_ELO_106 game
+(`exp106_seed0_watch`, turn 23, 7 lost/9 killed, 5 giants by t12) --
+launched to investigate the carried-forward "goal-ballot near-
+indifference to conversion" lead. That lead was REFUTED as stated: the
+ballot converges hard on `Attack 24` from t15 onward (40-48/64 votes).
+The real mistake was one level downstream, in conversion PRICING, not
+goal selection. By t17 the net had killed the enemy capital's last
+Catapult and advanced a Giant onto the capital tile (24) -- p2 was down
+to that one city and zero units, so Capture = elimination = an
+immediate win. Every turn t18-t22, `Capture` at 24 was legal and scored
+**-160.0**, losing every turn to the safe `Recover` (+20.0). The game
+only ended when, at t23, the ENEMY's own city growth happened to
+reprice `spt` enough to tip Capture positive by accident -- the net
+never decided to convert; it stumbled into it. The agent's own
+independent hand-estimate (removing the forfeiture should read
+~+590) was reproduced bit-exact before any code was written.
+
+ROOT CAUSE (`goal_potential.rs`'s Attack-order block, EXP_ELO_042's
+`attack_siege_hold`): the latch pays `SHAPE_GOAL_ATTACK_PRESS *
+SHAPE_GOAL_SIEGE_HOLD_MULT` (750) by state-fact -- a friendly unit
+standing on a city with `c.owner != player && c.owner != 0`. Capturing
+the city is the ONE action that flips `c.owner` to `player`, so the
+exact ply that finishes the Attack order forfeits the credit the order
+was designed to reward for holding the position -- the same
+collapse-on-success shape as EXP_ELO_101 (contest-second)/103
+(defend_cover)/104 (defend_plan waterfall)/106 (defend_garrison_hold),
+now found on the OFFENSE side's own terminal action. Ground truth,
+turn18 idx369 (`Capture` at 24): base +115, `attack_siege_hold`
+750->0 (Δ-750), `spt` 4650->5400 (Δ+750, an unrelated, correctly-
+positive term that happens to net-cancel the forfeiture almost
+exactly), `city_train_blocked` 0->-200, `stranded` -75->-150 -- total
+-160, losing to Recover's flat +20.
+
+FIX (`goal_potential.rs`): a new `attack_capture_complete` state-fact
+term, direct sibling to `attack_siege_hold` in the same `if width > 0`
+block -- for every Attack-ordered target `h`, if `get_city_at(state, h)`
+now returns `c.owner == player`, pay the same rate
+(`SHAPE_GOAL_ATTACK_PRESS * SHAPE_GOAL_SIEGE_HOLD_MULT`). Ownership,
+not occupancy, so stepping off the newly-captured tile later can't
+re-forfeit it. No farming risk: the order generator
+(`compute_macro_goal_cached`) only ever scans OTHER tribes' `.cities`
+when proposing Attack targets, so a captured city (now living in the
+player's own tribe) can never be re-issued an Attack order on a later
+turn's goal recompute -- `attack_targets` simply stops naming it, and
+the term stops firing, exactly mirroring `attack_siege_hold`'s own
+natural stop condition.
+
+VERIFICATION -- ground truth, the flagged ply (`attack_pricing_probe3`,
+exp106_seed0_watch, trace-line 255, turn18 idx369): total **-160.000
+-> +590.000**, bit-exact `[MISMATCH (expected -160.000)]` against the
+OLD recorded score (confirming the fix changed it) and matching the
+agent's own independent hand-estimate exactly. `attack_capture_complete`
+0->750 exactly offsets `attack_siege_hold`'s 750->0; the remaining
+`city_train_blocked`/`stranded`/`spt` terms are unchanged and now
+correctly get outweighed by base+750 instead of swamping it. Capture
+now beats Recover (+20.0) by a wide margin.
+
+VERIFICATION -- must-not-regress, re-probed against this fix:
+- EXP_ELO_101's capture chain (turn22 idx447, `exp100_seed0_watch`,
+  `Attack 68->79` -- an ATTACK that kills the garrison, not yet a
+  Capture): **+899.582**, bit-exact unchanged. `attack_capture_complete`
+  correctly does not fire (ownership hasn't flipped yet on a mere
+  kill).
+- EXP_ELO_106's idx291 (turn16, `exp104_seed0_watch`, the garrison
+  killing an adjacent Archer besieger): **+327.219**, bit-exact
+  unchanged -- no Attack order is even active on this ply, confirming
+  the two fixes are properly disjoint.
+
+`cargo test --lib`: 337/337 passed (336 + 1 new). New test
+`attack_capture_complete_replaces_the_forfeited_siege_hold`
+(`goal_potential_tests.rs`): builds a sieging unit on an Attack-ordered
+enemy city, confirms `attack_siege_hold` pays and `attack_capture_complete`
+doesn't; flips the city's `.owner` to the player (simulating a
+successful Capture) with the unit left in place, confirms
+`attack_siege_hold` stops and `attack_capture_complete` picks up
+exactly the same rate.
+
+VERIFICATION -- regenerated game (`exp107_seed0_watch`, same seed
+1787500020, XinXi vs Imperius, canonical recipe): `Capture Village at
+24` now fires immediately at **turn 18**, first action of the turn --
+the stuck loop from EXP_ELO_106's game is gone entirely. `game_kpis.rs`:
+last turn **23 -> 18** (the best turn-count result this loop has ever
+shipped, and the first shipped game inside single digits of the <=15
+target), units_lost 7 (unchanged), units_killed 9 (unchanged), giants
+by turn 12 5 (unchanged) -- this fix is purely a conversion-speed fix,
+not a combat-behavior one, and the KPIs it doesn't touch stayed exactly
+where EXP_ELO_106 left them.
+
+PAIRED GAUGE (n=128 per block, seed 770425 harness + disjoint block
+770553 per EXP_ELO_106's determinism methodology note, Imperius
+mirror, worktree-isolated at commit `e1f0705` (EXP_ELO_106 shipped) for
+both arms, model.safetensors MD5-verified identical, binaries
+MD5-confirmed distinct):
+
+| seed block | baseline anchor_net_wr | treatment anchor_net_wr | Δ | avg_moves (base -> treat) |
+|---|---|---|---|---|
+| 770425 | 0.507813 | 0.507813 | **0.00pp (exact tie)** | 240.1 -> 233.2 (-2.9%) |
+| 770553 | 0.546875 | 0.546875 | **0.00pp (exact tie)** | 261.0 -> 236.4 (-9.4%) |
+
+Both independent blocks land on an EXACT win-rate tie, and both show a
+consistent, one-directional drop in average game length -- the same
+qualitative shape twice, not noise (noise would not produce identical
+win-rate readings on two disjoint 128-game samples by chance, and
+would not produce a same-direction moves delta on both). Read together
+with the ground-truth mechanism (this term only pays once an
+Attack-ordered target is fully captured, i.e., the game is already
+functionally won at that point) this is the expected shape: the fix
+changes WHEN an already-winning game closes out, not WHETHER it's won
+-- structurally the same "clean wash on win rate, real and verified
+underneath" shape EXP_ELO_102 shipped on (exact tie, but the shared
+diagnostic counter confirmed the mechanism fired and reshaped games).
+`baseline`'s 770425 reading (0.507813) also reproduces EXP_ELO_106's
+own treatment reading for the identical commit/seed exactly --
+continued confirmation of the determinism finding.
+
+Disposition: **SHIPPED**. Ground-truth ply verification (bit-exact
+match to the agent's independent hand-estimate), two must-not-regress
+reference plies from EXP_ELO_101/106 held bit-exact, a new pinning
+test plus the full suite (337/337), a dramatic regenerated-game result
+(the game-ending turn dropping from 23 to 18, the best this loop has
+shipped), and a paired gauge on two independent seed blocks both
+showing the same "tied win rate, shorter games" shape (not a
+regression, and directionally exactly what the verified mechanism
+predicts) together clear this for shipping.
