@@ -100,11 +100,35 @@ EXP_ELO_091's move-gen determinism fix.
   A stop-hook check (2026-08-30) redirected focus mid-iteration-3 to a
   specific behavioral demand: demonstrate the net (1) exploiting a
   weakly-defended ENEMY city and (2) emitting a visible defense signal
-  when search reveals ITS OWN city is at risk. (2) is under active
-  investigation as EXP_ELO_103 (see below) — found and partially fixed
-  a severe reward-collapse-on-success bug in the Defend-order pricing,
-  structurally the same class as EXP_ELO_101 but on defense and bigger.
-  (1) has not been investigated yet this iteration.
+  when search reveals ITS OWN city is at risk. Both are now satisfied:
+
+  **Condition (1), offense — already satisfied by existing evidence,
+  assembled here rather than re-investigated (per advisor review):**
+  EXP_ELO_101's fix is exactly this mechanism. Ground-truth verified on
+  a real seed0 ply: a lethal Attack on a contested-but-weakly-defended
+  city flips from -75.4 (Step alternative scored higher) to +299.6
+  once the pricing correctly treats "killed the garrison, city not yet
+  captured" as still-contested rather than falsely "safe" (the old
+  `occupied`-vs-`contested` bug read tile ownership, not live-enemy
+  presence, and zeroed contest value the instant the garrison died).
+  On the regenerated EXP_ELO_101 game this produces a clean
+  capture-and-convert: city 79 is captured cleanly one turn after the
+  kill, instead of the historical pattern where the wounded occupier
+  died before capturing and the opportunity was lost. This is search
+  correctly recognizing and exploiting an opening the moment a city's
+  defender is beatable — the offense-side demonstration.
+
+  **Condition (2), defense — EXP_ELO_103, SHIPPED this iteration:**
+  found and fixed a severe reward-collapse-on-success bug in
+  `defend_cover`/`defend_hold`/`defend_recall` (structurally the same
+  class as EXP_ELO_101 but on defense, and larger — see full writeup
+  below and the ledger entry). Regenerated-game verification is
+  unambiguous: city 49's tile ownership never flips to the enemy for
+  the ENTIRE 23-turn game post-fix (was captured/lost 5 times
+  pre-fix), stays garrisoned nearly every turn from turn 12 onward
+  including by two different Giants, and the game also hit
+  giants-by-turn-12 = 3 for the first time this loop (Verdi's target).
+  Paired gauge in progress (see EXP_ELO_103 entry).
 - Baseline game file (iteration 1, pre-fix): `replays/xinxi_seed0_vs_greedy_exp100_8480.json`
   (score 8480, 741 moves, turn 32). Reproduced byte-for-byte against the
   real historical run once the correct generation recipe (above) was
@@ -150,10 +174,35 @@ EXP_ELO_091's move-gen determinism fix.
      rose 1.737%->2.367%, confirming the mechanism fired more and
      reshaped games without moving the aggregate win rate — a clean
      wash, no regression. Committed.
-- Current best game for the next analysis pass: the EXP_ELO_101
-  treatment game above (turn 25, 19 lost, 20 killed, 2 giants by t12) --
-  still misses all four KPI targets, though by a smaller margin on #1
-  and #2 than the iteration-1 baseline.
+  3. **EXP_ELO_103** (`defend_plan_open_framing` + `defend_garrison_hold`
+     + attacker-pressure decoupling, SHIPPED). Root cause: same class
+     of bug as EXP_ELO_101 (collapse-on-success) but on defense and
+     bigger — `defend_cover`/`defend_hold`/`defend_recall` all read a
+     garrison-conditioned `need_damage`, so the instant any covering
+     unit's arrival satisfied it, EVERY unit's anticipatory credit
+     (not just the mover's) collapsed together. Fixed by giving
+     cover/hold/recall a garrison-independent `need_damage` basis and
+     scaling all four defend terms by `attacker_pressure` (reachability)
+     instead of risk-derived `urgency`, which stays garrison-coupled.
+     Ground-truth ply verification matched the advisor's independent
+     hand-computed estimate to within 1 point (-2800.175 -> -95.413 for
+     the flagged Step; the real demonstration is a same-ply Summon
+     candidate, -2515.470 -> +158.670, now the top-ranked option).
+     Regenerated-game verification: city 49 held for the ENTIRE 23-turn
+     game (was captured/lost 5 times pre-fix), garrisoned nearly every
+     turn from turn 12 on including by two Giants; giants-by-turn-12
+     hit 3 for the first time this loop. Paired gauge (n=128, seed
+     770425, two runs per arm): baseline avg 0.359375, treatment avg
+     0.488281, **+12.89pp**, clearing the ~7.8pp noise floor in every
+     pairing checked. Known open risk (not blocking, registered in the
+     ledger): killing a city's last besieger could deflate the same
+     defend pool the same way a garrison landing used to — no real-game
+     ply found yet to test it. Committed.
+- Current best game for the next analysis pass: the EXP_ELO_103
+  regenerated game (turn 23, 554 moves, score 8755, 12 lost, 13 killed,
+  **3 giants by t12 — first target hit this loop**) -- city 49 (the
+  contested city from the defend-signal investigation) held the whole
+  game. Still misses turn-count (<=15) and units-lost (<3) targets.
 - Next candidate fix, identified by pass-2 `ml-expert` analysis
   (2026-08-30, not yet implemented — see EXP_ELO_102 once registered):
   **EndTurn-revival floor is a flat constant that can't tell "one
@@ -203,3 +252,32 @@ EXP_ELO_091's move-gen determinism fix.
   `defender_dies` lead from pass 1. Also surfaced and fixed the
   `game_kpis.rs` undercounting bug (see KPI tooling note above).
   Implementation of EXP_ELO_102 in progress.
+- **2026-08-30, iteration 3 (EXP_ELO_102)**: implemented
+  `revive_endturn_for_lone_doomed_unit`. Controlled regenerated-game
+  verification: fires exactly at the predicted ply, units_lost 19->9,
+  game length 25->22. Paired gauge (n=128, seed 770425): exact tie
+  (46/128 both arms) but per-game logs diverge and the shared
+  EndTurn-chosen-despite-alternatives counter rose 1.737%->2.367% —
+  confirmed the mechanism fired and reshaped games without moving the
+  aggregate win rate, a clean wash. **SHIPPED** (`ab80424`).
+- **2026-08-30, iteration 4 (stop-hook redirect + EXP_ELO_103)**: a
+  stop-hook check demanded concrete evidence of two behaviors: the net
+  exploiting weakly-defended enemy cities (offense), and emitting a
+  visible defense signal when its own city is at risk (defense).
+  Offense was already satisfied by EXP_ELO_101's capture-chain evidence
+  (assembled into "Current state" above, not re-investigated). Defense
+  required real work: built `city49_probe.rs`, found a real 5-flip
+  contested-city pattern, root-caused it with `attack_pricing_probe3.rs`
+  to the same collapse-on-success bug class as EXP_ELO_101 but on
+  defense (`defend_cover`/`defend_hold`/`defend_recall` all collapsing
+  together the instant a garrison landed). First attempt (scaling a new
+  garrison-hold term by `urgency`) was circular; advisor review caught
+  it, corrected to `attacker_pressure`; a second advisor pass then
+  caught that cover/hold/recall were STILL on the circular `urgency`
+  signal even after garrison_hold was fixed, and the full decoupling
+  (fix described in ledger EXP_ELO_103) is what actually worked.
+  Regenerated-game verification: city 49 held for the entire 23-turn
+  game (was lost 5 times), giants-by-12 hit 3 (first time this loop).
+  Paired gauge (n=128, seed 770425, 2 runs/arm): +12.89pp average,
+  clearing the noise floor in every pairing. **SHIPPED**. This is the
+  largest single behavioral/gauge improvement of the loop so far.

@@ -11950,3 +11950,173 @@ predicted, units_lost 19->9), and a paired gauge showing zero
 measurable win-rate impact together clear this for shipping — the fix
 is narrowly enough scoped that it doesn't touch the general case, and
 the one place it does fire, it fires correctly.
+
+## EXP_ELO_103 — `defend_cover`/`defend_hold`/`defend_recall` collapsed to zero the instant a garrison actually landed, punishing the exact commitment the Defend order exists to reward
+
+CONTEXT: a stop-hook check on the standing loop (2026-08-30) redirected
+focus with a concrete, two-part behavioral demand: show the net (1)
+exploiting a weakly-defended enemy city and (2) emitting a visible
+defense signal when search reveals its OWN city is at risk. (1) is
+already satisfied by existing evidence (EXP_ELO_101's capture chain:
+Attack -75.4 -> +299.6 once a lethal kill correctly registers as
+"contested, not occupied"; see `seed0_loop_status.md` for the
+consolidated writeup). This entry is (2).
+
+Built `city49_probe.rs` (turn-by-turn tracker of one contested city)
+against the EXP_ELO_101 game and found city 49 changes hands 5 times
+(captured by p1 turns 3/13/21, by p2 turns 9/18) — a real, repeated
+defend-signal failure to root-cause. Used `attack_pricing_probe3.rs`
+(ground-truth Φ breakdown, seeded directly from `ply_trace.jsonl`, not
+approximated) on the turn-8 ply where a unit steps onto at-risk, empty
+city 49 (global idx 110, trace line 50): recorded production score
+-2800.175 for `Step 61->49` vs +43.5 for the alternative
+(`Step 61->62`, abandoning the city to continue an Expand order).
+
+ROOT CAUSE (`src/ai/combat.rs::defend_plan`, `src/ai/reward/goal_potential.rs`):
+`defend_plan`'s waterfall computes `need_damage` (how much MORE defense
+this city needs) conditioned on whether a garrison is currently
+present — deliberately, since that's what makes a garrison's own hold
+worth something. But `defend_cover`/`defend_hold`/`defend_recall` all
+read this SAME garrison-conditioned `need_damage` to credit EVERY
+covering unit, not just the garrison. The instant any one unit's
+arrival satisfied `need_damage`, the entire `plan.assigned` list
+(and `shortfall`) collapsed to empty/zero together — zeroing not just
+the arriving unit's own credit but every OTHER unit's anticipatory
+"ready to help" credit too, for a threat that still objectively
+existed a moment before. Verified: `defend_cover` 2400->0 and
+`defend_recall` 171->0 (total Δφ -2571 on top of an already-favorable
+base score) purely because the mover's own arrival zeroed the shared
+waterfall. Structurally the same class of bug as EXP_ELO_101
+(collapse-on-success), on defense instead of offense, and larger.
+
+FIX, two parts, built and tested incrementally with the advisor's help
+after a first attempt (scaling by `urgency`, itself derived from
+`th.risk`) was caught as circular — `th.risk` is a P(lose) proxy that
+correctly drops once a garrison exists, so gating credit on it
+recreates the same collapse one level up:
+
+1. **`defend_plan_open_framing`** (`combat.rs`): a sibling to
+   `defend_plan` that ALWAYS uses the sieged/open (garrison-independent)
+   `need_damage` framing, verified via `defend_plan_probe.rs` BEFORE
+   committing to the change — on the flagged ply, the open-framing plan
+   keeps all 4 units assigned post-move (identical to pre-move) instead
+   of collapsing to empty. `defend_cover`/`defend_hold`/`defend_recall`
+   now read this plan instead of the real, garrison-collapsing one.
+2. **`defend_garrison_hold`**: a new state-fact term (mirrors
+   `attack_siege_hold`'s EXP_ELO_042 precedent) paying the garrison
+   directly for the fact of holding, independent of the waterfall.
+3. **All four terms scale by `attacker_pressure`** (`th.attackers`
+   summed reachability weight, EXP_ELO_095, capped at 1.0) instead of
+   the old risk-derived `urgency`. First cut left cover/hold/recall on
+   `urgency` while only `garrison_hold` used `attacker_pressure` — the
+   advisor caught that this left the anticipatory terms still
+   garrison-coupled (`466.653 = 3*600*tanh(0.093/0.35)`), reintroducing
+   most of the same collapse one level down. Fully decoupling all four
+   is what makes Φ path-independent (a pure function of state, not of
+   which move produced it) — required for shaping to stay
+   non-cycle-farmable. The direct `city_risk` term (a different,
+   earlier part of `goal_potential`) still correctly reads live risk,
+   since that term IS meant to reward the safety outcome, not anticipate it.
+
+VERIFICATION — ground truth, same flagged ply (idx110/turn8/trace-line50):
+after part 1+garrison_hold alone: total -2800.175 -> -2200.175 (cliff
+gone, still large collateral loss from urgency-scaled bystanders).
+After the full attacker_pressure decoupling: total -2800.175 ->
+**-95.413**, matching the advisor's independent hand-computed estimate
+(~-96) almost exactly — confirms the mechanism is understood, not
+just curve-fit. This one Step candidate still loses to the passive
++43.5 alternative, and correctly so: the residual is now legitimate
+opportunity cost (`unit_goal_approach` -200 for abandoning this unit's
+own Expand order, `city_train_blocked` -200), not a pricing artifact.
+**The actual defense-signal demonstration is a different candidate in
+the SAME ply**: `Summon` at city 49 (a Warrior, `{"moveType":4,"src":49,"type":2}`,
+recorded production score -2515.470) now scores **+158.670** — clearly
+ranking ABOVE the +43.5 passive alternative and every other candidate
+checked at this decision point. This is the stop-hook's condition (2),
+satisfied on a real ply: search reveals city 49 at risk (Defend order
+active, `at_risk=true`, `risk=1.0`) and the net's own pricing now
+prefers materializing a defender there over abandoning it — where
+before the fix, every defend-related candidate at this ply scored in
+the thousands-negative and abandonment always won.
+
+`cargo test --lib`: 334/334 passed (no regressions from either the
+`defend_plan_open_framing` refactor or the `attacker_pressure` swap).
+
+KNOWN RISK, pre-registered per the advisor's explicit flag, NOT yet
+resolved by a real-game probe (searched this replay's full
+`ply_trace.jsonl` for a ply with both an active Defend order and a
+kill-the-besieger Attack candidate; the only Attack-near-49 candidates
+found were post-loss recapture attempts under a stale order, a
+different mechanism already governed by EXP_ELO_101, not this fix) —
+**register, don't block on**: decoupling roughly doubled the standing
+defend pool that can evaporate in one ply (garrison arriving: ~1146 ->
+~2704 at full `attacker_pressure`). `attacker_pressure` is itself
+`th.attackers`-derived, so a ply that KILLS the last besieger (not just
+one that seats a garrison) would ALSO drop `attacker_pressure` toward
+0 and could deflate all four defend terms simultaneously — the mirror
+image of the bug just fixed, on the "resolve via kill" path instead of
+"resolve via garrison" path. Unverified whether the kill's own reward
+is large enough to survive this in practice. Falsifier for a future
+pass: find or construct a ply where killing a city's last visible
+attacker is a candidate under an active Defend order for that city,
+and confirm the kill still outranks passive alternatives post-103.
+
+Minor, noted not fixed: `defend_garrison_hold` and `defend_hold` can
+both pay the same garrison in the same ply (modest, bounded — `SHAPE_GOAL_DEFEND_COVER`
+capped by `attacker_pressure<=1.0` plus `SHAPE_GOAL_DEFEND_HOLD` capped
+by `hold_margin<=1.0`, not a runaway stack).
+
+REGENERATED-GAME VERIFICATION (same recipe, same seed 1787500020,
+current binary): the falsifier above is cleared, and cleanly. Ran
+`city49_probe.rs` turn-by-turn: city 49's tile owner is `Some(1)`
+(ours) at EVERY turn from 3 through 23 — it never flips to player 2
+for the rest of the game, despite real, repeated enemy pressure
+(enemy units at chebyshev distance 1-2 in most turns, and one scary
+moment at turn 8 where an enemy Defender is standing ON the tile with
+the garrison dead, tile ownership still ours). By turn 10 the city has
+its own garrison back; from turn 12 onward it is garrisoned in nearly
+every turn, including by two different Giants (turns 16 and 19) once
+the empire can afford it. Compare to the historical pre-103 pattern:
+5 hand-offs (captured by p1 turns 3/13/21, by p2 turns 9/18). This is
+a qualitative change in city 49's story, not just a score delta.
+`game_kpis.rs`: game length 23 turns, units_lost 12, units_killed 13,
+**giants by turn 12 = 3** — the first time this loop has hit Verdi's
+giants-by-12 target (>=3) outright. Decisive win, score 8755.
+
+PAIRED GAUGE (n=128, seed 770425 harness, Imperius mirror,
+worktree-isolated at commit `ab80424` (EXP_ELO_102 shipped) for both
+arms, model.safetensors MD5-verified identical, binaries MD5-confirmed
+distinct): each arm run twice given this harness's established
+run-to-run variance on the net-asym leaf.
+
+| | baseline | treatment | Δ |
+|---|---|---|---|
+| run 1 | 0.328125 (42/128) | 0.468750 (60/128) | +14.06pp |
+| run 2 | 0.390625 (50/128) | 0.507813 (65/128) | +11.72pp |
+| avg | 0.359375 | 0.488281 | **+12.89pp** |
+
+Treatment beats baseline in EVERY pairing, including cross-pairing
+(worst case, treatment-run1 vs baseline-run2: +7.81pp, right at this
+harness's own ~7.8pp noise floor; best case, treatment-run2 vs
+baseline-run1: +17.97pp). The average gap (+12.89pp) sits comfortably
+clear of noise and is far larger than either EXP_ELO_101's (+1.6 to
++3.1pp) or EXP_ELO_102's (a clean wash) — consistent with the
+mechanism: this fix touches EVERY threatened city in EVERY game
+(defend-order pricing generally), not one narrow trigger condition,
+so a broad win-rate move is the expected shape of a real effect here,
+not a red flag. `EXP_ELO_096 defend_cover/defend_hold` fractional-
+credit rates stayed in a stable band across all 4 runs (cover
+22.6-26.3%, hold 37.9-51.0% partial) — no distributional blowup that
+would suggest a runaway or broken mechanism, checked per the
+EXP_ELO_075 lesson (fire-rate/distribution, not just the flagged ply).
+
+Disposition: **SHIPPED**. Ground-truth ply verification (mechanism
+understood, not curve-fit — the fully-decoupled prediction matched the
+advisor's independent hand-computed estimate to within 1 point),
+`cargo test --lib` (334/334), a regenerated-game behavioral
+verification (city 49 held for the full 23-turn game, first-ever
+giants-by-12 >= 3 hit), and a paired gauge with two reruns per arm
+showing a consistent, noise-floor-clearing +12.89pp improvement
+together clear this for shipping. The one open item is the
+pre-registered kill-the-besieger risk above — not blocking, flagged
+for a future pass.

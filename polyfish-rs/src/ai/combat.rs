@@ -751,8 +751,34 @@ pub fn defend_plan(
     threat: &CityRisk,
     attack_targets: &[i32],
 ) -> DefendPlan {
+    defend_plan_impl(state, player, threat, attack_targets, false)
+}
+
+/// EXP_ELO_103 diagnostic: `defend_plan` but ALWAYS uses the sieged/open
+/// (garrison-independent) need_damage framing, even when a garrison is
+/// present. Used to hand-verify whether decoupling `defend_cover`'s
+/// waterfall cap from the garrisoned branch's collapsed need_damage would
+/// actually restore credit to nearby non-garrison units, before committing
+/// to that restructuring. Not wired into any pricing path yet.
+pub fn defend_plan_open_framing(
+    state: &GameState,
+    player: PlayerId,
+    threat: &CityRisk,
+    attack_targets: &[i32],
+) -> DefendPlan {
+    defend_plan_impl(state, player, threat, attack_targets, true)
+}
+
+fn defend_plan_impl(
+    state: &GameState,
+    player: PlayerId,
+    threat: &CityRisk,
+    attack_targets: &[i32],
+    force_open_framing: bool,
+) -> DefendPlan {
     let size = state.settings.size;
     let garrison = get_true_unit_at(state, threat.city).filter(|u| u.owner == player);
+    let framing_garrison = if force_open_framing { None } else { garrison.as_ref() };
 
     // Verdi (Aug 2026): an unsieged, garrisoned city can be hit by EVERY
     // listed attacker in the same enemy turn (sequential melee strikes,
@@ -774,7 +800,7 @@ pub fn defend_plan(
     // nothing needs preparing. Sieged/open: no garrison HP to protect,
     // keep the original single-strongest-unit framing (siege-break /
     // entry-deterrence), so it never floors at zero on a real threat.
-    let (must_kill, need_damage): (Vec<UnitState>, f32) = if let Some(g) = garrison.as_ref() {
+    let (must_kill, need_damage): (Vec<UnitState>, f32) = if let Some(g) = framing_garrison {
         // EXP_ELO_095: every quantity derived from an attacker -- its
         // contribution to the incoming strike, its priority, and the kill
         // damage it sets once selected -- is scaled by its commitment

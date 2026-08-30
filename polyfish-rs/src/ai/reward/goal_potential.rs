@@ -587,11 +587,13 @@ fn goal_potential_inner(
     }
     // EXP_ELO_040: Defend orders — coverage leash, not garrison pinning.
     // Pay per assigned covering unit (full in 1-turn strike reach, half in
-    // the 2-turn ring) scaled by live urgency; pay tile-holding only while
-    // the garrison is load-bearing; on shortfall, recall the single nearest
-    // unassigned unit with an approach gradient. Threats recomputed from
-    // state each eval, so prep outcomes (a trained unit, a road, a tech
-    // that extends reach) raise Φ the ply they land — no discrete planner.
+    // the 2-turn ring) scaled by attacker pressure (EXP_ELO_103: garrison-
+    // independent, so this doesn't collapse the moment prep succeeds); pay
+    // tile-holding only while the garrison is load-bearing; on shortfall,
+    // recall the single nearest unassigned unit with an approach gradient.
+    // Threats recomputed from state each eval, so prep outcomes (a trained
+    // unit, a road, a tech that extends reach) raise Φ the ply they land —
+    // no discrete planner.
     let attack_targets: Vec<i32> = goal
         .orders
         .iter()
@@ -610,31 +612,67 @@ fn goal_potential_inner(
             let Some(th) = city_threats.iter().find(|t| t.city == *idx) else {
                 continue; // stale order: threat cleared, nothing to pay
             };
-            // Aug 2026 (Verdi): continuous in risk, not a flat 1.0/0.5 step
-            // -- a .06-risk city and a .34-risk city used to pay identically
-            // as long as neither tripped `at_risk`, giving micro-mcts no
-            // gradient to allocate more search toward the more urgent one.
-            // `at_risk` is a sharper, non-risk-derived signal (already
-            // sieged, or near-lethal damage incoming) that `risk` alone can
-            // under-represent once it saturates -- keep it as a hard floor,
-            // not folded into the tanh.
-            let urgency = (th.risk / crate::ai::combat::RISK_GARRISON_FALLS)
-                .tanh()
-                .max(if th.at_risk { 1.0 } else { 0.0 });
-            let plan = crate::ai::combat::defend_plan(state, player, th, &attack_targets);
+            // EXP_ELO_103: every term in this block scales by
+            // `attacker_pressure` (garrison-independent reachability,
+            // EXP_ELO_095-weighted), not by the old risk-derived `urgency`.
+            // `th.risk` is a P(lose) proxy that correctly (by design) drops
+            // once a garrison is present -- scaling THIS block on it meant
+            // the whole anticipatory reward (cover/hold/recall for every
+            // unit converging on the city, plus the garrison's own hold)
+            // collapsed together the instant a garrison actually landed,
+            // since `need_damage` and `risk` both correctly head to zero on
+            // success. `attacker_pressure` stays a pure function of visible
+            // enemy reachability, unaffected by whether the threat has
+            // already been resolved -- confirmed unchanged (`[(37, 1.0)]`
+            // both sides) across the exact ply this was found on, unlike
+            // `risk` (1.000->0.093). The live risk level still gates the
+            // separate, direct `city_risk` term above (correctly, since
+            // that term IS meant to reward the outcome of being safer) --
+            // only the anticipatory prep/hold/recall terms move off it.
+            let attacker_pressure =
+                th.attackers.iter().map(|(_, w)| w).sum::<f32>().min(1.0);
+            if attacker_pressure > 0.0 {
+                if let Some(g) = crate::functions::get_unit_at(state, *idx) {
+                    if g.owner == player {
+                        acc.add(
+                            "defend_garrison_hold",
+                            SHAPE_GOAL_DEFEND_COVER * attacker_pressure,
+                        );
+                    }
+                }
+            }
+            // EXP_ELO_103: cover/hold/recall all read the OPEN-framing plan
+            // (need_damage computed as if no garrison existed), not
+            // `defend_plan`'s real, garrison-collapsing one. The real plan's
+            // need_damage is deliberately garrison-dependent for good
+            // reason elsewhere (it's what makes THIS garrison's own hold
+            // worth something), but reusing it here meant every OTHER
+            // covering unit's credit collapsed to zero the instant any one
+            // of them arrived, since the "residual need" it measures
+            // legitimately hits zero on success. Cover/hold/recall want a
+            // stable, garrison-independent read of "how much defense does
+            // this city objectively need" so a covering unit's own value
+            // doesn't evaporate the moment a teammate closes the gap.
+            let plan = crate::ai::combat::defend_plan_open_framing(state, player, th, &attack_targets);
             // EXP_ELO_096: credit scales with the unit's own contribution
             // (credit_frac), not a flat per-unit share — a strong unit and
-            // a barely-relevant one no longer pay identically.
-            for (_, sat, credit_frac) in &plan.assigned {
+            // a barely-relevant one no longer pay identically. The garrison
+            // tile itself is excluded (EXP_ELO_103) since it's already paid
+            // above, independent of whatever residual need the waterfall
+            // still finds open.
+            for (tile, sat, credit_frac) in &plan.assigned {
+                if *tile == *idx {
+                    continue;
+                }
                 acc.add(
                     "defend_cover",
-                    SHAPE_GOAL_DEFEND_COVER * urgency * sat * credit_frac,
+                    SHAPE_GOAL_DEFEND_COVER * attacker_pressure * sat * credit_frac,
                 );
             }
             if plan.hold_margin > 0.0 {
                 acc.add(
                     "defend_hold",
-                    SHAPE_GOAL_DEFEND_HOLD * urgency * plan.hold_margin,
+                    SHAPE_GOAL_DEFEND_HOLD * attacker_pressure * plan.hold_margin,
                 );
             }
             // EXP_ELO_042: recall never conscripts attack-committed units;
@@ -660,7 +698,7 @@ fn goal_potential_inner(
                 {
                     acc.add(
                         "defend_recall",
-                        SHAPE_GOAL_DEFEND_COVER * urgency * 0.5
+                        SHAPE_GOAL_DEFEND_COVER * attacker_pressure * 0.5
                             * ((SHAPE_PROX_CAP - d).max(0) as f32 / SHAPE_PROX_CAP as f32),
                     );
                 }
