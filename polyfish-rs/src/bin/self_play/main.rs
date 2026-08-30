@@ -1,12 +1,10 @@
 // The METRICS json! literal outgrew serde_json's default macro recursion.
 #![recursion_limit = "256"]
 
-use candle_core::Tensor;
 use polyfish::ai::brain::{SearchBackend, SearchBackendArg};
 use polyfish::ai::macro_agent::{MacroLeaf, MacroParams};
 use polyfish::ai::eval_backend::{self, EvalBackendKind, PlayerBackend};
 use polyfish::ai::eval_server::{EvalServerConfig, EvalServerStats};
-use polyfish::ai::features;
 use polyfish::replayer::ModReplay;
 use serde_json::json;
 use std::collections::HashMap;
@@ -15,25 +13,22 @@ use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use strum::IntoEnumIterator;
 
 mod crutches;
 use crutches::{ANCHOR_FRAC_DECAY, decay_crutch};
 mod result;
 mod labels;
-use labels::{CitySptStep, LabelStep, SptStep, city_spt_checkpoints, city_spt_target,
-            ownership_from_pov, macro_policy_targets, spt_checkpoints_by_player, spt_target,
-            td_lambda_labels, GOOD_BOT_FINAL_SCORE, FINAL_OUTCOME_REL_W};
-use result::{GameResult, HistoryStep};
+use result::GameResult;
 mod stats;
 mod tempo;
 use stats::{finish_milestones, is_net_seat};
 mod traces;
 mod shard;
-use shard::{SHARD_GAMES, flush_shard};
 mod game;
 use game::{load_networks, play_single_game};
 mod cli;
+mod dataset;
+use dataset::ShardBuffers;
 use cli::Args;
 mod dumps;
 use polyfish::eval_seeds::{CORE_TRIBES, SeedEntry, load_seed_file, parse_tribe,
@@ -579,36 +574,6 @@ fn main() -> anyhow::Result<()> {
         }
     );
 
-    // Aggregate results
-    let mut collected_spatial_maps: Vec<Tensor> = Vec::new();
-    let mut collected_player_states: Vec<Tensor> = Vec::new();
-
-    // Decomposed policy targets (7 heads)
-    let mut collected_action_type: Vec<Vec<f32>> = Vec::new();
-    let mut collected_source_spatial: Vec<Vec<f32>> = Vec::new();
-    let mut collected_target_spatial: Vec<Vec<f32>> = Vec::new();
-    let mut collected_option: Vec<Vec<f32>> = Vec::new();
-
-    let mut collected_values: Vec<f32> = Vec::new();
-    let mut collected_progress: Vec<f32> = Vec::new();
-
-    // Aux-head targets (see the aux_* helpers above GameResult).
-    let num_techs = polyfish::types::TechnologyType::iter().count();
-    let mut collected_aux_own: Vec<Vec<f32>> = Vec::new();
-    let mut collected_aux_fog: Vec<Vec<f32>> = Vec::new();
-    let mut collected_aux_spt: Vec<f32> = Vec::new(); // flat, 2 per step
-    let mut collected_aux_tech: Vec<Vec<f32>> = Vec::new();
-    let mut collected_aux_pursuit: Vec<f32> = Vec::new(); // scalar per step
-    let mut collected_aux_city_spt: Vec<Vec<f32>> = Vec::new(); // board-sized per step
-
-    // EXP_ELO_061 (Stage 3b): macro policy targets. Per-ROW mask, not just
-    // per-file — even a macro-mcts-heavy run has steps with no ballot (the
-    // opponent seat, an anchor game). Zero-filled + mask=0 there, matching
-    // the aux-head-per-key-mask lesson: never let an absent target train
-    // toward a fake zero.
-    let mut collected_macro_stance: Vec<Vec<f32>> = Vec::new();
-    let mut collected_macro_order: Vec<Vec<f32>> = Vec::new();
-    let mut collected_macro_mask: Vec<f32> = Vec::new();
 
     let mut max_score = 0;
     let mut best_recap: Option<ModReplay> = None;
@@ -673,22 +638,9 @@ fn main() -> anyhow::Result<()> {
     }
     let mut tempo_aggs: HashMap<&'static str, TempoAgg> = HashMap::new();
 
-    // Value-head calibration dump (one JSON line per net-seat step).
-    let mut value_calib_file = args
-        .dump_value_calib
-        .as_ref()
-        .and_then(|p| File::create(p).ok());
 
     let run_ts = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    // Trace runs are diagnostics, not training data: quarantine their games
-    // under a prefix the training loop's games_* glob won't match.
-    let shard_prefix = if args.trace_villages {
-        "trace_games"
-    } else {
-        "games"
-    };
-    let mut shard_files: Vec<String> = Vec::new();
-    let mut games_in_shard = 0usize;
+    let mut shard = ShardBuffers::new(&args, run_ts);
 
     for result in results {
         total_moves += result.moves;
@@ -861,239 +813,9 @@ fn main() -> anyhow::Result<()> {
         // Domination: Win/Loss is the primary signal.
         // The winner gets +1.0, loser gets -1.0.
         // If timeout, use score differential as a softer signal.
-        let final_scores = &result.scores;
+        shard.push_game(result, &args);
 
-        let label_steps: Vec<LabelStep> = result.history.iter().map(LabelStep::from).collect();
-        // EXP_ELO_025: outcome-space labels — z anchors the TD tail too.
-        let wl_z: Option<HashMap<i32, f32>> = if args.wl_labels {
-            Some(
-                result
-                    .scores
-                    .keys()
-                    .map(|&id| (id, if id == result.winner_id { 1.0 } else { -1.0 }))
-                    .collect(),
-            )
-        } else {
-            None
-        };
-        let td_deltas = td_lambda_labels(
-            &label_steps,
-            &result.final_potentials,
-            args.td_lambda,
-            args.label_rel_w,
-            wl_z.as_ref(),
-            args.td_missing_bootstrap,
-        );
-
-        let spt_steps: Vec<SptStep> = result
-            .history
-            .iter()
-            .map(|s| SptStep {
-                player_id: s.player_id,
-                turn: s.turn,
-                my_spt: s.my_spt,
-                opp_spt: s.opp_spt,
-            })
-            .collect();
-        let spt_cp = spt_checkpoints_by_player(&spt_steps);
-        let city_spt_steps: Vec<CitySptStep> = result
-            .history
-            .iter()
-            .map(|s| CitySptStep {
-                player_id: s.player_id,
-                turn: s.turn,
-                cities: s.city_spt.clone(),
-            })
-            .collect();
-        let city_spt_cp = city_spt_checkpoints(&city_spt_steps);
-
-        let game_winner_id = result.winner_id;
-
-        for (step_idx, step) in result.history.into_iter().enumerate() {
-            let HistoryStep {
-                features,
-                policy: policy_data,
-                player_id: p_id,
-                turn,
-                enemy_units,
-                pursuit,
-                my_score: step_my_score,
-                opp_score: step_opp_score,
-                root_value: step_root_value,
-                root_own_value: step_root_own_value,
-                macro_ballot,
-                ..
-            } = step;
-            let flat_map = features
-                .spatial_map
-                .flatten_all()
-                .expect("BUG: Failed to flatten spatial map tensor");
-            collected_spatial_maps.push(flat_map);
-
-            let flat_player = features
-                .player_state
-                .flatten_all()
-                .expect("BUG: Failed to flatten player state tensor");
-            collected_player_states.push(flat_player);
-
-            collected_action_type.push(policy_data.action_type);
-            collected_source_spatial.push(policy_data.source_spatial);
-            collected_target_spatial.push(policy_data.target_spatial);
-            collected_option.push(policy_data.move_option);
-
-            // Perfection: Score-based value target
-            // Every game produces a meaningful score — use normalized differential
-            let my_final = final_scores.get(&p_id).copied().unwrap_or(0) as f32;
-            let opp_final = final_scores
-                .iter()
-                .filter(|(id, _)| **id != p_id)
-                .map(|(_, score)| *score as f32)
-                .next()
-                .unwrap_or(0.0);
-
-            // Asymmetric Reward Shaping to fix P1 advantage
-            let (mut my_adjusted, mut opp_adjusted) = (my_final, opp_final);
-            if !args.no_reward_shaping {
-                let penalty = 0.05; // 5% adjustment
-                if p_id == 1 {
-                    my_adjusted = my_final * (1.0 - penalty);
-                    opp_adjusted = opp_final * (1.0 + penalty);
-                } else if p_id == 2 {
-                    my_adjusted = my_final * (1.0 + penalty);
-                    opp_adjusted = opp_final * (1.0 - penalty);
-                }
-            }
-
-            // Normalize by combined economic activity with scaling multiplier
-            let combined_score = my_adjusted + opp_adjusted;
-            // to spread distribution into useful training range
-            let scaling_factor = args.outcome_scale;
-            let relative_outcome = if combined_score > 0.0 {
-                let ratio = (my_adjusted - opp_adjusted) / combined_score;
-                (ratio * scaling_factor).clamp(-1.0, 1.0)
-            } else {
-                0.0 // Both players scored 0 - treat as draw
-            };
-
-            // Absolute value: final score vs fixed yardstick, not current scoreboard.
-            let abs_outcome = (my_final / GOOD_BOT_FINAL_SCORE).clamp(0.0, 1.0) * 2.0 - 1.0;
-            let final_outcome = if args.wl_labels {
-                // EXP_ELO_011: the score ratio under-punishes close losses
-                // (4257 vs 4676 reads -0.14); win/loss makes them -1.
-                if p_id == game_winner_id {
-                    1.0
-                } else {
-                    -1.0
-                }
-            } else {
-                (FINAL_OUTCOME_REL_W * relative_outcome
-                    + (1.0 - FINAL_OUTCOME_REL_W) * abs_outcome)
-                    .clamp(-1.0, 1.0)
-            };
-
-            let value = if !args.no_reward_shaping {
-                // TD delta carries per-action credit; the final-outcome tail
-                // carries the long-horizon signal.
-                (args.td_w * td_deltas[step_idx] + (1.0 - args.td_w) * final_outcome)
-                    .clamp(-1.0, 1.0)
-            } else {
-                final_outcome.clamp(-1.0, 1.0)
-            };
-
-            collected_values.push(value);
-
-            // Value-head calibration: NN prediction vs current-score-ratio vs
-            // the actual final outcome, for net seats that ran a real search.
-            if let (Some(f), Some(rv)) = (value_calib_file.as_mut(), step_root_value) {
-                if is_net_seat(result.roles, p_id) {
-                    let raw = step_root_own_value.unwrap_or(rv);
-                    let _ = writeln!(
-                        f,
-                        "{{\"turn\":{turn},\"my\":{step_my_score},\"opp\":{step_opp_score},\"root_value\":{rv},\"raw_value\":{raw},\"final_outcome\":{final_outcome},\"value_target\":{value}}}"
-                    );
-                }
-            }
-
-            let my_final_cities = result.final_cities.get(&p_id).copied().unwrap_or(0) as f32;
-            let total_cities = result.total_cities as f32;
-            let progress_target = if total_cities > 0.0 {
-                (my_final_cities / total_cities).clamp(0.0, 1.0) * 2.0 - 1.0
-            } else {
-                -1.0
-            };
-            collected_progress.push(progress_target);
-
-            let opp_id = final_scores
-                .keys()
-                .copied()
-                .find(|id| *id != p_id)
-                .unwrap_or(p_id);
-            collected_aux_own.push(ownership_from_pov(&result.final_owner, p_id));
-            collected_aux_fog.push(enemy_units);
-            let (spt_my, spt_opp) = spt_target(
-                spt_cp.get(&p_id),
-                turn,
-                result.final_spt.get(&p_id).copied().unwrap_or(0),
-                result.final_spt.get(&opp_id).copied().unwrap_or(0),
-            );
-            collected_aux_spt.push(spt_my as f32 / 20.0);
-            collected_aux_spt.push(spt_opp as f32 / 20.0);
-            collected_aux_pursuit.push(pursuit);
-            if let Some((candidates, visits)) = &macro_ballot {
-                let (stance, order) = macro_policy_targets(candidates, visits);
-                collected_macro_stance.push(stance);
-                collected_macro_order.push(order);
-                collected_macro_mask.push(1.0);
-            } else {
-                collected_macro_stance.push(vec![0.0; 4]);
-                collected_macro_order.push(vec![0.0; 3 * features::MAP_SIZE * features::MAP_SIZE]);
-                collected_macro_mask.push(0.0);
-            }
-            collected_aux_city_spt.push(city_spt_target(
-                city_spt_cp.get(&p_id),
-                turn,
-                features::MAP_SIZE * features::MAP_SIZE,
-            ));
-            collected_aux_tech.push(
-                result
-                    .final_tech
-                    .get(&opp_id)
-                    .cloned()
-                    .unwrap_or_else(|| vec![0.0; num_techs]),
-            );
-        }
-
-        games_in_shard += 1;
-        if games_in_shard >= SHARD_GAMES && !collected_spatial_maps.is_empty() {
-            let path = format!(
-                "{shard_prefix}_{run_ts}_p{}.safetensors",
-                shard_files.len()
-            );
-            flush_shard(
-                std::mem::take(&mut collected_spatial_maps),
-                std::mem::take(&mut collected_player_states),
-                std::mem::take(&mut collected_action_type),
-                std::mem::take(&mut collected_source_spatial),
-                std::mem::take(&mut collected_target_spatial),
-                std::mem::take(&mut collected_option),
-                std::mem::take(&mut collected_values),
-                std::mem::take(&mut collected_progress),
-                std::mem::take(&mut collected_aux_own),
-                std::mem::take(&mut collected_aux_fog),
-                std::mem::take(&mut collected_aux_spt),
-                std::mem::take(&mut collected_aux_pursuit),
-                std::mem::take(&mut collected_aux_city_spt),
-                std::mem::take(&mut collected_aux_tech),
-                num_techs,
-                std::mem::take(&mut collected_macro_stance),
-                std::mem::take(&mut collected_macro_order),
-                std::mem::take(&mut collected_macro_mask),
-                &device,
-                &path,
-            )?;
-            shard_files.push(path);
-            games_in_shard = 0;
-        }
+        shard.maybe_flush(&device)?;
     }
 
     let mut net_games = 0u32;
@@ -1254,36 +976,7 @@ fn main() -> anyhow::Result<()> {
         serde_json::Value::Object(turn_map)
     };
 
-    // Final partial shard.
-    if !collected_spatial_maps.is_empty() {
-        let path = format!(
-            "{shard_prefix}_{run_ts}_p{}.safetensors",
-            shard_files.len()
-        );
-        flush_shard(
-            std::mem::take(&mut collected_spatial_maps),
-            std::mem::take(&mut collected_player_states),
-            std::mem::take(&mut collected_action_type),
-            std::mem::take(&mut collected_source_spatial),
-            std::mem::take(&mut collected_target_spatial),
-            std::mem::take(&mut collected_option),
-            std::mem::take(&mut collected_values),
-            std::mem::take(&mut collected_progress),
-            std::mem::take(&mut collected_aux_own),
-            std::mem::take(&mut collected_aux_fog),
-            std::mem::take(&mut collected_aux_spt),
-            std::mem::take(&mut collected_aux_pursuit),
-            std::mem::take(&mut collected_aux_city_spt),
-            std::mem::take(&mut collected_aux_tech),
-            num_techs,
-            std::mem::take(&mut collected_macro_stance),
-            std::mem::take(&mut collected_macro_order),
-            std::mem::take(&mut collected_macro_mask),
-            &device,
-            &path,
-        )?;
-        shard_files.push(path);
-    }
+    let shard_files = shard.finish(&device)?;
     // METRICS carries the first shard (the value-distribution reader wants a
     // ~64-game sample, not every file); everything else globs the _p* stem.
     let games_file = shard_files.first().cloned().unwrap_or_default();
