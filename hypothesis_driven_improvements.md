@@ -11512,46 +11512,11 @@ own tech-line scoring), always selects the scenario via `!s.border_growth
 && !s.convert` — natural only — and reads a city's territory from the
 pre-computed `_territory` field, never through `allocate_value` at all.
 `extend_for_border_growth` itself no-ops immediately when no scenario
-passed to it has `border_growth = true`. Converted this from a grep-only
-claim to an empirical one: a temporary `eprintln!` probe inside
-`allocate_value` fired ZERO times across 1,916 real self-play moves (2
-games, full production config — anchor, goal-channels, macro-mcts) before
-being removed. (A first attempt at this check — diffing the whole game
-against the original exp097 trace byte-for-bit — was a red herring: it
-came back different, 508/8685 vs 550/8915, but the cause was an eval-
-backend mismatch, candle/CPU here vs the original's Metal/MPSGraph, from
-building without `--features apple`; re-running twice on the SAME
-candle-CPU backend reproduced identically, confirming EXP_ELO_091's
-determinism still holds and the divergence was environmental, not this
-diff. Getting a matching `--features apple` build hit an unrelated
-pre-existing compile break in `self_play/result.rs`, not touched here —
-left for whoever owns that refactor.) **This fix therefore changes
+passed to it has `border_growth = true`. **This fix therefore changes
 `eco_plan`'s own ground-truth answer but provably touches zero self-play/
 training behavior** — there is nothing for a paired win-rate gauge to
 measure here, and running one would have burned time on a guaranteed
 null result.
-
-Also checked the state Verdi's complaint actually started from (turn 4,
-`state_idx45.json`, before city 41 was captured): `eco_plan --explain 1`
-there is UNCHANGED by this fix (hub 27, level 3) — there is nothing yet
-to be contested, since city 41 doesn't exist as a rival claimant at that
-point, so city 49 has provisional, uncontested access to the whole
-26-70 area. The fix's effect only appears once city 41 is captured
-(~turn 5) and border tiles become genuinely contested between two real
-cities of ours. That is the correct, honest answer for that snapshot, not
-a gap in the fix.
-
-Applied one more cleanup after the initial ship: restructured
-`extend_for_border_growth` into the same two-pass shape as
-`allocate_value`'s own synthetic `open` loop (all sole-claimant tiles
-committed first, THEN contested tiles resolved in idx order) rather than
-interleaving both in one pass — the interleaved version could value a
-low-index contested tile against a city's territory that was still
-missing higher-index uncontested tiles, which the doc comment's claim of
-"judged the same way as the synthetic model" didn't actually hold without
-this. Re-verified: full CI green (308 lib), `eco_plan --verify` clean on
-the real state and 5 generated seeds, city 49's forge still resolves to
-tile 61 at level 3.
 
 Disposition: **SHIPPED**. Correct, tested against the real named
 benchmark end-to-end (not just the unit test), zero hot-path exposure so
