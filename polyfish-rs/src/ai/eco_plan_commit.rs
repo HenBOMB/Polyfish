@@ -79,6 +79,13 @@ impl EcoPlanCommit {
         self.mine_partners.contains(&tile)
     }
 
+    /// Every currently-credited tile, for diagnostics (fire-rate/scope
+    /// checks) — not consumed by scoring, which only ever needs
+    /// membership.
+    pub fn mine_partner_tiles(&self) -> impl Iterator<Item = i32> + '_ {
+        self.mine_partners.iter().copied()
+    }
+
     /// Recompute if `(turn, player)` has moved on since the last call;
     /// no-op (and cheap — one tuple comparison) otherwise. Call once per
     /// ply from the same place `LaneState`/`TurnCounters` already get

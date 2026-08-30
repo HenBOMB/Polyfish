@@ -11,7 +11,7 @@ fn main() {
     let player: i32 = args[2].parse().unwrap();
     let mut commit = EcoPlanCommit::default();
     commit.update(&state, player);
-    for &t in &[37, 38, 39, 50] {
-        println!("tile {t}: is_mine_partner = {}", commit.is_mine_partner(t));
-    }
+    let mut tiles: Vec<i32> = commit.mine_partner_tiles().collect();
+    tiles.sort();
+    println!("turn={} credited mine-partner tiles ({}): {:?}", state.settings.turn, tiles.len(), tiles);
 }
