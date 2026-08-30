@@ -323,7 +323,7 @@ fn bounce_reach(state: &GameState, unit: &UnitState) -> bool {
 /// away is still out there, and pretending otherwise is what leaves a city
 /// open. Ghosts are placed at their last-seen tile and their contribution is
 /// discounted by age.
-pub(crate) fn threat_units(state: &GameState, player: PlayerId) -> Vec<(UnitState, f32)> {
+pub fn threat_units(state: &GameState, player: PlayerId) -> Vec<(UnitState, f32)> {
     let mut out: Vec<(UnitState, f32)> = state
         .tribes
         .iter()

@@ -374,25 +374,41 @@ fn goal_potential_inner(
                             SHAPE_GOAL_EXPAND_PER_TILE * w_of(*target) * (SHAPE_PROX_CAP - d).max(0) as f32,
                         );
                     }
-                    // v6: a CONTESTED target (visible enemy unit standing on
-                    // it) pays one extra converger — the nearest unit not
-                    // already assigned to it — at half gradient. Exactly
-                    // one; no dogpile.
+                    // v6: a CONTESTED target pays one extra converger — the
+                    // nearest unit not already assigned to it (and not
+                    // already standing on the target itself, which is paid
+                    // separately via siege-hold/completion) — at half
+                    // gradient. Exactly one; no dogpile. "Contested" is
+                    // tile ownership (still enemy, i.e. not yet captured),
+                    // not live-defender presence: capturing a city is a
+                    // separate move from killing its garrison, so a target
+                    // stays genuinely contested — worth a second unit
+                    // converging to help hold/capture it — for exactly as
+                    // long as it isn't ours, not just while its original
+                    // defender is still alive. Gating on live-unit presence
+                    // alone made this collapse to zero the instant an
+                    // attack killed the garrison, wrongly erasing the
+                    // reward for the very progress meant to earn it.
                     for (unit_idx, target) in &pairs {
-                        let occupied = crate::functions::get_unit_at(state, *target)
-                            .map_or(false, |u| u.owner != player)
-                            && state
-                                .tiles
-                                .get(target)
-                                .map_or(false, |t| t.explorers.contains(&player));
-                        if !occupied {
+                        let visible = state
+                            .tiles
+                            .get(target)
+                            .map_or(false, |t| t.explorers.contains(&player));
+                        let contested = visible
+                            && (crate::functions::get_unit_at(state, *target)
+                                .map_or(false, |u| u.owner != player)
+                                || state
+                                    .tiles
+                                    .get(target)
+                                    .map_or(false, |t| t.owner != 0 && t.owner != player));
+                        if !contested {
                             continue;
                         }
                         let second = tribe
                             .units
                             .iter()
                             .map(|u| u.coords.idx)
-                            .filter(|idx| idx != unit_idx)
+                            .filter(|idx| idx != unit_idx && idx != target)
                             .map(|idx| cheb(idx, *target, width))
                             .min();
                         if let Some(d) = second {
@@ -496,21 +512,28 @@ fn goal_potential_inner(
                         SHAPE_UNIT_GOAL_PER_TILE * w_of(*target) * (SHAPE_PROX_CAP - d).max(0) as f32,
                     );
                 }
+                // Same "still enemy-owned, not just still defended" fix as
+                // the ephemeral-match branch above — see its comment.
                 for (unit_idx, target) in &pairs {
-                    let occupied = crate::functions::get_unit_at(state, *target)
-                        .map_or(false, |u| u.owner != player)
-                        && state
-                            .tiles
-                            .get(target)
-                            .map_or(false, |t| t.explorers.contains(&player));
-                    if !occupied {
+                    let visible = state
+                        .tiles
+                        .get(target)
+                        .map_or(false, |t| t.explorers.contains(&player));
+                    let contested = visible
+                        && (crate::functions::get_unit_at(state, *target)
+                            .map_or(false, |u| u.owner != player)
+                            || state
+                                .tiles
+                                .get(target)
+                                .map_or(false, |t| t.owner != 0 && t.owner != player));
+                    if !contested {
                         continue;
                     }
                     let second = tribe
                         .units
                         .iter()
                         .map(|u| u.coords.idx)
-                        .filter(|idx| idx != unit_idx)
+                        .filter(|idx| idx != unit_idx && idx != target)
                         .map(|idx| cheb(idx, *target, width))
                         .min();
                     if let Some(d) = second {

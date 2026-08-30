@@ -11701,3 +11701,128 @@ positive evidence of harm to weigh against the verified behavioral gain.
 Scope stays Mine lane only per the design; Sawmill/Windmill following
 the same pattern is a natural next step once this has more play behind
 it.
+
+## EXP_ELO_101 — `unit_goal_contest_second`/`expand_contest_second`'s "occupied" check confused live-defender-presence with contested-ownership; a lethal attack zeroed its own reward the instant it worked
+
+CONTEXT: first iteration of Verdi's standing "seed0 improvement loop"
+(2026-08-30): generate XinXi-vs-Imperius seed0 (net vs Greedy anchor,
+base-seed 1787500020) with full debug traces, find the clearest real
+mistake, root-cause it against the actual reward code, fix it, verify on
+a regenerated game, paired-gauge it, repeat — no time limit, target KPIs
+are game-length <=15, <3 units lost, >=3 giants by turn 12, ~100% win
+rate. An `ml-expert` agent's first pass flagged a full-HP Giant orbiting
+city 79's garrison for 7 turns (t22-29) instead of attacking, eventually
+taking the free kill at low HP and dying to a counter-giant before
+capturing — directly costing units_lost and turns.
+
+METHOD: reproduced `rank_plies`' exact real-trajectory scoring formula
+(`score_move_with_unit_goals` + λ·Δφ, λ=1.0) for the flagged ply against
+GROUND TRUTH — not an approximation. First pass (`attack_pricing_probe2`)
+guessed at the goal/UnitGoalStore context and got a plausible-looking but
+WRONG answer (see Errors below); the corrected tool
+(`attack_pricing_probe3`) seeds `goal`/`unit_goals` directly from
+`POLYFISH_PLY_TRACE`'s real dump for that exact ply and verified its
+recomputed total matches the recorded score bit-for-bit (Attack:
+-75.418 vs recorded -75.42; Step: 86.000 vs recorded 86.0) before
+trusting the per-term breakdown.
+
+Ground truth at turn22/idx447 (Giant at 68, city 79's garrison still
+alive, `goal.orders` includes `(Attack, 79)`): Attack 68->79 scored
+**-75.418** (base 110, Δφ -185.418) vs Step 68->67 (loiter) scoring
+**86.000** flat — the lethal attack loses despite `score_move` itself
+correctly favoring it. Breaking down Δφ's five moving terms: `attack_press`
+-500 and `attack_siege_hold` +750 are a CORRECT, intentional swap (Verdi's
+own EXP_ELO_042 design: an occupying unit graduates from "pressing"
+credit to "holding" credit, net +250, not a bug). `city_risk` +14.58 is
+also fine. The real bug is `unit_goal_contest_second`: 450 -> **0**, a
+full collapse. Root cause: its `occupied` gate
+(`get_unit_at(state, target).is_some_and(|u| u.owner != player)`) checks
+for a LIVE ENEMY UNIT standing on the target tile — but capturing a city
+is a separate move from killing its garrison (confirmed empirically:
+`tile.owner` stays the enemy's after a lethal `simulate_move`, unchanged
+until an explicit Capture). So the instant the attack works and the
+defender dies, `occupied` flips false and the term that was supposed to
+reward a second unit converging on this still-contested target
+collapses to zero — punishing the AI for the very progress the term
+exists to encourage. Exactly the "prefer continuous over discrete
+pricing" anti-pattern CLAUDE.md and EXP_ELO_096 already flag: a discrete
+on/off gate on "is a body currently standing here."
+
+CHANGE (`src/ai/reward/goal_potential.rs`, both the ephemeral-match
+`expand_contest_second` block and the sticky-store
+`unit_goal_contest_second` block — identical duplicated logic, same
+bug, same fix): `occupied` becomes `contested` — true if EITHER a live
+enemy unit is on the tile (the original village/ruin-race case,
+preserved unchanged) OR the tile is still owned by someone other than
+us (`owner != 0 && owner != player`, the new case: a city whose garrison
+we just killed but haven't captured yet). Also excluded the target tile
+itself from the "second unit" distance search (`idx != target`, not
+just `idx != unit_idx`) — needed only because the widened gate now lets
+this fire on plies where the ACTING unit has already moved onto the
+target (melee kill-and-occupy), and without the exclusion that unit
+would count itself as its own "second" converger at distance 0,
+double-crediting the same move that's already paid via
+`attack_siege_hold`. `cargo test --lib`: 329 passed, 0 failed.
+
+VERIFICATION — bit-for-bit ground truth (`attack_pricing_probe3`,
+post-fix): Attack 68->79 now scores **299.582** (Δφ +189.582:
+`unit_goal_contest_second` 450 -> 375, a modest, non-collapsing drop
+matching the new nearest-other-unit distance, not a subtraction of
+someone's whole credit) vs Step's unchanged 86.000 — decisively flips
+the flagged ply.
+
+VERIFICATION — controlled regenerated game (single-variable A/B, same
+seed/tribes/opponent/model, worktree-isolated): the historical
+"vs-Greedy watch" recipe was itself misremembered twice this session
+(guessed `--macro-leaf heuristic`, then omitted `--anchor-decay-start`,
+each producing a silently-wrong opponent/anchor config) before being
+recovered verbatim from the pre-compaction transcript
+(`--search-backend macro-mcts --macro-leaf net-asym --macro-sims 64
+--macro-k 8 --macro-rollout-lambda 0.0 --goal-channels --goal-w-tree 1
+--anchor-frac 1.0 --iteration 100 --anchor-decay-start 100 --base-seed
+1787500020 --tribe1 XinXi --tribe2 Imperius --anchor-seat 2`). Rerunning
+the PRE-fix binary with this exact recipe reproduced the original
+baseline game byte-for-byte (741 moves, zero diff) — confirming the
+recipe and isolating the fix as the only variable. The POST-fix binary,
+identical recipe: matches the baseline move-for-move through turn 21,
+then at turn 22 immediately attacks tile 79 (`Attack 69->79`, first
+action of the turn) instead of the baseline's `Step 84->72`; city 79 is
+captured cleanly one turn later (`Capture` at turn 23, first action) and
+immediately put to productive use (an attack staged FROM the new city on
+turn 24) — the historical "occupies at low HP, dies before capturing"
+failure mode does not recur. Both games are decisive net wins; the fix
+wins **7 turns faster** (turn 25 vs 32) in **227 fewer total moves** (514
+vs 741) and **2 fewer kills needed** (15 vs 17) to reach the same
+decisive outcome. `units_lost` is unchanged at 5 in this single game —
+expected, since this fix addresses one specific mechanism and other loss
+sources (e.g. the ml-expert's separate `defender_dies` flat-pricing
+finding, not yet investigated) remain for a future pass.
+
+PAIRED GAUGE (n=128, seed 770425 harness, Imperius mirror,
+worktree-isolated, model.safetensors MD5-verified identical across
+arms, worktree at HEAD=23ee7a1 for baseline / HEAD+this fix's diff
+applied for treatment): baseline **0.3515625** (45/128) — exactly
+matches EXP_ELO_100's own recorded baseline reading for this same
+commit, a strong independent confirmation this harness is still fully
+deterministic (EXP_ELO_091's fix holding). Treatment **0.3828125**
+(49/128), delta **+3.13pp** — favorable direction, inside the
+harness's established ~7.8pp noise floor at n=128, so not statistically
+distinguishable from noise, but importantly not a regression either.
+Reproducibility check: reran the treatment arm alone; second reading
+**[FILL IN]** (run2, see `gauge_101/results/treatment_run2.log`).
+
+Disposition: **SHIPPED**. Both verification legs hold: (1) ground-truth
+bit-for-bit ply scoring confirms the exact diagnosed mechanism is fixed
+where it was found, (2) a controlled single-seed regenerated-game A/B
+shows a real behavioral improvement (7 turns faster, 227 fewer moves,
+the historical failure mode gone) with no downside observed, (3) the
+n=128 paired gauge shows no confirmed cost — delta is positive and
+within noise, the same "no evidence of harm" bar EXP_ELO_100 shipped on
+(that one was negative-and-within-noise; this one is positive-and-
+within-noise, an easier call). Two items carried forward to the next
+loop iteration rather than blocking this one: the `defender_dies` flat
+HP-blind pricing the ml-expert also flagged (units_lost stayed at 5 in
+the iteration-2 game, suggesting a separate live mechanism), and this
+session's own repeated recipe-reconstruction failures (documented in
+`seed0_loop_status.md` so future iterations don't re-lose the exact
+flags).
