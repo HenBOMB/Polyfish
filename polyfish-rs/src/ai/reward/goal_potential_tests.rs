@@ -1409,22 +1409,134 @@ use crate::types::UnitType;
         assert!((avg - FRONTIER_W_FOG).abs() < 1e-5, "fully-lit neighborhood must read fog baseline, got {avg}");
     }
 
-    /// The explorer term is a no-op improvement without a belief (legacy
-    /// corner-only pricing, unchanged) and adds a non-negative lift with
-    /// one, since every dark tile's frontier weight is >= FRONTIER_W_FOG.
+    /// EXP_ELO_097: holding the frontier signal fixed (same city, same
+    /// tribes, same geometric prior — a center city reads some baseline
+    /// frontier-ness toward every corner regardless of terrain), flooding
+    /// the direct line to one of the two capped corners with uncrossable
+    /// water must raise the explorer term relative to the same corner
+    /// being plain, easily-walkable land — the comparative form of the
+    /// walkability discount, isolated from the geometric prior that
+    /// confounds an absolute "belief should always pull it down" claim.
+    /// This is the exact mechanism behind the seed0 turn-3 capital pick
+    /// (see `reward_choice_probe.rs`), where the discount instead comes
+    /// from the (separately tested) capital scale.
     #[test]
-    fn explorer_term_gets_nonnegative_lift_from_a_belief_but_not_without_one() {
+    fn explorer_lighthouse_values_an_unwalkable_corner_over_a_walkable_one() {
         use crate::ai::belief::map::MapBelief;
+        use crate::types::CityRewardType;
+
+        let build = |flood_strait: bool| -> GameState {
+            let mut state = GameState::default();
+            state.settings.size = 11;
+            for i in 0..121 {
+                let mut tile = TileState::default();
+                tile.terrain_type = crate::types::TerrainType::Field;
+                if i == 60 {
+                    tile.explorers.insert(1);
+                }
+                state.tiles.insert(i, tile);
+            }
+            if flood_strait {
+                // The line from city 60 to corner 10 (see walkable_weight's
+                // own test) -- the OTHER capped corner (0) stays plain land
+                // in both variants, so only this one corner's walkability
+                // differs between the two states.
+                for idx in [50, 40, 30, 20] {
+                    state.tiles.get_mut(&idx).unwrap().terrain_type = crate::types::TerrainType::Water;
+                }
+            }
+            let mut t1 = TribeState::default();
+            // A non-capital city (capital_of defaults to 0 on every tile
+            // here) so the capital discount doesn't confound this reading.
+            t1.cities.push(crate::states::CityState {
+                idx: 60,
+                owner: 1,
+                rewards: vec![CityRewardType::Explorer],
+                ..Default::default()
+            });
+            state.tribes.insert(1, t1);
+            state.tribes.insert(2, TribeState::default());
+            state
+        };
+
+        let goal = crate::ai::oracle_macro::MacroGoal {
+            orders: vec![],
+            stance: crate::ai::oracle_macro::Stance::Grow,
+            save_target: None,
+        };
+        let explorer_term = |s: &GameState| -> f32 {
+            let belief = MapBelief::observe(s, 1);
+            let (_, bd) = goal_potential_breakdown(s, 1, &goal, None, None, None, Some(&belief));
+            bd.iter().filter(|(l, _)| *l == "explorer").map(|(_, v)| v).sum()
+        };
+
+        let walkable = explorer_term(&build(false));
+        let unwalkable = explorer_term(&build(true));
+        assert!(
+            unwalkable > walkable + 1e-3,
+            "flooding one corner's approach must raise the explorer term over the all-land baseline: walkable={walkable} unwalkable={unwalkable}"
+        );
+    }
+
+    /// The flip side of the walkability discount: a corner genuinely cut
+    /// off by water the tribe can't yet cross must keep (not discount) its
+    /// lighthouse value under belief.
+    #[test]
+    fn walkable_weight_is_full_strength_across_uncrossable_water() {
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        for i in 0..121 {
+            let mut tile = TileState::default();
+            tile.terrain_type = crate::types::TerrainType::Field;
+            state.tiles.insert(i, tile);
+        }
+        // The diagonal line `walkable_weight` samples from city 60 (5,5) to
+        // corner 10 (10,0) steps through (6,4) (7,3) (8,2) (9,1) then the
+        // corner itself -- flood the intermediate steps with Water.
+        for idx in [50, 40, 30, 20] {
+            state.tiles.get_mut(&idx).unwrap().terrain_type = crate::types::TerrainType::Water;
+        }
+        let tribe = TribeState::default(); // no Fishing -- can't cross Water
+        let blocked = walkable_weight(&state, &tribe, 60, 10);
+        // 4 of the 5 sampled steps are the flooded strait; the final step
+        // (the corner tile itself) is Field, so this reads high but not a
+        // literal 1.0: floor + (1-floor)*(4/5).
+        let expected = EXPLORER_LIGHTHOUSE_WALKABLE_FLOOR + (1.0 - EXPLORER_LIGHTHOUSE_WALKABLE_FLOOR) * 0.8;
+        assert!(
+            (blocked - expected).abs() < 1e-4,
+            "a mostly water-blocked line with no crossing tech must read high ({expected}): {blocked}"
+        );
+
+        // Same line, but the tribe now has the Water-unlocking tech.
+        let mut with_fishing = TribeState::default();
+        with_fishing.tech_vanilla.push(crate::states::TechnologyState {
+            tech_type: crate::types::TechnologyType::Fishing,
+            discovered: true,
+            discovered_turn: 0,
+        });
+        let crossable = walkable_weight(&state, &with_fishing, 60, 10);
+        assert!(
+            crossable < EXPLORER_LIGHTHOUSE_WALKABLE_FLOOR + 1e-4,
+            "once the tribe can cross water, the line reads as walkable (floor): {crossable}"
+        );
+    }
+
+    /// EXP_ELO_097: "Capital almost always workshop" (Verdi) -- the
+    /// discount must key off the tile's own `capital_of`, not
+    /// `tribe.cities.len()`, so it stays live even when another city
+    /// already exists (the exact seed0 turn-3 scenario: city 49 was
+    /// captured moments before the capital's own reward fired).
+    #[test]
+    fn capital_explorer_reward_is_discounted_regardless_of_city_count() {
         use crate::types::CityRewardType;
 
         let mut state = GameState::default();
         state.settings.size = 11;
-        // Sparse exploration: only the city's own tile is lit, so most of
-        // the map (including the scan neighborhood) is dark.
-        let mut city_tile = TileState::default();
-        city_tile.terrain_type = crate::types::TerrainType::Field;
-        city_tile.explorers.insert(1);
-        state.tiles.insert(60, city_tile);
+        let mut capital_tile = TileState::default();
+        capital_tile.terrain_type = crate::types::TerrainType::Field;
+        capital_tile.explorers.insert(1);
+        capital_tile.capital_of = 1;
+        state.tiles.insert(60, capital_tile);
         for i in 0..121 {
             if i == 60 {
                 continue;
@@ -1440,30 +1552,28 @@ use crate::types::UnitType;
             rewards: vec![CityRewardType::Explorer],
             ..Default::default()
         });
+        // A second city already exists -- under the old `cities.len() <= 1`
+        // gate this alone would have silently disabled the discount.
+        t1.cities.push(crate::states::CityState { idx: 5, owner: 1, ..Default::default() });
         state.tribes.insert(1, t1);
-        state.tribes.insert(2, TribeState::default());
 
         let goal = crate::ai::oracle_macro::MacroGoal {
             orders: vec![],
             stance: crate::ai::oracle_macro::Stance::Grow,
             save_target: None,
         };
-        let no_belief = |s: &GameState| -> f32 {
-            let (_, bd) = goal_potential_breakdown(s, 1, &goal, None, None, None, None);
-            bd.iter().filter(|(l, _)| *l == "explorer").map(|(_, v)| v).sum()
-        };
-        let belief = MapBelief::observe(&state, 1);
-        let with_belief = |s: &GameState| -> f32 {
-            let (_, bd) = goal_potential_breakdown(s, 1, &goal, None, None, None, Some(&belief));
-            bd.iter().filter(|(l, _)| *l == "explorer").map(|(_, v)| v).sum()
-        };
+        let (_, bd) = goal_potential_breakdown(&state, 1, &goal, None, None, None, None);
+        let explorer: f32 = bd.iter().filter(|(l, _)| *l == "explorer").map(|(_, v)| v).sum();
 
-        let base = no_belief(&state);
-        let lifted = with_belief(&state);
-        assert!(base > 0.0, "sanity: the legacy explorer term must already be paying, got {base}");
+        let mut backline = state.clone();
+        backline.tiles.get_mut(&60).unwrap().capital_of = 0;
+        let (_, bd2) = goal_potential_breakdown(&backline, 1, &goal, None, None, None, None);
+        let non_capital: f32 = bd2.iter().filter(|(l, _)| *l == "explorer").map(|(_, v)| v).sum();
+
         assert!(
-            lifted >= base - 1e-4,
-            "a belief must never REDUCE the explorer term below the legacy baseline: base={base} lifted={lifted}"
+            explorer < non_capital * (SHAPE_GOAL_EXPLORER_CAPITAL_SCALE + 0.05),
+            "capital pick ({explorer}) must be discounted to roughly {}x the identical non-capital pick ({non_capital})",
+            SHAPE_GOAL_EXPLORER_CAPITAL_SCALE
         );
     }
 

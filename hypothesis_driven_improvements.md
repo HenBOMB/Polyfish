@@ -11209,3 +11209,85 @@ cheap counters, matching the `RANK_PLIES_CALLS` precedent for this
 ledger. No further tuning needed at this reading — the two-round
 replicate check is stronger evidence than a single n=128 read, and both
 sides of the comparison confirmed stable.
+
+## EXP_ELO_097 — Explorer-vs-Workshop reward pricing redesigned: capital discount now keys off `capital_of` (not city count), the flat 700 base is cut, and the lighthouse bonus is discounted by walkability
+
+CONTEXT: Verdi's stated rule, after verifying the seed0 turn-3 capital's
+Explorer pick against the real `goal_potential_breakdown` accumulator:
+"Capital almost always workshop. In [other] cities we also favor workshops
+for the most part UNLESS the city is on the frontier and has therefore has
+chance/prob of revealing enemy-controlled terrain and cities or has a good
+chance of revealing a lighthouse in a corner we are not likely to be able
+to walk into and reveal w/ a unit." The existing code already had a
+capital-reward discount (`v8`, "the capital's first reward is a constant,
+not a choice") and a frontier-facing bonus (`avg_frontier_in_reach`,
+Aug 2026) — but two gaps kept them from producing this behavior: (1) the
+discount checked `tribe.cities.len() <= 1`, a proxy that silently stopped
+applying the moment ANY second city existed, even one captured moments
+before the capital's own first reward (exactly the seed0 case); (2) the
+flat, unconditional `SHAPE_GOAL_EXPLORER` base (700) alone — with zero
+frontier or lighthouse signal — already beat Workshop's own ~150-point
+pick at any hidden_frac above ~0.5, so "favor Workshop unless a real
+signal justifies Explorer" could never hold for non-capital cities either
+(advisor review caught this before implementation).
+
+CHANGE (`goal_shape_consts.rs` / `goal_potential.rs`):
+- `SHAPE_GOAL_EXPLORER` cut 700 -> 80 — small enough that the unconditional
+  base alone never beats Workshop, even at hidden_frac = 1.0 (turn 0).
+- `SHAPE_GOAL_EXPLORER_FIRST_CITY_SCALE` renamed
+  `SHAPE_GOAL_EXPLORER_CAPITAL_SCALE` (same 0.15 value) and now applied
+  whenever `state.tiles[city].capital_of == player`, unconditionally (every
+  reward, not just the first) — matches "Capital almost always workshop"
+  directly and can't be silently defeated by an incidental capture order.
+- New `walkable_weight(state, tribe, from, to)` (`goal_shape_consts.rs`):
+  a straight-line sample (fixed step count, no pathfinding, no HashSet/
+  HashMap iteration — EXP_ELO_091) between a city and a dark corner,
+  checking each sampled tile's terrain against the tribe's current water/
+  ocean-crossing tech (mirrors `moves/mod.rs`'s land-unit terrain rule for
+  a plain unit without depending on that private function). Returns a
+  continuous `[EXPLORER_LIGHTHOUSE_WALKABLE_FLOOR (0.2), 1.0]` weight —
+  floor when the corner is trivially walkable, rising toward 1.0 the more
+  the direct line is blocked by water the tribe can't yet cross. The
+  lighthouse bonus is scaled by this weight whenever a `belief` is present
+  (gated exactly like the existing frontier bonus — `None` stays
+  byte-identical to legacy flat-per-corner pricing, so `--macro-shape-w`-
+  style callers without a belief are unaffected).
+- `SHAPE_GOAL_EXPLORER_FRONTIER` (enemy-reveal signal) and
+  `avg_frontier_in_reach` (already correctly implements Verdi's rule 1 per
+  advisor review) are UNCHANGED.
+
+New tests: `capital_explorer_reward_is_discounted_regardless_of_city_count`
+(the exact "second city already exists" scenario that broke the old
+proxy); `walkable_weight_is_full_strength_across_uncrossable_water` (a
+flooded diagonal strait reads near-1.0, full crossing tech reads floor);
+`explorer_lighthouse_values_an_unwalkable_corner_over_a_walkable_one`
+(comparative — isolates the walkability effect from the belief system's
+own geometric frontier prior, which reads ANY corner from a center-map
+city as somewhat frontier-facing even absent a real sighted enemy, and
+broke a naive "belief must not reduce the term" version of this test).
+`explorer_reward_pays_by_hidden_fraction`'s pre-existing exact-value
+assertions (belief=None path) pass unchanged — confirms the legacy,
+belief-less call sites are byte-identical. Full suite green: 311 lib
+(+2 vs EXP_ELO_096) + 27 self_play + all integration tests, 0 failures.
+
+FALSIFIER (crisp, already-built tooling — `reward_choice_probe.rs` against
+the real flagged idx29 ply): Workshop must win. **Confirmed**: Explorer's
+dphi is now 131.520 (down from 334.087 pre-fix), Workshop's stays 150.000
+(unchanged, that term doesn't touch this path) — Workshop wins outright
+(360 total vs Explorer's 338.5, including the flat heuristic's own +3
+Workshop edge).
+
+FIRE-RATE (n=16 real games, `--dump-city-rewards`): of 73 total Explorer-
+vs-Workshop (slot-1) picks, Workshop wins 62 (85%). Restricting to each
+(game, player)'s FIRST-ever slot-1 pick — a strong proxy for "the
+capital's own first reward" — Workshop wins 29/30 (96.7%), matching
+"Capital almost always workshop" closely while Explorer still fires 15%
+overall where a real signal justifies it (not a degenerate all-or-nothing
+result).
+
+PAIRED GAUGE: pending (worktree-isolated n=128, prefix `fcfd7d2` vs this
+commit, same seed-770425 harness as every prior EXP_ELO_09x reading) —
+run next, before considering this shipped. This term pays standing Φ every
+ply for any city holding Explorer (not just at the pick), so a base-size
+cut this large could shift behavior well past the reward-pick moment
+itself; the gauge is the real check, not optional given that.

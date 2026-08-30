@@ -747,19 +747,35 @@ fn goal_potential_inner(
             if hidden_frac > 0.0 {
                 let corners = crate::coords::map_corners(width);
                 for city in explorer_cities {
-                    let dark_in_reach = corners
+                    let dark_corners: Vec<i32> = corners
                         .iter()
-                        .filter(|&&k| {
+                        .copied()
+                        .filter(|&k| {
                             cheb(city, k, width) <= EXPLORER_WALK_RANGE
                                 && !state
                                     .tiles
                                     .get(&k)
                                     .map_or(false, |t| t.explorers.contains(&player))
                         })
-                        .count()
-                        .min(EXPLORER_CORNER_CAP);
-                    let mut bonus = SHAPE_GOAL_EXPLORER
-                        + SHAPE_GOAL_EXPLORER_LIGHTHOUSE * dark_in_reach as f32;
+                        .take(EXPLORER_CORNER_CAP)
+                        .collect();
+                    // EXP_ELO_097 (Verdi, Aug 2026): a corner an ordinary
+                    // unit could walk over to on its own soon is worth far
+                    // less than one genuinely stranded across water —
+                    // `belief` gates this (see below) so a `None` caller
+                    // keeps the legacy flat-per-corner count.
+                    let lighthouse: f32 = if belief.is_some() {
+                        dark_corners
+                            .iter()
+                            .map(|&k| {
+                                SHAPE_GOAL_EXPLORER_LIGHTHOUSE
+                                    * walkable_weight(state, tribe, city, k)
+                            })
+                            .sum()
+                    } else {
+                        SHAPE_GOAL_EXPLORER_LIGHTHOUSE * dark_corners.len() as f32
+                    };
+                    let mut bonus = SHAPE_GOAL_EXPLORER + lighthouse;
                     // Frontier weighting (Verdi, Aug 2026): favors a city
                     // whose dark neighborhood leans enemy-facing over one
                     // that mostly reveals ground a walking unit could get
@@ -770,11 +786,17 @@ fn goal_potential_inner(
                         let avg = avg_frontier_in_reach(state, belief, city, EXPLORER_WALK_RANGE);
                         bonus += SHAPE_GOAL_EXPLORER_FRONTIER * (avg - FRONTIER_W_FOG).max(0.0);
                     }
-                    // v8: the capital's first reward is a constant, not a
-                    // choice — discount it so Workshop's whole-game compounding
-                    // can win the one slot where it is worth the most.
-                    if tribe.cities.len() <= 1 {
-                        bonus *= SHAPE_GOAL_EXPLORER_FIRST_CITY_SCALE;
+                    // EXP_ELO_097: the capital is discounted every reward,
+                    // not just its first — "Capital almost always
+                    // workshop" (Verdi). Checked on the tile's own
+                    // `capital_of`, not city count (see the constant's doc
+                    // for why the old `cities.len() <= 1` proxy broke).
+                    let is_capital = state
+                        .tiles
+                        .get(&city)
+                        .map_or(false, |t| t.capital_of == player);
+                    if is_capital {
+                        bonus *= SHAPE_GOAL_EXPLORER_CAPITAL_SCALE;
                     }
                     // hidden² (Jul 31): the reveal itself drains this Φ term
                     // (the potential telescopes to the horizon's h), and a

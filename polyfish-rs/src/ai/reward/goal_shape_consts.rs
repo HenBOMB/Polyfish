@@ -59,10 +59,25 @@ pub const SHAPE_GOAL_LIGHTHOUSE: f32 = 120.0;
 
 /// Rewards choosing the Explorer city reward — worth a lot when most of the
 /// map is still hidden, almost nothing once it's mostly explored.
-pub const SHAPE_GOAL_EXPLORER: f32 = 700.0;
+///
+/// EXP_ELO_097 (Verdi, Aug 2026): cut from 700 to a small, deliberately
+/// sub-winning base. At 700, this alone (times hidden_frac^2) beat
+/// Workshop's own ~150-point pick regardless of the city's position —
+/// Explorer won by default everywhere, not just where it should. Verdi's
+/// rule: Workshop by default, Explorer only where a real signal (frontier
+/// reveal chance or a genuinely hard-to-walk-to lighthouse corner, both
+/// below) justifies it. Sized so the base alone stays under Workshop's
+/// measured dphi even at hidden_frac = 1.0 (turn 0).
+pub const SHAPE_GOAL_EXPLORER: f32 = 80.0;
 /// Extra reward on top of the Explorer bonus when a still-hidden map corner
-/// is within reach of the explorer's walk.
+/// is within reach of the explorer's walk, scaled by `walkable_weight`
+/// below — a corner an ordinary unit could stroll over to on its own soon
+/// is worth much less than one genuinely stranded across water.
 pub const SHAPE_GOAL_EXPLORER_LIGHTHOUSE: f32 = 230.0;
+/// Floor on `walkable_weight`'s discount: even an easily-walkable corner
+/// keeps some lighthouse value (getting the reveal sooner still counts),
+/// just not enough on its own to beat Workshop — no hard zero cliff.
+pub const EXPLORER_LIGHTHOUSE_WALKABLE_FLOOR: f32 = 0.2;
 /// How far away a hidden map corner can be and still count as "within
 /// reach" for the explorer bonus above.
 pub const EXPLORER_WALK_RANGE: i32 = 5;
@@ -89,9 +104,18 @@ pub const SHAPE_GOAL_YIELD_ADJ_STARS: f32 = 50.0;
 /// — the reward is lost the moment it's cut down.
 pub const SHAPE_GOAL_FOREST_STANDING: f32 = 50.0;
 
-/// Shrinks the Explorer reward for your very first city reward pick — that
-/// pick isn't a real choice yet, so it shouldn't be valued like one.
-pub const SHAPE_GOAL_EXPLORER_FIRST_CITY_SCALE: f32 = 0.15;
+/// Shrinks the Explorer reward at the capital specifically, every time —
+/// not just its first pick. EXP_ELO_097 (Verdi, Aug 2026): the original
+/// v8 intent ("the capital's first reward is a constant, not a choice")
+/// was implemented as `tribe.cities.len() <= 1`, a proxy that silently
+/// stopped applying the moment a second city existed — even if that
+/// second city was captured moments before the capital's OWN first
+/// reward (exactly what happened in the seed0 turn-3 game: city 49 was
+/// captured right before city 84's reward fired, so this never engaged).
+/// Checking the tile's own `capital_of` instead of city count fixes that,
+/// and applying it unconditionally (not just "the first reward") matches
+/// Verdi's stated rule directly: "Capital almost always workshop."
+pub const SHAPE_GOAL_EXPLORER_CAPITAL_SCALE: f32 = 0.15;
 
 /// Penalizes a city for having growth progress it can no longer finish
 /// because the resources it needs have run out. One penalty per city max,
@@ -284,4 +308,52 @@ pub fn avg_frontier_in_reach(
     } else {
         sum / n as f32
     }
+}
+
+/// EXP_ELO_097: cheap proxy for "an ordinary walking unit could plausibly
+/// reach `to` from `from` on its own soon" — Verdi's "not likely to be able
+/// to walk into and reveal" clause on the lighthouse bonus. A straight-line
+/// sample (fixed step count, no pathfinding, no HashMap/HashSet iteration —
+/// see EXP_ELO_091) between the two points; each sampled tile's terrain is
+/// checked against the tribe's current water/ocean-crossing tech, mirroring
+/// `moves/mod.rs`'s land-unit terrain rule for a plain unit (no Fly/
+/// Navigate/Water skill — that's what "just walk a unit over" means)
+/// without depending on that private function. Returns a continuous weight
+/// in `[EXPLORER_LIGHTHOUSE_WALKABLE_FLOOR, 1.0]`: the floor when the whole
+/// line is already walkable, rising toward 1.0 as more of it is blocked by
+/// water the tribe can't yet cross.
+pub fn walkable_weight(state: &GameState, tribe: &crate::states::TribeState, from: i32, to: i32) -> f32 {
+    let width = state.settings.size;
+    if width <= 0 {
+        return EXPLORER_LIGHTHOUSE_WALKABLE_FLOOR;
+    }
+    let (x0, y0) = (from % width, from / width);
+    let (x1, y1) = (to % width, to / width);
+    let steps = (x1 - x0).abs().max((y1 - y0).abs()).max(1);
+    let crosses = |terrain: crate::types::TerrainType| -> bool {
+        use crate::types::TerrainType;
+        match terrain {
+            TerrainType::Water | TerrainType::Ocean => tribe.tech_vanilla.iter().any(|t| {
+                crate::settings::technology::get_technology_setting(t.tech_type).unlocks_terrain
+                    == Some(terrain)
+            }),
+            _ => true,
+        }
+    };
+    let mut blocked = 0u32;
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
+        let x = x0 + ((x1 - x0) as f32 * t).round() as i32;
+        let y = y0 + ((y1 - y0) as f32 * t).round() as i32;
+        let terrain = state
+            .tiles
+            .get(&(y * width + x))
+            .map(|t| t.terrain_type)
+            .unwrap_or_default();
+        if !crosses(terrain) {
+            blocked += 1;
+        }
+    }
+    let blocked_frac = blocked as f32 / steps as f32;
+    EXPLORER_LIGHTHOUSE_WALKABLE_FLOOR + (1.0 - EXPLORER_LIGHTHOUSE_WALKABLE_FLOOR) * blocked_frac
 }
