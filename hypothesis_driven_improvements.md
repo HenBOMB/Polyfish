@@ -11322,3 +11322,111 @@ capture-rate comparison between the two arms to test directly, matching
 this project's own "evaluate full behavior, not just the flagged
 decision" discipline. Registered as the open next step rather than
 guessed at.
+
+**ROUND 2 (overnight, Aug 30, autonomous per Verdi's explicit "be extremely
+self-directed" instruction — Verdi asleep, no check-ins for ~12h)**: the
+diagnostic that produced the -5.47pp reading above was net-vs-net (no
+`--anchor-frac`), not net-vs-Greedy — methodologically wrong for isolating
+the net's own behavior ("these measurements of net-on-net are useless to
+me" — Verdi). Corrected to the real paired-gauge recipe
+(`--anchor-frac 1.0 --anchor-decay-start 100 --iteration 100 --anchor-seat 2`,
+net pinned to XinXi) and re-probed the same seed0 game, finding two
+FURTHER real bugs the round-1 fix hadn't caught:
+
+1. **`avg_frontier_in_reach` was correct but crushed by the wrong decay.**
+   Measured 4.81 (genuinely enemy-facing) for city 49 at the real turn-4
+   ply — but `hidden_frac²` (sized for the old 700 base) had already
+   dropped to ~0.31 map-wide by then, cutting a 300+ point signal to 47.
+   `avg_frontier_in_reach` already self-decays as ITS OWN neighborhood
+   gets revealed; folding in the global fraction too double-counted the
+   same "is there still something to find" question. Fix: frontier is no
+   longer scaled by `hidden_frac²`.
+2. **A second, separate Φ term wasn't capital-discounted at all.**
+   `moves/reward.rs`'s Explorer execution is a REAL, immediate engine
+   effect (`predict_explorer` + `discover_tiles`, not a search
+   approximation) that can reveal a map corner outright, banking the
+   generic `"lighthouse"` term (+120, uncapped) — a channel entirely
+   separate from the `"explorer"` term the round-1 capital discount
+   scoped to. A single corner hit was enough on its own to flip the real
+   seed0 capital pick back to Explorer even after round 1. Added a
+   capital-scoped correction (not distance-gated — `predict_explorer`'s
+   real reach exceeds `EXPLORER_WALK_RANGE`, and re-deriving it on the
+   post-pick state reroutes away from the now-lit corner, both confirmed
+   empirically before landing on a fog-independent "is the corner lit at
+   all" check).
+
+Re-verified against the REAL committed self-play decisions on the actual
+net-vs-Greedy seed0 game (not just the probe): capital (84) picks
+Workshop turn 3; city 49 (captured turn 3, the map's "middle" frontier
+city) picks Explorer turn 4; city 79 (captured turn 17, also frontier-
+facing) picks Explorer at its own first reward too. Exactly Verdi's
+stated expectation, verified end-to-end.
+
+**Final paired gauge (n=128, round 1+2 combined, `fcfd7d2` -> `e2ab890`)**:
+0.4063 -> 0.3594 (46/128), a **-4.69pp** regression — smaller than round
+1's -5.47pp but still real and still a cost, not a fix, on this specific
+metric. Both readings reproduced bit-for-bit. **Disposition: SHIPPED
+anyway** — this was Verdi's explicit, concrete, verifiable overnight
+success criterion ("I expect the capital to get a workshop... choose an
+explorer from the middle city"), now met and confirmed on the real
+committed game, not just a probe. The paired-gauge cost is registered
+honestly rather than hidden, and is a real open question for Verdi to
+weigh: correct-by-design reward behavior vs. measured win rate in one
+specific paired-seed/tribe recipe (Imperius mirror) that has never
+claimed to be the only lens on strength. Villages/ruins-captured
+comparison (the mechanism hypothesis from the round-1 entry) is still
+unconfirmed and still the natural next step.
+
+## EXP_ELO_098 — forward-looking mine-siting fix: implemented, tested, measured net-negative, reverted
+
+CONTEXT: Verdi's overnight ask also included the mine-siting "gravity"
+problem from the prior session (an early, arbitrary mine gets clustering
+credit that biases the eventual Forge site and later mines toward
+wherever it happened to land, rather than the city's actual best site;
+"the mines at 37,38 acted as gravitational force for the forge"). Verdi's
+explicit expected outcome: mines at "tile 50 and 39... working towards
+our best forges."
+
+CHANGE: replaced `ai/scoring.rs`'s reactive "count already-built adjacent
+mines" heuristic with a forward-looking one: for a Mine candidate, find
+the city's best forge site via `rules::eco_plan::hub_candidates` (the
+SAME ranker `eco_plan`'s own CLI uses, "forge natural" scenario) computed
+over ALL the city's metal deposits (built or not), then price the
+candidate purely by whether it partners that site — no gravity, since the
+site doesn't depend on build order. Fell back to the old reactive
+heuristic only when no legal hub site exists yet. New unit test
+(`mine_scoring_favors_the_citys_actual_best_forge_site_over_an_isolated_deposit`)
+confirmed a partnered mine scores well above a truly isolated deposit.
+Full suite green (312 lib) at ship time.
+
+**Two problems found after shipping, both by directly re-testing against
+the exact named benchmark rather than trusting the unit test alone:**
+
+1. **Didn't change the real game's behavior at all.** Re-ran the actual
+   net-vs-Greedy seed0 game: tile 37 is STILL built turn 4, same as
+   before. Root cause: `eco_plan --explain` on the REAL state at that
+   exact decision point (not the later turn-6 state checked two sessions
+   ago) showed tile 37 geometrically partners the SAME best hub site (48)
+   as tile 38 — my fix's criterion (pure geometric adjacency to the best
+   site) can't distinguish them, since both qualify. The earlier "eco_plan
+   says mine 38/39/50, not 37" finding turned out to be a BUDGET-DEPENDENT
+   snapshot, not a stable geometric fact: `eco_plan`'s own build list for
+   this exact city included all four metal tiles (37/38/39/50) at turn 4
+   and only three (38/39/50) at turn 6 — the star-cost tradeoff shifts as
+   the city's economy grows, and my fix only encodes the (turn-invariant)
+   geometric partnership question, not eco_plan's finer cost-optimal
+   ranking. Shipping this claim without re-checking it against the live
+   turn-4 state (not the turn-6 state checked two sessions ago) would have
+   been the mistake.
+2. **Paired gauge, isolated from the round 1+2 reward changes**
+   (`e2ab890` -> `a92aae3`, n=128): 0.3594 -> 0.3359 (43/128), a further
+   **-2.34pp**, reproduced bit-for-bit on both readings — a real,
+   deterministic cost from this specific diff, not noise.
+
+**Disposition: REVERTED** (`git revert a92aae3`, clean, no conflicts).
+Real cost, zero realized benefit on the stated goal — there's no
+justification to keep it. The underlying insight (mine/hub siting is
+budget-dependent, not purely geometric, so a real fix needs to reason
+about cost-efficiency across the whole candidate set, not just
+partnership) is worth preserving for whoever picks this up next; the
+specific implementation attempted here is not.
