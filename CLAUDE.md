@@ -80,14 +80,36 @@ Old narrower training data (154 pre-obs-memory, 161 pre-pursuit, 162 pre-goal-ch
 **Exception:** the `aux_*` heads (train.py `AUX_DIMS`: ownership/fog/SPT+5/opp-tech) are training-only and deliberately NOT mirrored in Rust — **with one deliberate exception since Aug 2026: `aux_fog` IS mirrored** in `network.rs` (per-tile P(enemy under fog), read off the post-cross-attention trunk exactly as train.py does), because the v9 risk term consumes it at inference. It is loaded OPTIONALLY (`vs.contains_tensor`) so pre-aux checkpoints gain no new rejection reason, and `ValueOutput.fog_probs` is `Option` so callers branch instead of reading a silent zero. Every other aux head stays training-only — every Rust backend loads weights by name and ignores the extra keys. Do not add them to `network.rs`, and never save `model.safetensors` from `src/bin/train.rs` (candle `VarMap::save` strips them; it saves to `model_candle.safetensors` instead).
 
 ### Binaries (`polyfish-rs/src/bin/`)
-- `self_play.rs` — generates training games (`--num-games`, `--mcts-iters`, `--tribe1/2`, `--opponent <checkpoint>`, `--no-reward-shaping`, `--td-w`, `--iteration`); emits `METRICS:` JSON lines parsed by the loop script and writes `games_*.safetensors`. Reward shaping (TD(λ) + final-outcome blended value target, `--td-w` weights the blend) is on by default — EXP_ELO_004 (Jul 13, 2026) showed it clearly beats the flat final-outcome-only fallback at matched budget; `--no-reward-shaping` opts out.
+- `self_play.rs` — generates training games (`--num-games`, `--mcts-iters`, `--tribe1/2`, `--opponent <checkpoint>`, `--no-reward-shaping`, `--td-w`, `--iteration`); writes `.last_self_play_metrics.json` (read by `training_log.py`) and `games_*.safetensors`. Reward shaping (TD(λ) + final-outcome blended value target, `--td-w` weights the blend) is on by default — EXP_ELO_004 (Jul 13, 2026) showed it clearly beats the flat final-outcome-only fallback at matched budget; `--no-reward-shaping` opts out.
 - `train.rs` — Rust/candle trainer (alternative to `train.py`).
 - `arena.rs` — battle two model checkpoints head-to-head (`--model1 --model2 --games --mcts`).
 - `trainer.rs` — interactive CLI to play against the AI and correct its moves.
 - `benchmark.rs`, `compare_evaluators.rs`, `repro_loop.rs`, `validate_csv.rs`, `load_json.rs`, `debug_summon.rs` — diagnostics/repro tools.
 
 ### Data flow
-Steam game → `polyfish-mod` (C#) / `polyfish-reader` (C++) → JSON game states (`live_game.json`, `replays/`) → loaded by `polyfish` server or replayer. Separately, `self_play` → `games_*.safetensors` → `train.py` → `model.safetensors` → `checkpoints/`. Training metrics go to `training_log.csv` (canonical store, keyed by `run_id` per training campaign) plus `moves_by_turn.json` sidecar; `run_training_loop.sh` uses `training_log.py` to parse METRICS and append rows. Live dashboard: `http://localhost:3000/training.html` (Chart.js, reads `/api/runs`, `/api/training-metrics`, `/api/moves-by-turn`, `/api/value-distribution` from the Rust server). Default loop behavior: each `./run_training_loop.sh` starts a **new run**; pass `--resume` to continue the latest (or `--resume <run_id>`). `training_metrics_schema.sql` + root `telegram_agent.js`/`run_analysis_now.js` push progress to Supabase/Telegram. `session.log` is a raw debug transcript only.
+Steam game → `polyfish-mod` (C#) / `polyfish-reader` (C++) → JSON game states (`live_game.json`, `replays/`) → loaded by `polyfish` server or replayer. Separately, `self_play` → `games_*.safetensors` → `train.py` → `model.safetensors` → `checkpoints/`. Training metrics go to `training_log.csv` (canonical store, keyed by `run_id` per training campaign) plus `moves_by_turn.json` sidecar; `run_training_loop.sh` uses `training_log.py` to read `.last_self_play_metrics.json` and append rows (the old `METRICS:` stdout line no longer exists). Live dashboard: `http://localhost:3000/training.html` (Chart.js, reads `/api/runs`, `/api/training-metrics`, `/api/moves-by-turn`, `/api/value-distribution` from the Rust server). Default loop behavior: each `./run_training_loop.sh` starts a **new run**; pass `--resume` to continue the latest (or `--resume <run_id>`). `training_metrics_schema.sql` + root `telegram_agent.js`/`run_analysis_now.js` push progress to Supabase/Telegram. `session.log` is a raw debug transcript only.
+
+## File size
+
+**Keep every source file under ~1000 lines.** This is long-standing practice
+here — `src/ai/reward/mod.rs`, `src/ai/search/gumbel_mcts/mod.rs` and
+`src/ai/reward/goal_potential_tests.rs` all cite it as the reason they were
+split — but it was never written down, so `self_play.rs` reached 5.8k before
+anyone noticed. Three sanctioned ways to split, in order of preference:
+
+- **Directory module + re-export** (`ai/reward/`, `rules/eco_plan/`): `mod.rs`
+  keeps the shared vocabulary and re-exports the parts, so every existing
+  `crate::ai::reward::X` call site keeps resolving unchanged.
+- **Impl-block split** (`ai/search/gumbel_mcts/`): one `impl Type` block per
+  file. Rust merges impl blocks across files, so `agent.method()` call sites
+  are untouched and no logic moves.
+- **Sibling test file** (`goal_potential.rs` + `goal_potential_tests.rs`):
+  `#[cfg(test)] #[path = "x_tests.rs"] mod tests;` as a three-line trailer.
+  Thorough tests should never be what pushes a module over the limit.
+
+Binaries split the same way: `src/bin/<name>/main.rs` plus siblings is
+auto-discovered by Cargo, needs no `Cargo.toml` change, and preserves the
+bin's `test` setting.
 
 ## Comments
 
