@@ -6,10 +6,8 @@
 //! here -- `GameResult.history` goes back raw and `dataset` turns it into
 //! training targets.
 
-use candle_core::Device;
 use polyfish::TribeType;
 use polyfish::ai::brain::{Brain, SearchBackend};
-use polyfish::ai::eval_backend::{self, EvalBackendKind};
 use polyfish::ai::eval_server::Evaluator;
 use polyfish::ai::features;
 use polyfish::ai::macro_agent::MacroParams;
@@ -22,74 +20,20 @@ use polyfish::types::MapSize;
 use serde_json::json;
 use std::collections::HashMap;
 use std::io::Write;
-use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use crate::crutches::{HEURISTIC_PRIOR_DECAY, HEURISTIC_PRIOR_W0, decay_crutch};
-use crate::dumps::{PlanTracker, open_game_jsonl, write_choice_dumps, dump_macro_policy_row, dump_turn_state, update_plans};
-use crate::labels::{POLICY_TARGET_Q_RAMP_ITERS, macro_ballot_for_history_step,
-                    enemy_unit_grid, tech_multihot};
+use crate::dumps::{PlanTracker, open_game_jsonl, write_choice_dumps, write_spend_dumps, dump_macro_policy_row, dump_turn_state, update_plans};
+use crate::labels::{POLICY_TARGET_Q_RAMP_ITERS, final_ground_truth,
+                    macro_ballot_for_history_step, enemy_unit_grid};
 use crate::result::{DecomposedPolicyData, GameResult, HistoryStep, decompose_visits,
                     group_recap};
-use crate::stats::{is_net_seat, score_hubs, record_spt_at_turn_start, t2c_turn, turn_milestones};
+use crate::stats::{Adjudication, adjudicate, is_net_seat, score_hubs, record_spt_at_turn_start, t2c_turn, turn_milestones};
 use crate::tempo::{TempoTrack, tempo_sample, unit_tally};
-use crate::traces::{TraceTrigger, TraceWindows, TracedDecision, dump_failed_game,
+use crate::traces::{TraceTrigger, TraceWindows, TracedDecision, dump_game_artifacts,
                     write_ply_traces};
 use crate::ProgressMode;
 
-/// Load the main network (and opponent network, defaulting to the main one)
-/// onto the given device from `model.safetensors`.
-///
-/// When `eval_backend_kind` is `Candle` and a distinct opponent is given, the
-/// opponent network is loaded on its own freshly-obtained device rather than
-/// `device`: under Candle, player 1 and player 2 each get an independent
-/// `EvalServer` thread, and candle's Metal backend corrupts if two threads
-/// encode ops (e.g. `forward_t`) against the same `Device` (see
-/// `eval_backend.rs`'s device-isolation contract). tch/metal shards load
-/// their own weights on the eval-server thread and never touch this candle
-/// device for inference, so sharing is harmless for them.
-pub(crate) fn load_networks(
-    device: &Device,
-    opponent: Option<&str>,
-    eval_backend_kind: EvalBackendKind,
-) -> anyhow::Result<(Arc<PolyZeroNet>, Arc<PolyZeroNet>)> {
-    let model_path = "model.safetensors";
-    if !std::path::Path::new(model_path).exists() {
-        anyhow::bail!(
-            "Model file {} not found! Please run init_model.py first.",
-            model_path
-        );
-    }
-    // Inference-only load: `VarBuilder::from_mmaped_safetensors` loads by key from file;
-    // VarMap::load fills only pre-registered vars.
-    let vs1 = unsafe {
-        candle_nn::VarBuilder::from_mmaped_safetensors(
-            &[model_path],
-            candle_core::DType::F32,
-            device,
-        )?
-    };
-    let network1 = Arc::new(PolyZeroNet::new(vs1)?);
-
-    let network2 = if let Some(opp_path) = opponent {
-        let device2 = if eval_backend_kind == EvalBackendKind::Candle {
-            eval_backend::select_device()?
-        } else {
-            device.clone()
-        };
-        let vs2 = unsafe {
-            candle_nn::VarBuilder::from_mmaped_safetensors(
-                &[opp_path],
-                candle_core::DType::F32,
-                &device2,
-            )?
-        };
-        Arc::new(PolyZeroNet::new(vs2)?)
-    } else {
-        network1.clone()
-    };
-    Ok((network1, network2))
-}
 
 /// Play a single game and return the result
 #[allow(clippy::too_many_arguments)]
@@ -865,82 +809,11 @@ pub(crate) fn play_single_game(
                     }
                 }
             }
-            if let (Some((turn, stars_before)), Some(f)) =
-                (star_spend_pre, star_spend_file.as_mut())
-            {
-                let stars_after = game.state.tribes.get(&pov).map(|t| t.stars).unwrap_or(0);
-                let line = json!({
-                    "game_idx": game_idx,
-                    "turn": turn,
-                    "player_id": pov,
-                    "move_type": format!("{:?}", m_type),
-                    "ability": (m_type == polyfish::types::MoveType::Ability)
-                        .then(|| m.ability_type().ok())
-                        .flatten()
-                        .map(|a| format!("{:?}", a)),
-                    // v7: tech identity + tier, so an audit can check the
-                    // economy-first tier-3 ordering directly. Its absence was
-                    // a standing gap (EXP_ELO_028 Phase 0 flagged it) that
-                    // forced the Chivalry-crowds-out-Construction read to lean
-                    // on best-games replays.
-                    "tech": (m_type == polyfish::types::MoveType::Research)
-                        .then(|| m.tech_type().ok())
-                        .flatten()
-                        .map(|t| format!("{:?}", t)),
-                    "tech_tier": (m_type == polyfish::types::MoveType::Research)
-                        .then(|| m.tech_type().ok())
-                        .flatten()
-                        .and_then(|t| {
-                            polyfish::settings::technology::get_technology_setting(t).tier
-                        }),
-                    "tech_eco3": (m_type == polyfish::types::MoveType::Research)
-                        .then(|| m.tech_type().ok())
-                        .flatten()
-                        .map(polyfish::settings::technology::is_eco_tier3),
-                    "stars_spent": (stars_before - stars_after).max(0),
-                });
-                if let Ok(s) = serde_json::to_string(&line) {
-                                        let _ = writeln!(f, "{s}");
-                }
-            }
-            if let (
-                Some((target, city_idx, level_b, progress_b, stars_b, threatened)),
-                Some(f),
-            ) = (level_completion_pre, level_completion_file.as_mut())
-            {
-                let city = game
-                    .state
-                    .tribes
-                    .get(&pov)
-                    .and_then(|t| t.cities.iter().find(|c| c.idx == city_idx));
-                if let Some(c) = city {
-                    let stars_after =
-                        game.state.tribes.get(&pov).map(|t| t.stars).unwrap_or(0);
-                    let line = json!({
-                        "game_idx": game_idx,
-                        "turn": game.state.settings.turn,
-                        "player_id": pov,
-                        "move_type": format!("{:?}", m_type),
-                        "structure": (m_type == polyfish::types::MoveType::Build)
-                            .then(|| m.structure_type().ok())
-                            .flatten()
-                            .map(|s| format!("{:?}", s)),
-                        "target": target,
-                        "city_idx": city_idx,
-                        "level_before": level_b,
-                        "level_after": c.level,
-                        "progress_before": progress_b,
-                        "progress_after": c.progress,
-                        "stars_before": stars_b,
-                        "stars_after": stars_after,
-                        "completes": c.level > level_b,
-                        "threatened": threatened,
-                    });
-                    if let Ok(s) = serde_json::to_string(&line) {
-                                                let _ = writeln!(f, "{s}");
-                    }
-                }
-            }
+            write_spend_dumps(
+                &game.state, pov, m_type, m.as_ref(), game_idx,
+                star_spend_pre, level_completion_pre,
+                &mut star_spend_file, &mut level_completion_file,
+            );
 
             // Unit-accounting diff: attribute gains to Summon (trained) vs
             // anything else (granted), and any decrease as a loss — both in
@@ -1003,47 +876,9 @@ pub(crate) fn play_single_game(
         }
     }
 
-    // Determine scores & winner
-    // In Domination, the winner is the last tribe alive.
-    // If the game timed out (safety cap), use score as tiebreaker.
-    let mut scores: HashMap<i32, i32> = HashMap::new();
-    let mut final_potentials: HashMap<i32, f32> = HashMap::new();
-    let mut alive: HashMap<i32, bool> = HashMap::new();
-    for (id, t) in &game.state.tribes {
-        scores.insert(*id, t.score);
-        alive.insert(*id, t.killed_turn <= 0 && t.resigned_turn <= 0);
-    }
-    for id in scores.keys() {
-        let mut phi = 0.0;
-        if shape_w_label != 0.0 {
-            phi += shape_w_label * reward::dev_potential(&game.state, *id);
-        }
-        if pursuit_w_label != 0.0 {
-            phi += pursuit_w_label * reward::pursuit_potential(&game.state, *id);
-        }
-        final_potentials.insert(*id, scores[id] as f32 + phi);
-    }
-
-    // Domination winner: the sole survivor, or highest score if timeout
-    let alive_tribes: Vec<i32> = alive
-        .iter()
-        .filter(|(_, is_alive)| **is_alive)
-        .map(|(id, _)| *id)
-        .collect();
-
-    let (winner_id, winner_score) = if alive_tribes.len() == 1 {
-        let wid = alive_tribes[0];
-        (wid, *scores.get(&wid).unwrap_or(&0))
-    } else {
-        // Timeout: use score tiebreaker
-        scores
-            .iter()
-            .max_by_key(|&(_, score)| score)
-            .map(|(&id, &score)| (id, score))
-            .unwrap_or((0, 0))
-    };
-
-    let is_decisive = alive_tribes.len() == 1;
+    let Adjudication { scores, final_potentials, winner_id, winner_score,
+                       is_decisive, alive_tribes: _ } =
+        adjudicate(&game.state, shape_w_label, pursuit_w_label);
     if progress == ProgressMode::Full {
         eprintln!(
             "[Game {}] Finished. Moves: {} | Winner: {} (Score: {}) | Decisive: {}",
@@ -1082,60 +917,17 @@ pub(crate) fn play_single_game(
         total_cities += t.cities.len() as i32;
     }
 
-    // Aux-head ground truth; the final state is dropped when this returns.
-    let n_tiles = features::MAP_SIZE * features::MAP_SIZE;
-    let mut final_owner = vec![0i32; n_tiles];
-    for (&idx, tile) in &game.state.tiles {
-        let i = idx as usize;
-        if i < n_tiles {
-            final_owner[i] = tile.owner;
-        }
-    }
-    let mut final_spt = HashMap::new();
-    let mut final_tech = HashMap::new();
-    for (id, t) in &game.state.tribes {
-        final_spt.insert(*id, polyfish::functions::get_tribe_spt(&game.state, t));
-        final_tech.insert(*id, tech_multihot(&t.tech_vanilla));
-    }
+    let (final_owner, final_spt, final_tech) = final_ground_truth(&game.state);
 
     let recap = ModReplay {
         game_state: initial_state,
         turns: group_recap(flat_recap),
     };
-    if let Some(dir) = dump_games_dir {
-        dump_failed_game(
-            dir,
-            "game",
-            iteration,
-            game_idx,
-            seed,
-            &tribes,
-            backend1,
-            backend2,
-            max_turns,
-            &scores,
-            &recap,
-            &decision_log,
-        );
-    }
-    if let Some(dir) = dump_failed_dir {
-        if village_capture_turns.is_empty() {
-            dump_failed_game(
-                dir,
-                "failed",
-                iteration,
-                game_idx,
-                seed,
-                &tribes,
-                backend1,
-                backend2,
-                max_turns,
-                &scores,
-                &recap,
-                &decision_log,
-            );
-        }
-    }
+    dump_game_artifacts(
+        dump_games_dir, dump_failed_dir, iteration, game_idx, seed, &tribes,
+        backend1, backend2, max_turns, &scores, &recap, &decision_log,
+        &village_capture_turns, &ruin_capture_turns,
+    );
 
     let net_seats: Vec<PlayerId> = game
         .state

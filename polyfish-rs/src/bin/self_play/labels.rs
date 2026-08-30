@@ -5,6 +5,7 @@
 //! Pure functions over recorded snapshots -- nothing here touches a live
 //! `Game`, which is what makes the whole module unit-testable.
 
+use polyfish::ai::features;
 use polyfish::ai::reward;
 use polyfish::states::{GameState, PlayerId};
 use crate::result::HistoryStep;
@@ -371,6 +372,30 @@ pub(crate) fn macro_ballot_for_history_step(
     let ballot = ballot.filter(|(c, _)| !c.is_empty())?;
     *last_key = Some(key);
     Some(ballot)
+}
+
+/// End-of-episode ground truth for the aux heads: per-tile owner ids,
+/// per-player SPT, and per-player researched-tech multi-hot. Read off the
+/// final state before it is dropped.
+pub(crate) fn final_ground_truth(
+    state: &GameState,
+) -> (Vec<i32>, HashMap<PlayerId, i32>, HashMap<PlayerId, Vec<f32>>) {
+// Aux-head ground truth; the final state is dropped when this returns.
+let n_tiles = features::MAP_SIZE * features::MAP_SIZE;
+let mut final_owner = vec![0i32; n_tiles];
+for (&idx, tile) in &state.tiles {
+    let i = idx as usize;
+    if i < n_tiles {
+        final_owner[i] = tile.owner;
+    }
+}
+let mut final_spt = HashMap::new();
+let mut final_tech = HashMap::new();
+for (id, t) in &state.tribes {
+    final_spt.insert(*id, polyfish::functions::get_tribe_spt(&state, t));
+    final_tech.insert(*id, tech_multihot(&t.tech_vanilla));
+}
+    (final_owner, final_spt, final_tech)
 }
 
 #[cfg(test)]

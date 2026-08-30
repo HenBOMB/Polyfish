@@ -380,3 +380,98 @@ pub(crate) fn write_choice_dumps(
         }
     }
 }
+
+/// Writes the post-move star-spend and level-completion rows.
+///
+/// Both are pre/post pairs around `play_move`: the caller snapshots the
+/// pre-move state (`*_pre`) and this writes the row afterwards, so each row
+/// reports the delta the move actually caused.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn write_spend_dumps(
+    state: &GameState,
+    pov: PlayerId,
+    m_type: polyfish::types::MoveType,
+    m: &dyn polyfish::moves::Move,
+    game_idx: usize,
+    star_spend_pre: Option<(i32, i32)>,
+    level_completion_pre: Option<(i32, i32, i32, i32, i32, bool)>,
+    star_spend_file: &mut Option<File>,
+    level_completion_file: &mut Option<File>,
+) {
+    if let (Some((turn, stars_before)), Some(f)) =
+        (star_spend_pre, star_spend_file.as_mut())
+    {
+        let stars_after = state.tribes.get(&pov).map(|t| t.stars).unwrap_or(0);
+        let line = json!({
+            "game_idx": game_idx,
+            "turn": turn,
+            "player_id": pov,
+            "move_type": format!("{:?}", m_type),
+            "ability": (m_type == polyfish::types::MoveType::Ability)
+                .then(|| m.ability_type().ok())
+                .flatten()
+                .map(|a| format!("{:?}", a)),
+            // v7: tech identity + tier, so an audit can check the
+            // economy-first tier-3 ordering directly. Its absence was
+            // a standing gap (EXP_ELO_028 Phase 0 flagged it) that
+            // forced the Chivalry-crowds-out-Construction read to lean
+            // on best-games replays.
+            "tech": (m_type == polyfish::types::MoveType::Research)
+                .then(|| m.tech_type().ok())
+                .flatten()
+                .map(|t| format!("{:?}", t)),
+            "tech_tier": (m_type == polyfish::types::MoveType::Research)
+                .then(|| m.tech_type().ok())
+                .flatten()
+                .and_then(|t| {
+                    polyfish::settings::technology::get_technology_setting(t).tier
+                }),
+            "tech_eco3": (m_type == polyfish::types::MoveType::Research)
+                .then(|| m.tech_type().ok())
+                .flatten()
+                .map(polyfish::settings::technology::is_eco_tier3),
+            "stars_spent": (stars_before - stars_after).max(0),
+        });
+        if let Ok(s) = serde_json::to_string(&line) {
+                                let _ = writeln!(f, "{s}");
+        }
+    }
+    if let (
+        Some((target, city_idx, level_b, progress_b, stars_b, threatened)),
+        Some(f),
+    ) = (level_completion_pre, level_completion_file.as_mut())
+    {
+        let city = state
+            
+            .tribes
+            .get(&pov)
+            .and_then(|t| t.cities.iter().find(|c| c.idx == city_idx));
+        if let Some(c) = city {
+            let stars_after =
+                state.tribes.get(&pov).map(|t| t.stars).unwrap_or(0);
+            let line = json!({
+                "game_idx": game_idx,
+                "turn": state.settings.turn,
+                "player_id": pov,
+                "move_type": format!("{:?}", m_type),
+                "structure": (m_type == polyfish::types::MoveType::Build)
+                    .then(|| m.structure_type().ok())
+                    .flatten()
+                    .map(|s| format!("{:?}", s)),
+                "target": target,
+                "city_idx": city_idx,
+                "level_before": level_b,
+                "level_after": c.level,
+                "progress_before": progress_b,
+                "progress_after": c.progress,
+                "stars_before": stars_b,
+                "stars_after": stars_after,
+                "completes": c.level > level_b,
+                "threatened": threatened,
+            });
+            if let Ok(s) = serde_json::to_string(&line) {
+                                        let _ = writeln!(f, "{s}");
+            }
+        }
+    }
+}

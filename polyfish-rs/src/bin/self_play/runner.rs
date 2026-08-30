@@ -8,7 +8,9 @@
 //! `EVAL_SERVER_STATS_AGG:` and the `Throughput:` line are stdout contracts --
 //! bench_eval_sweep.sh regex-matches both.
 
+use candle_core::Device;
 use polyfish::TribeType;
+use polyfish::ai::eval_backend::{self, EvalBackendKind};
 use polyfish::ai::brain::SearchBackend;
 use polyfish::ai::eval_server::{EvalServer, EvalServerStats, Evaluator};
 use polyfish::ai::macro_agent::MacroParams;
@@ -333,4 +335,58 @@ pub(crate) fn report_eval_stats(
             0.0
         }
     );
+}
+
+/// Load the main network (and opponent network, defaulting to the main one)
+/// onto the given device from `model.safetensors`.
+///
+/// When `eval_backend_kind` is `Candle` and a distinct opponent is given, the
+/// opponent network is loaded on its own freshly-obtained device rather than
+/// `device`: under Candle, player 1 and player 2 each get an independent
+/// `EvalServer` thread, and candle's Metal backend corrupts if two threads
+/// encode ops (e.g. `forward_t`) against the same `Device` (see
+/// `eval_backend.rs`'s device-isolation contract). tch/metal shards load
+/// their own weights on the eval-server thread and never touch this candle
+/// device for inference, so sharing is harmless for them.
+pub(crate) fn load_networks(
+    device: &Device,
+    opponent: Option<&str>,
+    eval_backend_kind: EvalBackendKind,
+) -> anyhow::Result<(Arc<PolyZeroNet>, Arc<PolyZeroNet>)> {
+    let model_path = "model.safetensors";
+    if !std::path::Path::new(model_path).exists() {
+        anyhow::bail!(
+            "Model file {} not found! Please run init_model.py first.",
+            model_path
+        );
+    }
+    // Inference-only load: `VarBuilder::from_mmaped_safetensors` loads by key from file;
+    // VarMap::load fills only pre-registered vars.
+    let vs1 = unsafe {
+        candle_nn::VarBuilder::from_mmaped_safetensors(
+            &[model_path],
+            candle_core::DType::F32,
+            device,
+        )?
+    };
+    let network1 = Arc::new(PolyZeroNet::new(vs1)?);
+
+    let network2 = if let Some(opp_path) = opponent {
+        let device2 = if eval_backend_kind == EvalBackendKind::Candle {
+            eval_backend::select_device()?
+        } else {
+            device.clone()
+        };
+        let vs2 = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(
+                &[opp_path],
+                candle_core::DType::F32,
+                &device2,
+            )?
+        };
+        Arc::new(PolyZeroNet::new(vs2)?)
+    } else {
+        network1.clone()
+    };
+    Ok((network1, network2))
 }

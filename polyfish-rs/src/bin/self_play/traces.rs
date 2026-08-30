@@ -607,3 +607,61 @@ impl TraceWindows {
         (trigger_info, harvest_capture, pursuit_capture, wander_capture)
     }
 }
+
+/// Writes the `--dump-games-dir` / `--dump-failed-dir` artifacts for a game.
+///
+/// The two answer different questions: the first is "give me everything
+/// for this game", the second fires only when NEITHER seat captured
+/// anything -- the pathology it exists to catch.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dump_game_artifacts(
+    dump_games_dir: Option<&str>,
+    dump_failed_dir: Option<&str>,
+    iteration: usize,
+    game_idx: usize,
+    seed: i64,
+    tribes: &[TribeType],
+    backend1: SearchBackend,
+    backend2: SearchBackend,
+    max_turns: i32,
+    scores: &HashMap<i32, i32>,
+    recap: &ModReplay,
+    decision_log: &[TracedDecision],
+    village_capture_turns: &[i32],
+    _ruin_capture_turns: &[i32],
+) {
+if let Some(dir) = dump_games_dir {
+    dump_failed_game(
+        dir,
+        "game",
+        iteration,
+        game_idx,
+        seed,
+        &tribes,
+        backend1,
+        backend2,
+        max_turns,
+        &scores,
+        &recap,
+        &decision_log,
+    );
+}
+if let Some(dir) = dump_failed_dir {
+    if village_capture_turns.is_empty() {
+        dump_failed_game(
+            dir,
+            "failed",
+            iteration,
+            game_idx,
+            seed,
+            &tribes,
+            backend1,
+            backend2,
+            max_turns,
+            &scores,
+            &recap,
+            &decision_log,
+        );
+    }
+}
+}

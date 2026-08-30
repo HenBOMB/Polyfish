@@ -4,6 +4,7 @@
 //! seats are excluded so mixed games report the training net alone.
 
 use polyfish::game::STARTING_OWNER_ID;
+use polyfish::ai::reward;
 use polyfish::states::{GameState, PlayerId};
 use std::collections::HashMap;
 
@@ -217,4 +218,68 @@ for (s_type, (chosen, builder, cands)) in first_hub_sites {
     );
 }
     (hub_levels, first_hub_rank)
+}
+
+/// How a finished game is scored and who won.
+pub(crate) struct Adjudication {
+    pub(crate) scores: HashMap<i32, i32>,
+    pub(crate) final_potentials: HashMap<i32, f32>,
+    pub(crate) winner_id: i32,
+    pub(crate) winner_score: i32,
+    /// True when the game ended by elimination rather than the turn cap.
+    pub(crate) is_decisive: bool,
+    pub(crate) alive_tribes: Vec<PlayerId>,
+}
+
+/// Adjudicates the final position: sole survivor wins, else highest score
+/// at the turn cap. `final_potentials` is the shaped terminal snapshot the
+/// TD labels use; it equals the raw score when shaping is off.
+pub(crate) fn adjudicate(
+    state: &GameState,
+    shape_w_label: f32,
+    pursuit_w_label: f32,
+) -> Adjudication {
+// Determine scores & winner
+// In Domination, the winner is the last tribe alive.
+// If the game timed out (safety cap), use score as tiebreaker.
+let mut scores: HashMap<i32, i32> = HashMap::new();
+let mut final_potentials: HashMap<i32, f32> = HashMap::new();
+let mut alive: HashMap<i32, bool> = HashMap::new();
+for (id, t) in &state.tribes {
+    scores.insert(*id, t.score);
+    alive.insert(*id, t.killed_turn <= 0 && t.resigned_turn <= 0);
+}
+for id in scores.keys() {
+    let mut phi = 0.0;
+    if shape_w_label != 0.0 {
+        phi += shape_w_label * reward::dev_potential(&state, *id);
+    }
+    if pursuit_w_label != 0.0 {
+        phi += pursuit_w_label * reward::pursuit_potential(&state, *id);
+    }
+    final_potentials.insert(*id, scores[id] as f32 + phi);
+}
+
+// Domination winner: the sole survivor, or highest score if timeout
+let alive_tribes: Vec<i32> = alive
+    .iter()
+    .filter(|(_, is_alive)| **is_alive)
+    .map(|(id, _)| *id)
+    .collect();
+
+let (winner_id, winner_score) = if alive_tribes.len() == 1 {
+    let wid = alive_tribes[0];
+    (wid, *scores.get(&wid).unwrap_or(&0))
+} else {
+    // Timeout: use score tiebreaker
+    scores
+        .iter()
+        .max_by_key(|&(_, score)| score)
+        .map(|(&id, &score)| (id, score))
+        .unwrap_or((0, 0))
+};
+
+let is_decisive = alive_tribes.len() == 1;
+    Adjudication { scores, final_potentials, winner_id, winner_score,
+                   is_decisive, alive_tribes }
 }
