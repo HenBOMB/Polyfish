@@ -36,11 +36,23 @@ numbers on the seed0 game (and ultimately the broader eval, for #4):
    eval harnesses, not just this one seed — literal eternal 100% isn't
    a provable target).
 
+## KPI tooling note (read before trusting any units_lost/units_killed number)
+
+`examples/game_kpis.rs` originally compared unit COUNTS once per turn —
+a death masked by a same-turn Train/Summon (net count unchanged) was
+silently invisible. It reported "5 lost" for both the iteration-1 and
+iteration-2 games, which made EXP_ELO_101 look like it hadn't touched
+units_lost at all. Fixed (2026-08-30, during iteration-2 analysis) to
+diff unit-ID SETS per move instead of counts per turn; verified against
+an independent full-replay roster diff. All units_lost/units_killed
+numbers below are the CORRECTED ones — if you find an older number
+quoted as "5" anywhere, it's stale.
+
 ## Baseline (iteration 1, commit 23ee7a1, before this loop's first fix)
 
 - Game length: ends turn 32 (target: <=15) — **MISS, large gap**
-- Units lost: 5 (target: <3) — **MISS**
-- Units killed: 17 (favorable ratio, not a target itself)
+- Units lost: 29 (target: <3) — **MISS, large gap**
+- Units killed: 25 (favorable ratio, not a target itself)
 - Giants by turn 12: 2 (target: >=3) — **MISS, close**
 - Win rate: this game won; eval_seeds broader win rate 47.5% (100
   seeds/200 games, see hypothesis_driven_improvements.md) — **MISS,
@@ -73,46 +85,103 @@ up too, the anchor pin didn't take.
 The n=128 paired-gauge harness (Imperius mirror, from EXP_ELO_100) uses
 the identical flags with `--num-games 128 --tribe1 Imperius --tribe2
 Imperius --base-seed 770425 --actors 14` and no `--anchor-seat` (mirror
-matchup, no fixed anchor seat needed).
+matchup, no fixed anchor seat needed). This harness showed a real
+run-to-run gap on the `net-asym` leaf during EXP_ELO_101's gauge (two
+treatment-arm rereads of the identical config: 0.3828 then 0.3672) —
+unlike the fully-deterministic `heuristic`-leaf harness EXP_ELO_100 used.
+Always rerun at least the arm you're about to ship on before trusting a
+single reading; baseline reproduced exactly both times, so this is
+specific to something `net-asym` touches, not a regression of
+EXP_ELO_091's move-gen determinism fix.
 
 ## Current state
 
-- Iteration: 2 (EXP_ELO_101 shipped/pending -- see ledger for final
-  disposition once the paired gauge lands)
-- Baseline game file (iteration 1, pre-fix): the byte-identical
-  reproduction lives at
-  `/private/tmp/.../scratchpad/gauge_101/results/`-adjacent scratch
-  copies; canonical repo copy is
-  `replays/xinxi_seed0_vs_greedy_exp100_8480.json` (score 8480, 741
-  moves, turn 32).
-- Treatment game file (iteration 2, post-fix): `replays/fix1_final_seed0_run1.json`
+- Iteration: 4 in progress. EXP_ELO_101 and EXP_ELO_102 both shipped.
+  A stop-hook check (2026-08-30) redirected focus mid-iteration-3 to a
+  specific behavioral demand: demonstrate the net (1) exploiting a
+  weakly-defended ENEMY city and (2) emitting a visible defense signal
+  when search reveals ITS OWN city is at risk. (2) is under active
+  investigation as EXP_ELO_103 (see below) — found and partially fixed
+  a severe reward-collapse-on-success bug in the Defend-order pricing,
+  structurally the same class as EXP_ELO_101 but on defense and bigger.
+  (1) has not been investigated yet this iteration.
+- Baseline game file (iteration 1, pre-fix): `replays/xinxi_seed0_vs_greedy_exp100_8480.json`
+  (score 8480, 741 moves, turn 32). Reproduced byte-for-byte against the
+  real historical run once the correct generation recipe (above) was
+  recovered — confirms the recipe and that EXP_ELO_101 is the only
+  variable in the iteration-2 comparison below.
+- Treatment game file (iteration 2, EXP_ELO_101 applied): `replays/exp101_seed0_watch/game_iter100_game0_seed1787500020.replay.json`
   (score 8580, 514 moves, turn 25, decisive win) -- same seed, same
-  recipe, single-variable A/B against the baseline above.
-- Debug traces (baseline): `replays/exp100_seed0_watch/` (replay.json,
-  decisions.json, game0.jsonl macro-goal ballots, ply_trace.jsonl).
-- First finding (ml-expert agent pass 1): siege-pricing inversion at
-  city 79, turns 22-29. Root-caused via ground-truth `POLYFISH_PLY_TRACE`
-  reconstruction (not the agent's approximate numbers -- see EXP_ELO_101):
-  `unit_goal_contest_second`'s "occupied" gate keyed off live-enemy-unit
-  presence, so it collapsed to zero the instant a lethal attack killed
-  the garrison (capturing a city is a separate move; tile ownership
-  stays enemy until then). This, not the `attack_press`/`attack_siege_hold`
-  swap (which is a correct, intentional design), was the actual bug.
+  recipe, single-variable A/B against the baseline above. Debug traces
+  in the same directory (decisions.json, ply_trace.jsonl, game0.jsonl).
+- Iteration-1 debug traces (baseline): `replays/exp100_seed0_watch/`.
 - Issues fixed so far (this loop):
   1. **EXP_ELO_101** (`unit_goal_contest_second`/`expand_contest_second`
-     occupied->contested fix) -- see ledger for full writeup. Controlled
-     single-game A/B: wins 7 turns faster (25 vs 32), 227 fewer moves,
-     city 79 captured cleanly one turn after the kill instead of the
-     wounded-occupier-dies-before-capturing failure mode. Paired gauge
-     pending at status-file-write time.
-- Still-open findings from pass 1, NOT yet addressed (carry into next
-  iteration's analysis, don't silently drop):
-  - `defender_dies` pricing (`scoring.rs` ~99-102) is flat (95+15)
-    regardless of attacker HP post-retaliation, so lethal-attack
-    selection doesn't prefer the healthier attacker when multiple units
-    can make the same kill. Plausibly related to why `units_lost` stayed
-    at 5 in the iteration-2 game even though the turn-22 decision itself
-    is now fixed.
+     occupied->contested fix, SHIPPED). Root cause: the "occupied" gate
+     keyed off live-enemy-unit presence, so it collapsed to zero the
+     instant a lethal attack killed a contested target's garrison
+     (capturing a city is a separate move; tile ownership stays enemy
+     until then) -- exactly the discrete-pricing anti-pattern CLAUDE.md
+     flags. NOT the `attack_press`/`attack_siege_hold` swap, which
+     turned out to be a correct, intentional design (EXP_ELO_042).
+     Ground-truth ply verification: flips the flagged decision
+     (Attack -75.4 -> +299.6 vs Step's flat 86.0). Controlled
+     regenerated-game A/B: wins 7 turns faster (25 vs 32), 227 fewer
+     moves, city 79 captured cleanly one turn after the kill instead of
+     the historical wounded-occupier-dies-before-capturing failure.
+     Corrected KPIs: units_lost 29->19, units_killed 25->20 (real
+     ~34% reduction, not the "unchanged" the buggy KPI tool first
+     suggested). Paired gauge (n=128, seed 770425): baseline 0.3516
+     (exact match to EXP_ELO_100's own historical reading), treatment
+     0.3828 / 0.3672 across two runs, both +1.6 to +3.1pp, within the
+     ~7.8pp noise floor. Committed (`8d4e5c1`, `3e260b2`).
+  2. **EXP_ELO_102** (`revive_endturn_for_lone_doomed_unit`, narrow
+     conditional EndTurn revival, SHIPPED). Root cause: the flat -700
+     EndTurn-revival floor can't tell "one doomed unit, zero
+     opportunity cost, EndTurn should always win" from "mediocre ply
+     with real opportunity cost" (the EXP_ELO_075 regression shape).
+     New mechanism fires ONLY when every remaining candidate shares one
+     source unit, is Attack, and is provably lethal to the attacker.
+     Controlled regenerated-game verification: fires exactly at the
+     predicted ply (turn 10, global idx 146), units_lost 19->9 (more
+     than halved), game length 25->22 turns. Paired gauge (n=128, seed
+     770425): exact tie (46/128 both arms) but per-game logs clearly
+     diverge and the shared EndTurn-chosen-despite-alternatives counter
+     rose 1.737%->2.367%, confirming the mechanism fired more and
+     reshaped games without moving the aggregate win rate — a clean
+     wash, no regression. Committed.
+- Current best game for the next analysis pass: the EXP_ELO_101
+  treatment game above (turn 25, 19 lost, 20 killed, 2 giants by t12) --
+  still misses all four KPI targets, though by a smaller margin on #1
+  and #2 than the iteration-1 baseline.
+- Next candidate fix, identified by pass-2 `ml-expert` analysis
+  (2026-08-30, not yet implemented — see EXP_ELO_102 once registered):
+  **EndTurn-revival floor is a flat constant that can't tell "one
+  trapped unit with no non-lethal option, EndTurn is free" from
+  "mediocre mid-turn ply."** `macro_exec.rs`'s `ENDTURN_REVIVE_PRICE_DEFAULT
+  = -700.0` (line ~246) only revives EndTurn when the best surviving
+  candidate scores below a flat -700 (EXP_ELO_075 found flat revival at
+  every tested strength net-negative, since it also fires on ordinary
+  mediocre plies with real opportunity cost — this is why the floor is
+  flat and conservative today). But when the ONLY legal candidates left
+  are one already-fully-acted unit's self-lethal attacks, EndTurn has
+  ZERO opportunity cost (everyone else already moved) and should always
+  win regardless of score. Confirmed at 3 real plies this game (turn 18
+  ply 162 unit 3, turn 10 ply 71 unit 8, turn 20 ply 195 unit 36) — one
+  (-699.0, a single candidate) missed the -700 floor by exactly 1.0
+  point. Proposed fix: a narrow, CONDITIONAL revival (candidate count
+  small, all remaining candidates are Attack from the same src,
+  attacker_dies=true) — structurally different from the flat floor
+  already measured net-negative, so this should be a new mechanism, not
+  a tuning of -700's value.
+  - **Also checked and REFUTED this pass**: the `defender_dies` flat
+    HP-blind pricing lead from pass 1 (`scoring.rs` ~99-106). The
+    engine's own combat model already zeroes retaliation damage whenever
+    an attack is lethal (`actions/units.rs` ~773-781), independent of
+    which unit lands the kill — confirmed across 20 same-target
+    alternate-attacker plies in this game, `dmg_to_atk=0.0` in every
+    lethal case regardless of attacker choice. This is NOT the mechanism
+    behind any of the game's unit losses; drop it from future passes.
 
 ## Log (append one entry per iteration, newest last)
 
@@ -122,7 +191,15 @@ matchup, no fixed anchor seat needed).
   decision (Attack -75.4 -> +299.6 vs Step's flat 86.0). Controlled
   regenerated-game verification: wins 7 turns faster, 227 fewer moves,
   clean capture-and-convert instead of the historical wounded-occupier
-  death. Paired gauge (n=128, seed 770425): baseline 0.3516 (matches
-  EXP_ELO_100's own reading exactly), treatment 0.3828, delta +3.13pp
-  (favorable, within the ~7.8pp noise floor, not a regression).
-  **SHIPPED** — see ledger EXP_ELO_101 for full writeup. Committed.
+  death; corrected KPIs show units_lost 29->19, units_killed 25->20.
+  Paired gauge (n=128, seed 770425): baseline 0.3516 (matches
+  EXP_ELO_100's own reading exactly), treatment 0.3828 / 0.3672 across
+  two runs (favorable, within the ~7.8pp noise floor, not a
+  regression). **SHIPPED** — see ledger EXP_ELO_101 for full writeup.
+  Committed.
+- **2026-08-30, iteration 3, pass 2 analysis (pre-fix)**: ml-expert
+  agent analysis of the EXP_ELO_101 game found the EndTurn-revival-floor
+  issue above (candidate for EXP_ELO_102) and refuted the carried-over
+  `defender_dies` lead from pass 1. Also surfaced and fixed the
+  `game_kpis.rs` undercounting bug (see KPI tooling note above).
+  Implementation of EXP_ELO_102 in progress.

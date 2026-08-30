@@ -11792,11 +11792,20 @@ immediately put to productive use (an attack staged FROM the new city on
 turn 24) — the historical "occupies at low HP, dies before capturing"
 failure mode does not recur. Both games are decisive net wins; the fix
 wins **7 turns faster** (turn 25 vs 32) in **227 fewer total moves** (514
-vs 741) and **2 fewer kills needed** (15 vs 17) to reach the same
-decisive outcome. `units_lost` is unchanged at 5 in this single game —
-expected, since this fix addresses one specific mechanism and other loss
-sources (e.g. the ml-expert's separate `defender_dies` flat-pricing
-finding, not yet investigated) remain for a future pass.
+vs 741) to reach the same decisive outcome.
+
+**Correction (found during the next iteration's pass-2 analysis):**
+`examples/game_kpis.rs`'s original units_lost/units_killed accounting
+had a real bug -- it compared unit COUNTS once per turn, so a death
+masked by a same-turn Train/Summon (net count unchanged) was silently
+invisible. It reported "5 lost" for both this game and the baseline,
+which this entry originally (wrongly) read as "unchanged." Fixed to
+diff unit-ID SETS per move instead of counts per turn (verified against
+an independent full-replay roster diff the pass-2 `ml-expert` agent ran
+by hand: both methods now agree exactly, 19 losses / 20 kills for this
+game). Corrected reading: baseline 29 lost / 25 killed -> treatment 19
+lost / 20 killed -- a real ~34% reduction in units lost, not a wash.
+The fix is doing more than the original write-up credited it for.
 
 PAIRED GAUGE (n=128, seed 770425 harness, Imperius mirror,
 worktree-isolated, model.safetensors MD5-verified identical across
@@ -11829,8 +11838,115 @@ within noise, the same "no evidence of harm" bar EXP_ELO_100 shipped on
 (that one was negative-and-within-noise; this one is positive-and-
 within-noise, an easier call). Two items carried forward to the next
 loop iteration rather than blocking this one: the `defender_dies` flat
-HP-blind pricing the ml-expert also flagged (units_lost stayed at 5 in
-the iteration-2 game, suggesting a separate live mechanism), and this
-session's own repeated recipe-reconstruction failures (documented in
-`seed0_loop_status.md` so future iterations don't re-lose the exact
-flags).
+HP-blind pricing the ml-expert also flagged as a candidate explanation
+for the game's remaining unit losses (later refuted, see EXP_ELO_102),
+and this session's own repeated recipe-reconstruction failures
+(documented in `seed0_loop_status.md` so future iterations don't re-lose
+the exact flags). Also found and fixed in the next iteration's pass:
+`examples/game_kpis.rs`'s units_lost/units_killed accounting was
+undercounting (per-turn count delta, not per-move ID-set diff) — the "5
+lost, unchanged" reading quoted earlier in this entry was wrong on both
+arms; see the correction above and EXP_ELO_102's entry for the real
+numbers (29 -> 19).
+
+## EXP_ELO_102 — EndTurn's flat -700 revival floor can't tell "one doomed unit, nothing else live this ply" from "mediocre ply with real opportunity cost"; added a narrow conditional revival for the first case
+
+CONTEXT: iteration 3 (pass 2) of the standing seed0 loop, analyzing the
+EXP_ELO_101 game (turn 25, 514 moves, decisive win, still missing all
+four of Verdi's KPI targets). An `ml-expert` agent replayed the full
+game byte-for-byte through the real engine and diffed unit rosters per
+move (not per turn), finding **19** net-seat losses, not the 5 the
+loop's own `game_kpis.rs` tool had been reporting (see the correction
+note on EXP_ELO_101 above — that tool's bug is fixed as part of this
+iteration too). It also checked and REFUTED pass 1's carried-over
+`defender_dies` flat-pricing lead: `calculate_combat`
+(`actions/units.rs` ~773-781) already zeroes retaliation damage
+unconditionally whenever an attack is lethal, independent of which unit
+lands the kill — confirmed by re-deriving `calculate_combat_preview`
+across 20 same-target alternate-attacker plies in this exact game,
+`dmg_to_atk=0.0` in every lethal case regardless of attacker choice.
+There is no real signal `defender_dies` pricing is missing here; the
+flat 95+bonus in `scoring.rs` costs nothing.
+
+The real finding: 3 of the 19 losses (units at turns 10, 18, 20) were
+FORCED — at each of those plies, the entire post-gate candidate set was
+a single unit's own self-lethal Attack options (every other unit had
+already acted or had nothing legal), yet `rank_plies`'s EndTurn-revival
+mechanism didn't fire because its score sat above the flat -700 floor
+(one case missed by exactly 1.0 point: a lone candidate at -699.0,
+turn 18). Independently re-verified against ground truth: read the
+exact `ply_trace.jsonl` row for that ply directly (`candidates: [{move:
+Attack 50->49, score: -699.0}]`, `chosen` = that same forced attack)
+and read `macro_exec.rs`'s revival code directly (`scored.first()...
+< price` where `price = ENDTURN_REVIVE_PRICE_DEFAULT = -700.0`) —
+matches the agent's citation exactly.
+
+Why the floor is flat and conservative in the first place (this is
+NOT a case for lowering -700): EXP_ELO_075 tried a 0.0 floor and
+regressed the paired gauge 0.396->0.146 because it also outcompeted
+ordinary mediocre plies with real opportunity cost; a later clean n=128
+sweep (-400/-500/-700/hard-gate) found every flat strength net-negative,
+landing at -700 as the least-bad compromise (see the doc comment on
+`ENDTURN_REVIVE_PRICE_DEFAULT`). A single doomed unit with no other live
+candidate this ply is a *categorically different* case from "the best
+of several options happens to be mediocre" — it has provably ZERO
+opportunity cost, since by construction nothing else can act. Widening
+-700 itself would re-open the 075 regression; a new, narrowly-scoped
+mechanism does not.
+
+CHANGE (`src/ai/search/macro_exec.rs`): added
+`revive_endturn_for_lone_doomed_unit`, called before the existing flat
+floor. Fires ONLY when every entry in the post-gate candidate list (a)
+shares the same `source_idx` (no other unit has any legal move this
+ply), (b) is an `Attack` move, and (c) `calculate_combat_preview`
+reports `attacker_dies=true` for it — i.e. every remaining option for
+the one live unit is provably fatal, not merely low-scoring. When it
+fires, EndTurn unconditionally replaces the candidate list (price 0.0,
+matching this file's own existing "fully gated ply" convention). Chains
+harmlessly with the untouched flat-floor function afterward (EndTurn's
+0.0 always clears the -700 comparison, so no double-push). Deliberately
+narrow: does NOT fire across multiple units even if all are lethal
+(unverified generalization, kept out), and any non-Attack alternative
+(even from the same unit) disqualifies the ply, since that's a real,
+survivable choice. 6 new unit tests (fires on the lone-self-lethal
+case reproducing the exact -699.0 fixture; does not fire when the
+attack is survivable, when candidates span multiple units, when a
+non-Attack option exists, or when `has_other`/`lambda` guards are off).
+`cargo test --lib`: 334 passed, 0 failed.
+
+VERIFICATION — controlled regenerated game (identical recipe, same seed
+1787500020, EXP_ELO_101 binary as the control): matches the EXP_ELO_101
+game move-for-move through turn 10, then at the exact flagged ply
+(global move index 146) the control plays the forced `Attack 50->49`
+while the treatment plays `EndTurn` instead — the mechanism fires
+exactly where predicted, on the real game, not just the synthetic unit
+tests. Corrected KPIs (`game_kpis.rs`, post units_lost fix): game length
+25->22 turns, units_lost **19->9** (more than halved), units_killed
+20->19, giants by turn 12 unchanged at 2. `units_lost` is now the
+closest to Verdi's <3 target this loop has gotten, though still a
+sizeable miss.
+
+PAIRED GAUGE (n=128, seed 770425 harness, Imperius mirror,
+worktree-isolated at commit `8d4e5c1` (EXP_ELO_101 shipped) for both
+arms, model.safetensors MD5-verified identical, binaries MD5-confirmed
+distinct so the treatment arm actually ran the new code): baseline
+`anchor_net_wr` 0.359375 (46/128), treatment 0.359375 (46/128) — an
+exact tie, comfortably inside the ~7.8pp noise floor this harness
+established during EXP_ELO_101's own reproducibility check. This is
+not a "the mechanism never fired" false negative: the two arms'
+per-game logs diverge from early on (different progress-checkpoint
+winner scores and move counts at every 25-game mark), and the shared
+`EXP_ELO_085 EndTurn chosen despite alternatives` diagnostic counter
+(the new function feeds the same counter) rose 1.737%->2.367%
+(487/28034 -> 660/27878), confirming `revive_endturn_for_lone_doomed_unit`
+fired materially more often and reshaped individual games — it simply
+landed on the same aggregate win COUNT by coincidence (46 either way)
+at this sample size. Net effect on this mirror-matchup harness: a
+clean wash, no detectable regression.
+
+Disposition: **SHIPPED**. Unit tests (334/334), a controlled
+regenerated-game verification (mechanism fires exactly where
+predicted, units_lost 19->9), and a paired gauge showing zero
+measurable win-rate impact together clear this for shipping — the fix
+is narrowly enough scoped that it doesn't touch the general case, and
+the one place it does fire, it fires correctly.

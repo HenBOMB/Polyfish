@@ -375,6 +375,7 @@ pub fn rank_plies(
         })
         .collect();
     scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let scored = revive_endturn_for_lone_doomed_unit(scored, has_other, lambda, &game.state);
     revive_endturn_if_worse_than_floor(scored, has_other, lambda)
 }
 
@@ -419,6 +420,50 @@ fn revive_endturn_if_worse_than_floor(
         }
     }
     scored
+}
+
+/// EXP_ELO_102: `revive_endturn_if_worse_than_floor`'s flat -700 price is
+/// deliberately conservative (EXP_ELO_075/077/082's sweep found any flatter
+/// revival net-negative, since it also outcompetes ordinary mediocre plies
+/// with real opportunity cost) -- but that conservatism has a real cost of
+/// its own when the *entire* surviving candidate set is one already-acted
+/// unit's self-lethal attacks: every other unit has nothing left to do this
+/// ply, so EndTurn has ZERO opportunity cost and should always win, no
+/// matter how the score happens to sit relative to -700 (a real seed0 ply
+/// missed the floor by exactly 1.0 point: single candidate at -699.0).
+/// Distinct mechanism from the flat floor, not a retuning of it: only fires
+/// when there is provably nothing else to do, not merely when a score is
+/// low.
+fn revive_endturn_for_lone_doomed_unit(
+    scored: Vec<(f32, Box<dyn Move>)>,
+    has_other: bool,
+    lambda: f32,
+    state: &GameState,
+) -> Vec<(f32, Box<dyn Move>)> {
+    if !has_other || lambda == 0.0 || endturn_hard_gate() {
+        return scored;
+    }
+    let all_lethal_same_unit = (|| {
+        let (_, first) = scored.first()?;
+        let src = first.source_idx().ok()?;
+        scored
+            .iter()
+            .all(|(_, m)| {
+                m.move_type() == MoveType::Attack
+                    && m.source_idx().ok() == Some(src)
+                    && m.target_idx().ok().is_some_and(|t| {
+                        crate::functions::calculate_combat_preview(state, src as i32, t as i32)
+                            .is_some_and(|p| p.attacker_dies)
+                    })
+            })
+            .then_some(())
+    })()
+    .is_some();
+    if !all_lethal_same_unit {
+        return scored;
+    }
+    ENDTURN_CHOSEN_WITH_ALTERNATIVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    vec![(0.0, Box::new(EndTurnMove) as Box<dyn Move>)]
 }
 
 /// Ply cap per executed turn, mirroring cross_end_turn's MAX_GHOST_MOVES.
@@ -728,6 +773,144 @@ mod tests {
         // already degrades to a lone EndTurn earlier in rank_plies.
         let deep_no_other = vec![(-750.0f32, Box::new(StepMove::new(1, 2)) as Box<dyn Move>)];
         let out = revive_endturn_if_worse_than_floor(deep_no_other, false, 1.0);
+        assert!(out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn));
+    }
+
+    /// EXP_ELO_102: the case the flat -700 floor misses by design — a real
+    /// seed0 ply had exactly one candidate (a self-lethal Attack) scoring
+    /// -699.0, one point above the floor. Nothing else can act this ply
+    /// (the whole candidate set is one unit's own moves), so EndTurn has
+    /// zero opportunity cost and must win regardless of score.
+    #[test]
+    fn endturn_revives_for_a_lone_units_self_lethal_attacks() {
+        use crate::ai::combat::tests::{board, unit_at};
+        use crate::moves::AttackMove;
+        use crate::types::UnitType;
+
+        let mut state = board(60);
+        let mut attacker = unit_at(60, UnitType::Warrior, 1);
+        attacker.health = 1.0;
+        state.tribes.get_mut(&1).unwrap().units.push(attacker);
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(61, UnitType::Warrior, 2));
+
+        let preview = crate::functions::calculate_combat_preview(&state, 60, 61)
+            .expect("fixture attacker/defender must resolve a preview");
+        assert!(
+            preview.attacker_dies,
+            "test fixture assumption broken: attack must be self-lethal: {preview:?}"
+        );
+
+        let scored = vec![(-699.0f32, Box::new(AttackMove::new(60, 61)) as Box<dyn Move>)];
+        let out = revive_endturn_for_lone_doomed_unit(scored, true, 1.0, &state);
+        assert_eq!(
+            out.len(),
+            1,
+            "the sole self-lethal candidate should be replaced, not appended to"
+        );
+        assert_eq!(
+            out[0].1.move_type(),
+            MoveType::EndTurn,
+            "sole candidate is a self-lethal attack with nothing else to do this ply"
+        );
+    }
+
+    /// A unit with a SURVIVABLE attack available must not be forced into
+    /// EndTurn — this mechanism only fires when every remaining option is
+    /// provably fatal, never as a general "score is bad" shortcut (that's
+    /// exactly the EXP_ELO_075 regression shape this stays clear of).
+    #[test]
+    fn endturn_does_not_revive_when_the_attack_is_survivable() {
+        use crate::ai::combat::tests::{board, unit_at};
+        use crate::moves::AttackMove;
+        use crate::types::UnitType;
+
+        let mut state = board(60);
+        state.tribes.get_mut(&1).unwrap().units.push(unit_at(60, UnitType::Warrior, 1));
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(61, UnitType::Warrior, 2));
+
+        let preview = crate::functions::calculate_combat_preview(&state, 60, 61)
+            .expect("fixture attacker/defender must resolve a preview");
+        assert!(
+            !preview.attacker_dies,
+            "test fixture assumption broken: full-health attacker must survive: {preview:?}"
+        );
+
+        let scored = vec![(-50.0f32, Box::new(AttackMove::new(60, 61)) as Box<dyn Move>)];
+        let out = revive_endturn_for_lone_doomed_unit(scored, true, 1.0, &state);
+        assert!(out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn));
+    }
+
+    /// Two different units' self-lethal attacks must NOT trigger this —
+    /// scope stays narrow to what was actually verified (a single doomed
+    /// unit with nothing else live this ply), not generalized to "every
+    /// candidate happens to be lethal."
+    #[test]
+    fn endturn_does_not_revive_across_multiple_units_even_if_all_lethal() {
+        use crate::ai::combat::tests::{board, unit_at};
+        use crate::moves::AttackMove;
+        use crate::types::UnitType;
+
+        let mut state = board(60);
+        let mut a1 = unit_at(60, UnitType::Warrior, 1);
+        a1.health = 1.0;
+        let mut a2 = unit_at(62, UnitType::Warrior, 1);
+        a2.health = 1.0;
+        state.tribes.get_mut(&1).unwrap().units.push(a1);
+        state.tribes.get_mut(&1).unwrap().units.push(a2);
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(61, UnitType::Warrior, 2));
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(63, UnitType::Warrior, 2));
+
+        let scored = vec![
+            (-699.0f32, Box::new(AttackMove::new(60, 61)) as Box<dyn Move>),
+            (-699.0f32, Box::new(AttackMove::new(62, 63)) as Box<dyn Move>),
+        ];
+        let out = revive_endturn_for_lone_doomed_unit(scored, true, 1.0, &state);
+        assert!(
+            out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn),
+            "two different units still on the board must not collapse to an unconditional EndTurn"
+        );
+    }
+
+    /// A non-Attack alternative (even from the same unit) is a real,
+    /// survivable option — must not be discarded in favor of EndTurn.
+    #[test]
+    fn endturn_does_not_revive_when_a_non_attack_option_exists() {
+        use crate::ai::combat::tests::{board, unit_at};
+        use crate::moves::AttackMove;
+        use crate::types::UnitType;
+
+        let mut state = board(60);
+        let mut attacker = unit_at(60, UnitType::Warrior, 1);
+        attacker.health = 1.0;
+        state.tribes.get_mut(&1).unwrap().units.push(attacker);
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(61, UnitType::Warrior, 2));
+
+        let scored = vec![
+            (-699.0f32, Box::new(AttackMove::new(60, 61)) as Box<dyn Move>),
+            (-620.0f32, Box::new(StepMove::new(60, 71)) as Box<dyn Move>),
+        ];
+        let out = revive_endturn_for_lone_doomed_unit(scored, true, 1.0, &state);
+        assert!(out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn));
+    }
+
+    /// Guards mirror the flat-floor function's: never fires with no other
+    /// candidates, no goal-shaping, or the hard-gate diagnostic set.
+    #[test]
+    fn endturn_lone_doomed_unit_respects_the_same_guards() {
+        use crate::ai::combat::tests::{board, unit_at};
+        use crate::moves::AttackMove;
+        use crate::types::UnitType;
+
+        let mut state = board(60);
+        let mut attacker = unit_at(60, UnitType::Warrior, 1);
+        attacker.health = 1.0;
+        state.tribes.get_mut(&1).unwrap().units.push(attacker);
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(61, UnitType::Warrior, 2));
+
+        let scored = || vec![(-699.0f32, Box::new(AttackMove::new(60, 61)) as Box<dyn Move>)];
+        let out = revive_endturn_for_lone_doomed_unit(scored(), false, 1.0, &state);
+        assert!(out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn));
+        let out = revive_endturn_for_lone_doomed_unit(scored(), true, 0.0, &state);
         assert!(out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn));
     }
 

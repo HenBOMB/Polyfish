@@ -1,10 +1,11 @@
 //! KPI snapshot for one game against Verdi's four success metrics:
 //! turn game ends, units lost/killed for the net seat, giants by turn 12.
 //! Usage: cargo run --example game_kpis -- <replay.json> [pov=1]
+use std::collections::HashSet;
+
 use polyfish::game::Game;
 use polyfish::replayer::ModReplay;
 use polyfish::settings::units::get_super_unit;
-use polyfish::types::MoveType;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -22,8 +23,11 @@ fn main() {
     let mut giants_by_turn12 = 0i32;
     let mut units_lost = 0i32;
     let mut units_killed = 0i32; // opponent units lost, credited to us
-    let mut prev_pov_units = game.state.tribes.get(&pov).map(|t| t.units.len()).unwrap_or(0) as i32;
-    let mut prev_opp_units = game.state.tribes.get(&opp).map(|t| t.units.len()).unwrap_or(0) as i32;
+    let ids = |g: &Game, p: i32| -> HashSet<u32> {
+        g.state.tribes.get(&p).map(|t| t.units.iter().map(|u| u.id).collect()).unwrap_or_default()
+    };
+    let mut prev_pov_ids = ids(&game, pov);
+    let mut prev_opp_ids = ids(&game, opp);
     let mut last_turn = 0;
 
     for t in &full.turns {
@@ -35,22 +39,18 @@ fn main() {
                 let legal = game.legal_moves();
                 let m = legal.iter().find(|m| &m.serialize() == cmd)
                     .unwrap_or_else(|| panic!("not legal: {cmd}"));
-                let _ = m.move_type();
                 game.play_move(m.as_ref());
+                // Per-move (not per-turn) id-set diff: a same-turn death and
+                // birth (e.g. a kill followed by a Train) cancel out under a
+                // plain count comparison, silently hiding the death.
+                let pov_ids = ids(&game, pov);
+                let opp_ids = ids(&game, opp);
+                units_lost += prev_pov_ids.difference(&pov_ids).count() as i32;
+                units_killed += prev_opp_ids.difference(&opp_ids).count() as i32;
+                prev_pov_ids = pov_ids;
+                prev_opp_ids = opp_ids;
             }
         }
-        let pov_units = game.state.tribes.get(&pov).map(|t| t.units.len()).unwrap_or(0) as i32;
-        let opp_units = game.state.tribes.get(&opp).map(|t| t.units.len()).unwrap_or(0) as i32;
-        // Coarse (unit-count based, not perfectly move-attributed): a drop
-        // in our count this turn is a loss; a drop in theirs is a kill.
-        if pov_units < prev_pov_units {
-            units_lost += prev_pov_units - pov_units;
-        }
-        if opp_units < prev_opp_units {
-            units_killed += prev_opp_units - opp_units;
-        }
-        prev_pov_units = pov_units;
-        prev_opp_units = opp_units;
 
         let giants_now = game.state.tribes.get(&pov)
             .map(|tr| tr.units.iter().filter(|u| u.unit_type == super_unit).count() as i32)
