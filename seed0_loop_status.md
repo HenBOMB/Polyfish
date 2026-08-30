@@ -247,15 +247,43 @@ EXP_ELO_091's move-gen determinism fix.
      filter the same as a visible unit, so the latch could in principle
      fire on an empty remembered tile with no actual kill — not observed
      in any measured game yet. Committed (`ceb429f`).
-- Current best game for the next analysis pass: the **EXP_ELO_106** game
-  (`replays/exp106_seed0_watch/`, turn 23, score 7700, 7 lost, 9 killed,
-  5 giants by t12 — a new high). Still misses turn-count (<=15) and
-  units-lost (<3) targets, though units_lost improved substantially
-  (11->7) and giants-by-12 cleared its target by the widest margin yet.
-  Game length went UP 2 turns (21->23) despite the underlying siege
-  being resolved 3 turns earlier than before — an open loose end (see
-  EXP_ELO_106 ledger entry's Disposition), possibly related to the
-  goal-ballot conversion-indifference lead noted below.
+  6. **EXP_ELO_107** (`attack_capture_complete` state-fact latch,
+     SHIPPED). Found by an `ml-expert` pass-5 analysis of the EXP_ELO_106
+     game, launched specifically to check the carried-forward
+     goal-ballot lead — REFUTED (the ballot converges hard on `Attack
+     24` from t15 on). The real mistake was one level downstream: by
+     t17 the net had killed the capital's last defender and stood on
+     it (p2 down to zero units), but `Capture` scored -160 against
+     Recover's +20 every turn for 5 straight turns, because
+     `attack_siege_hold`'s state-fact latch (a unit standing on a
+     still-ENEMY city) is forfeited the instant Capture itself flips
+     ownership — the offense-side mirror of EXP_ELO_101/103/104/106's
+     collapse-on-success family, on the terminal action this time.
+     Fixed with `attack_capture_complete`, a sibling latch paying the
+     same rate once the Attack-ordered target is OWNED by the player
+     (not occupied) — can't be re-forfeited by stepping off, and the
+     order generator naturally stops re-issuing Attack for cities
+     already in the player's own tribe. Ground truth: flagged ply
+     -160->+590 bit-exact, matching the agent's own hand-estimate.
+     Regenerated game: the stuck loop is gone — Capture fires
+     immediately at **turn 18** (was 23), the best turn-count result
+     this loop has ever shipped; units_lost/killed/giants-by-12 all
+     unchanged (a pure conversion-speed fix). Paired gauge, two
+     independent seed blocks: BOTH landed on an exact win-rate tie
+     (0.507813/0.507813, 0.546875/0.546875) with a consistent drop in
+     average game length (-2.9%, -9.4%) — the fix changes when an
+     already-won game closes out, not whether it's won, the same
+     "clean wash on win rate, verified underneath" shape EXP_ELO_102
+     shipped on. Committed (`a0b1917`).
+- Current best game for the next analysis pass: the **EXP_ELO_107** game
+  (`replays/exp107_seed0_watch/`, turn **18**, score 7260, 7 lost, 9
+  killed, 5 giants by t12). First shipped game to get inside single
+  digits of the turn-count target (<=15) — units-lost (<3) is now the
+  clearly dominant remaining gap, unchanged since EXP_ELO_106 (this
+  fix was conversion-speed only, not combat behavior). The
+  retaliation/exposure pricing lever below (EXP_ELO_105's diagnosis,
+  still unimplemented) is the most direct remaining path to units-lost
+  <3.
 - **EXP_ELO_105 was attempted and REVERTED** (2026-08-30, see the
   ledger for the full writeup) — the retaliation/exposure pricing gap
   below is still the diagnosed primary lever, but the specific fix
@@ -456,3 +484,36 @@ EXP_ELO_091's move-gen determinism fix.
   the EXP_ELO_106 game, and/or a fresh attempt at the retaliation/
   exposure pricing lever (EXP_ELO_105's diagnosis, still believed
   correct, still without a working implementation).
+- **2026-08-31, iteration 8 (pass-5 analysis + EXP_ELO_107)**: `ml-expert`
+  pass-5 analysis of the EXP_ELO_106 game, launched specifically to
+  check the carried-forward goal-ballot conversion-indifference lead.
+  REFUTED as stated — the ballot converges hard on `Attack 24` from
+  t15 onward. The real mistake was one level downstream: by t17 the
+  net had killed the enemy capital's last defender and stood on it
+  (p2 down to zero units, one city) — a won position — but `Capture`
+  scored -160 against `Recover`'s +20 for 5 STRAIGHT TURNS (t18-t22),
+  only resolving when the enemy's own city growth accidentally
+  repriced `spt` enough to tip it positive at t23. Root cause:
+  `attack_siege_hold` (EXP_ELO_042) pays a unit standing on a
+  still-ENEMY city, so Capture itself — the action the whole order
+  exists to produce — flips ownership and forfeits its own credit,
+  the offense-side mirror of EXP_ELO_101/103/104/106's collapse-on-
+  success family, now on the terminal action rather than a supporting
+  one. Fixed with `attack_capture_complete`, a sibling latch paying
+  the same rate once the target is player-owned. Ground truth: flagged
+  ply -160->+590 bit-exact, matching the agent's own independent
+  hand-estimate exactly. Both must-not-regress reference plies (101's
+  capture chain, 106's idx291) held bit-exact. Added 1 pinning test
+  (337/337 total). Regenerated game: the stuck loop is gone — Capture
+  fires immediately at turn 18 (was 23), the best turn-count result
+  this loop has ever shipped, with units_lost/killed/giants-by-12 all
+  unchanged (a pure conversion-speed fix, as expected). Paired gauge,
+  two independent seed blocks: BOTH landed on an exact win-rate tie
+  with a consistent drop in average game length (-2.9%, -9.4%) — not
+  noise (two disjoint 128-game samples don't land on identical win
+  rates by chance), and exactly the shape the mechanism predicts (an
+  already-won game closes out faster, doesn't become "more won").
+  **SHIPPED** (`a0b1917`). Next: pass 6 on the EXP_ELO_107 game
+  (turn-18, 7 lost), and/or the still-unimplemented retaliation/
+  exposure pricing lever, now the single clearest remaining path to
+  the units-lost <3 target.
