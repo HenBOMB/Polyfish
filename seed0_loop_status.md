@@ -198,39 +198,71 @@ EXP_ELO_091's move-gen determinism fix.
      ledger): killing a city's last besieger could deflate the same
      defend pool the same way a garrison landing used to — no real-game
      ply found yet to test it. Committed.
-- Current best game for the next analysis pass: the EXP_ELO_103
-  regenerated game (turn 23, 554 moves, score 8755, 12 lost, 13 killed,
+  4. **EXP_ELO_104** (`defend_plan` waterfall garrison-exclusion +
+     `defend_recall`'s own-tile exclusion, SHIPPED). Found by an
+     `ml-expert` pass-3 analysis of the EXP_ELO_103 game: healing a
+     threatened garrison scored -331.43 (Δφ -371.43) vs abandoning it
+     at +5.68 — bit-verified against HEAD. Root cause: EXP_ELO_103
+     excluded the garrison from RECEIVING defend_cover credit but not
+     from CONSUMING waterfall budget, so a healthier garrison (more
+     `hypo_damage`, HP-scaled) crowded out other units' credit for
+     nothing in return. Fixed by excluding the garrison from the
+     waterfall entirely. Caught a second-order bug while testing: doing
+     so also let the garrison win `defend_recall`'s "nearest unassigned
+     unit" search against its own city (distance 0), masking the real
+     recall signal — 2 unit tests failed and pinpointed this exactly;
+     fixed by excluding the city tile itself from that search. Verified:
+     t6 heal ply Δφ 0.000 exactly (no longer punished); both EXP_ELO_103
+     reference plies unaffected or improved as predicted (Summon-at-49
+     +158.670 -> +715.813). Paired gauge (n=128, seed 770425, 2 runs/arm):
+     -1.56pp average, comfortably inside the noise floor — baseline
+     reproduced 103's own gauge average almost exactly, confirming this
+     isn't 103's gain being given back. Committed.
+- Current best game for the next analysis pass: [pending regeneration
+  with EXP_ELO_104 applied — see next log entry once run]. Prior best
+  (EXP_ELO_103 game, turn 23, 554 moves, score 8755, 12 lost, 13 killed,
   **3 giants by t12 — first target hit this loop**) -- city 49 (the
   contested city from the defend-signal investigation) held the whole
   game. Still misses turn-count (<=15) and units-lost (<3) targets.
-- Next candidate fix, identified by pass-2 `ml-expert` analysis
-  (2026-08-30, not yet implemented — see EXP_ELO_102 once registered):
-  **EndTurn-revival floor is a flat constant that can't tell "one
-  trapped unit with no non-lethal option, EndTurn is free" from
-  "mediocre mid-turn ply."** `macro_exec.rs`'s `ENDTURN_REVIVE_PRICE_DEFAULT
-  = -700.0` (line ~246) only revives EndTurn when the best surviving
-  candidate scores below a flat -700 (EXP_ELO_075 found flat revival at
-  every tested strength net-negative, since it also fires on ordinary
-  mediocre plies with real opportunity cost — this is why the floor is
-  flat and conservative today). But when the ONLY legal candidates left
-  are one already-fully-acted unit's self-lethal attacks, EndTurn has
-  ZERO opportunity cost (everyone else already moved) and should always
-  win regardless of score. Confirmed at 3 real plies this game (turn 18
-  ply 162 unit 3, turn 10 ply 71 unit 8, turn 20 ply 195 unit 36) — one
-  (-699.0, a single candidate) missed the -700 floor by exactly 1.0
-  point. Proposed fix: a narrow, CONDITIONAL revival (candidate count
-  small, all remaining candidates are Attack from the same src,
-  attacker_dies=true) — structurally different from the flat floor
-  already measured net-negative, so this should be a new mechanism, not
-  a tuning of -700's value.
-  - **Also checked and REFUTED this pass**: the `defender_dies` flat
-    HP-blind pricing lead from pass 1 (`scoring.rs` ~99-106). The
-    engine's own combat model already zeroes retaliation damage whenever
-    an attack is lethal (`actions/units.rs` ~773-781), independent of
-    which unit lands the kill — confirmed across 20 same-target
-    alternate-attacker plies in this game, `dmg_to_atk=0.0` in every
-    lethal case regardless of attacker choice. This is NOT the mechanism
-    behind any of the game's unit losses; drop it from future passes.
+- Next candidate fix, identified by pass-3 `ml-expert` analysis of the
+  EXP_ELO_103 game (2026-08-30, not yet implemented — this is the
+  primary lever for the units_lost<3 target):
+  **retaliation damage and post-move exposure are priced at zero.**
+  9-10 of 12 net-seat losses in the EXP_ELO_103 game trace directly or
+  upstream to the same shape: a non-lethal chip Attack into a healthy
+  Defender wins its ply by 5-25 points over a safe Step (e.g. t15 ply
+  idx252, Attack 68->57: 45.00 vs 40.00; reproduces bit-exact under
+  HEAD), the unit eats 7-22 retaliation, ends at 1-2hp adjacent to what
+  it just chipped, and dies on the enemy's next ply — in one case
+  (id=30, t18) to the exact Defender it chipped. Root cause, all
+  code-verified: (1) `scoring.rs`'s Attack base (lines ~82-117) reads
+  `preview.damage_to_attacker` ONLY via a binary `attacker_dies` check
+  — 0 retaliation and near-lethal retaliation price identically; (2)
+  the Step branch (~551-715) has no threat/danger term of any kind —
+  a 1hp unit's step into enemy reach and its step away differ only by
+  curiosity/territory pulls; (3) the φ layer only prices exposure
+  through CITIES (`city_risk`, the defend family) — a unit in open
+  field carries zero risk potential; (4) `rank_plies` is one-ply greedy,
+  so the death (next enemy ply) is beyond every simulation's horizon —
+  no tree branch ever proposes the safe alternative. Proposed fix
+  shape (not yet designed in detail): a continuous per-unit exposure
+  potential — Φ charged per own unit as (missing HP) × (enemy lethality
+  within strike reach), from the already-frozen `threat_units` list
+  `rank_plies` builds (don't rescan per-candidate, per EXP_ELO_061).
+  Must-not-regress probes before shipping: EXP_ELO_101's capture chain
+  (an exposure charge on a wounded contested-city occupier must not
+  re-suppress it), the t11 Giant kill (Attack 41->51, defender_dies,
+  319.66) must stay above a same-tile suicide chip, and fire-rate/
+  distribution across the n=128 gauge per the EXP_ELO_075 lesson (this
+  term will fire on nearly every ply, not just the 9 flagged ones).
+  - **Also checked and REFUTED this pass**: a claimed reproducibility
+    gap in two suicide-attack candidate scores (+840.00 off from HEAD,
+    twice, both first-ply-of-turn) is a probe-side turn-start context
+    reconstruction issue, not a production/dirty-binary problem — the
+    lib rebuilds incrementally in 0.4s against this exact source,
+    ruling out a stale binary. Standing recipe fix: record the
+    generating binary's MD5 into the dump dir going forward; keep
+    trace-score forensics to mid-turn plies until this is chased down.
 
 ## Log (append one entry per iteration, newest last)
 
@@ -281,3 +313,21 @@ EXP_ELO_091's move-gen determinism fix.
   Paired gauge (n=128, seed 770425, 2 runs/arm): +12.89pp average,
   clearing the noise floor in every pairing. **SHIPPED**. This is the
   largest single behavioral/gauge improvement of the loop so far.
+- **2026-08-30, iteration 5 (pass-3 analysis + EXP_ELO_104)**:
+  `ml-expert` pass-3 analysis of the EXP_ELO_103 game found three
+  things: (1) the retaliation/exposure pricing gap above — the primary
+  remaining lever, not yet fixed; (2) a bit-verified sign inversion in
+  the just-shipped EXP_ELO_103 code (healing a threatened garrison
+  priced at -371.43); (3) a probe-side reproducibility anomaly on two
+  suicide-attack scores, checked and attributed to turn-start context
+  reconstruction, not production. Independently reproduced (2) against
+  HEAD before trusting it, then fixed it as EXP_ELO_104: excluded the
+  garrison from `defend_plan`'s waterfall entirely (not just from
+  receiving credit), which surfaced a second-order bug caught by 2
+  failing unit tests (the garrison-free `assigned` list also broke
+  `defend_recall`'s own-tile exclusion) — fixed alongside. Verified via
+  3 pre-registered falsifiers, all met. Paired gauge (2 runs/arm):
+  -1.56pp average, a clean noise-floor wash, baseline reproducing
+  103's own gauge average almost exactly. **SHIPPED**. Next: design and
+  implement the exposure-pricing fix (Finding 1), the loop's biggest
+  remaining lever for units_lost<3.

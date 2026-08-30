@@ -684,7 +684,19 @@ fn goal_potential_inner(
                     .units
                     .iter()
                     .filter(|u| {
-                        !assigned.contains(&u.coords.idx)
+                        // EXP_ELO_104: `plan.assigned` no longer contains the
+                        // garrison's own tile (`defend_plan` excludes it from
+                        // the waterfall entirely, paid instead by
+                        // `defend_garrison_hold` above) -- without also
+                        // excluding `*idx` here, a garrison sat at distance 0
+                        // from its own city always wins this search, masking
+                        // whatever real recall signal the rest of the roster
+                        // has (confirmed: made `recall_skips_attack_committed_units`
+                        // return the same value whether the real test unit was
+                        // free or attack-committed, since the garrison always
+                        // won first).
+                        u.coords.idx != *idx
+                            && !assigned.contains(&u.coords.idx)
                             && !crate::ai::combat::attack_committed(
                                 state,
                                 player,

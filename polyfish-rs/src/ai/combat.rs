@@ -891,14 +891,25 @@ fn defend_plan_impl(
     // first-excluded candidate. A unit that contributes nothing to the
     // still-open gap (because the gap is already shut, or it deals no
     // damage at all) is skipped rather than recruited at zero value.
-    let fill = |skip_garrison: bool| -> (Vec<(i32, f32, f32)>, f32) {
+    // EXP_ELO_104: always excludes the garrison's own tile from the pool it
+    // credits. `defend_garrison_hold` already pays the garrison directly for
+    // the state-fact of holding (EXP_ELO_103); leaving it IN this waterfall
+    // meant a HEALTHIER garrison (more `dmg` via `hypo_damage`, which reads
+    // current HP) ate more of the shared `need_damage` budget before other
+    // covering units got their turn, shrinking their `credit_frac` for no
+    // reason the garrison was ever paid for -- healing the garrison priced
+    // as a net loss (Δφ -371 on a real seed0 ply) purely from this crowding,
+    // with nothing on the other side of the ledger to offset it. Excluding
+    // it here is the same fix already applied to the CREDIT side in 103;
+    // this closes it on the CONTRIBUTION side too.
+    let fill = || -> (Vec<(i32, f32, f32)>, f32) {
         let mut picked = Vec::new();
         let mut got = 0.0f32;
         for &(tile, sat, dmg, _) in &cands {
             if picked.len() >= MAX_ASSIGN {
                 break;
             }
-            if skip_garrison && tile == threat.city {
+            if tile == threat.city {
                 continue;
             }
             let contribution = dmg * sat;
@@ -917,14 +928,14 @@ fn defend_plan_impl(
         }
         (picked, got)
     };
-    let (assigned, got) = fill(false);
-    let has_garrison = assigned.iter().any(|&(t, _, _)| t == threat.city);
-    // Load-bearing test: rebuild the plan without the garrison — if the
-    // rest of the roster can meet the kill damage alone, the tile is free.
-    let without_garrison = fill(true).1;
+    let (assigned, got) = fill();
+    // Load-bearing test: `got` is already the garrison-free total (the rest
+    // of the roster's own contribution) -- a garrison is load-bearing
+    // exactly when that total falls short of what's needed.
+    let has_garrison = garrison.is_some();
     let hold_margin = if has_garrison && need_damage > 0.0 {
         DEFEND_HOLD_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let m = ((need_damage - without_garrison) / need_damage).clamp(0.0, 1.0);
+        let m = ((need_damage - got) / need_damage).clamp(0.0, 1.0);
         if m > 0.0 && m < 1.0 {
             DEFEND_HOLD_PARTIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }

@@ -12120,3 +12120,125 @@ showing a consistent, noise-floor-clearing +12.89pp improvement
 together clear this for shipping. The one open item is the
 pre-registered kill-the-besieger risk above — not blocking, flagged
 for a future pass.
+
+## EXP_ELO_104 — a healed garrison could still crowd its own defend budget: `defend_plan`'s waterfall excluded the garrison from CREDIT but not from CONSUMPTION
+
+CONTEXT: an `ml-expert` pass-3 analysis of the EXP_ELO_103 game (turn
+23, 554 moves, 12 lost/13 killed, 3 giants by t12, city 49 held all
+game) flagged, among other findings, a bit-verified sign inversion in
+the just-shipped EXP_ELO_103 defend block: at turn 6 (global move idx
+77, trace line 28), the city-49 garrison at 1hp had `Recover` (heal)
+recorded at -331.429 vs `Step 49->59` (abandon) at +5.683 — healing a
+threatened, Defend-ordered garrison scored catastrophically worse than
+leaving. Independently reproduced bit-exact against HEAD (`bc8bf2b`)
+via `attack_pricing_probe3` before trusting the agent's number.
+
+ROOT CAUSE: `defend_plan`'s waterfall (`combat.rs`) excludes the
+garrison's own TILE from receiving `defend_cover` credit (the
+EXP_ELO_103 fix, paid instead by `defend_garrison_hold`), but the
+garrison was still IN `cands` and still consumed `need_damage` budget
+via `fill(false)` before other units got their turn. `hypo_damage`
+reads the unit's CURRENT health, so healing the garrison genuinely
+increases its computed `dmg` contribution -- eating more of the shared
+budget, shrinking OTHER covering units' `credit_frac`, with nothing on
+the other side of the ledger to offset it (the garrison itself was
+never paid for that consumption, since its own credit was already
+excluded). Ground truth: `defend_cover` 600->400 (-200),
+`defend_recall` 171.429->0 (-171.429), matching the recorded -371.429
+Δφ exactly. Same collapse-on-success bug class as EXP_ELO_101/103, a
+third channel of it.
+
+FIX (`combat.rs::defend_plan_impl`): the waterfall now ALWAYS excludes
+the garrison's tile (deleted the `skip_garrison` parameter -- `fill()`
+takes no argument, always skips `tile == threat.city`), closing the
+gap on the CONTRIBUTION side to match the CREDIT side. `has_garrison`
+changes from "did the garrison get waterfall credit" (a scan of
+`assigned`) to a direct `garrison.is_some()` presence check --
+consistent with EXP_ELO_103's "state-fact" doctrine and unaffected by
+whether the garrison's own `dmg` happens to be nonzero. `hold_margin`
+is unchanged in VALUE (it already used the garrison-free `fill(true)`
+leg) but now shares its `got` directly with `assigned`/`shortfall`
+instead of computing a redundant second fill -- `fill(false)` and
+`without_garrison` are deleted as dead code.
+
+SECOND-ORDER BUG found while testing this fix (caught by 2 failing
+unit tests, not anticipated up front): excluding the garrison from
+`plan.assigned` also removed it from the exclusion set
+`defend_recall`'s "find the nearest unassigned, non-attack-committed
+unit" search uses (`goal_potential.rs`) -- a garrison sitting on its
+own city (distance 0) then always won that search regardless of what
+any OTHER unit was doing, making `recall_skips_attack_committed_units`
+return the identical value whether the real test unit was free or
+committed (both "won" against the always-present distance-0 garrison
+sitting in front of them). Fixed by explicitly excluding `u.coords.idx
+== *idx` (the city tile) from the recall candidate filter, independent
+of `plan.assigned`'s contents -- the garrison is "spoken for" by
+`defend_garrison_hold` and should never be its own recall target.
+
+VERIFICATION:
+- `cargo test --lib`: 334/334 passed, including both tests that failed
+  before the recall fix (`defend_order_prices_hold_cover_and_leash`,
+  `recall_skips_attack_committed_units`).
+- Ground truth, the flagged t6 ply: Recover's Δφ on defend terms goes
+  from -371.429 to **0.000** exactly (total 40.000, base score
+  unchanged) -- healing is no longer punished at all. Per the pre-
+  registered falsifier (below), this was NOT required to make healing
+  WIN the ply, and in fact it does (40.000 vs Step-out's 5.683) --
+  a bonus, not the bar.
+- Re-probed the two EXP_ELO_103 reference plies (turn 8, idx110,
+  trace-line 50) to confirm no regression: `Step 61->49` total
+  unchanged at -95.413 (predicted: cover delta -600 either way,
+  confirmed). `Summon-at-49` improves from +158.670 to **+715.813**
+  (predicted ~+600; `defend_cover` no longer appears as a penalty term
+  at all in the breakdown, since the summoned unit no longer crowds
+  its own budget).
+
+PRE-REGISTERED FALSIFIERS (before the gauge, per this loop's own
+operating rule and the advisor's explicit instruction that this is a
+term-level fix, not a ply-winner-level one):
+1. The t6 heal ply's defend-term Δφ must be ~0, not necessarily
+   positive or ply-winning -- **met** (see above).
+2. The two EXP_ELO_103 reference plies must not regress -- **met**
+   (Step 61->49 unchanged; Summon-at-49 improves).
+3. **The EXP_ELO_103 gauge's shipped +12.89pp CONTAINS this inversion
+   uncorrected.** This fix must be gauged SEPARATELY against the
+   EXP_ELO_103 commit (`bc8bf2b`), not folded into a re-read of 103's
+   own numbers -- if 104's gauge gives back some of 103's gain, that
+   is attribution information (the inversion was costing real win
+   rate) and must be reported as such, not rationalized away as noise.
+
+PAIRED GAUGE (n=128, seed 770425 harness, Imperius mirror,
+worktree-isolated at commit `bc8bf2b` (EXP_ELO_103 shipped) for both
+arms, model.safetensors MD5-verified identical, binaries MD5-confirmed
+distinct): two runs per arm.
+
+| | baseline | treatment | Δ |
+|---|---|---|---|
+| run 1 | 0.492188 (63/128) | 0.492188 (63/128) | 0.00pp |
+| run 2 | 0.484375 (62/128) | 0.453125 (58/128) | -3.13pp |
+| avg | 0.488281 | 0.472656 | **-1.56pp** |
+
+Per the pre-registered falsifier #3: this is checked honestly, not
+rationalized away. Baseline's average (0.488281) reproduces
+EXP_ELO_103's own gauge average (0.488281) almost exactly — confirms
+this is measuring the same thing 103's gauge did, not a fresh noise
+draw. Treatment's average sits 1.56pp below that, with the worst single
+pairing at -3.91pp -- comfortably inside the ~7.8pp noise floor this
+harness established, and NOT the shape of 103's gain being given back
+(if it were, baseline itself would have to be reading LOWER than its
+own historical average, which it isn't). `EXP_ELO_096` diagnostic
+counters shifted exactly as the mechanism predicts: `defend_cover`'s
+total assignment denominator roughly halved in treatment (2.4M vs
+baseline's 5.3-5.9M) since a garrison no longer ever occupies a fill
+slot, while `defend_hold`'s total evaluation count rose (809926/797643
+vs 679129/715941) since `has_garrison` is now a more permissive direct
+presence check — both consistent with the fix as designed, not a
+distributional anomaly.
+
+Disposition: **SHIPPED**. Ground-truth ply verification (3 falsifiers
+all met: t6 heal Δφ -371.429->0.000 exactly, the two EXP_ELO_103
+reference plies unaffected or improved as predicted), `cargo test --lib`
+(334/334, including the 2 tests that caught the second-order recall
+bug during development), and a paired gauge with 2 reruns per arm
+showing a clean, noise-floor wash together clear this for shipping —
+a real, verified pricing bug closed with no measurable win-rate cost.
