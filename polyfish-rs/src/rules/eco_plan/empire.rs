@@ -198,30 +198,39 @@ fn extend_for_border_growth(
     // contested tile is worth (one Mine can finish a hub's partner set and
     // make a second Mine redundant), so resolution order now affects the
     // outcome and a HashMap's iteration order is not stable across runs.
+    // Two passes, same shape as the synthetic radius model above: every
+    // sole-claimant tile is committed first, so a genuinely contested tile
+    // is judged against each city's territory AS IT REALLY STANDS -- not
+    // against a partial one still missing uncontested tiles that happened
+    // to sort after it. Contested tiles resolve in idx order for the same
+    // reason `allocate_value`'s own `open` loop does: one tile's winner can
+    // change what the next contested tile is worth.
     let mut sorted: Vec<(i32, Vec<usize>)> = candidates.into_iter().collect();
     sorted.sort_by_key(|(idx, _)| *idx);
-
+    let mut contested: Vec<(i32, Vec<usize>)> = Vec::new();
     for (idx, who) in sorted {
-        let winner = if who.len() == 1 {
-            who[0]
+        if who.len() == 1 {
+            real[who[0]].push(idx);
         } else {
-            let mut ranked: Vec<(i32, i32, i32, usize)> = who
-                .iter()
-                .map(|&ci| {
-                    let (dspt, dg) =
-                        marginal_value(state, cities[ci], &real[ci], scs[ci], monuments, idx);
-                    (
-                        -dspt,
-                        -dg,
-                        get_chebyshev_distance(idx, cities[ci], state.settings.size),
-                        ci,
-                    )
-                })
-                .collect();
-            ranked.sort();
-            ranked[0].3
-        };
-        real[winner].push(idx);
+            contested.push((idx, who));
+        }
+    }
+    for (idx, who) in contested {
+        let mut ranked: Vec<(i32, i32, i32, usize)> = who
+            .iter()
+            .map(|&ci| {
+                let (dspt, dg) =
+                    marginal_value(state, cities[ci], &real[ci], scs[ci], monuments, idx);
+                (
+                    -dspt,
+                    -dg,
+                    get_chebyshev_distance(idx, cities[ci], state.settings.size),
+                    ci,
+                )
+            })
+            .collect();
+        ranked.sort();
+        real[ranked[0].3].push(idx);
     }
     for v in real.iter_mut() {
         v.sort();
