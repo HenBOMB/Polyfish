@@ -11809,7 +11809,15 @@ deterministic (EXP_ELO_091's fix holding). Treatment **0.3828125**
 harness's established ~7.8pp noise floor at n=128, so not statistically
 distinguishable from noise, but importantly not a regression either.
 Reproducibility check: reran the treatment arm alone; second reading
-**[FILL IN]** (run2, see `gauge_101/results/treatment_run2.log`).
+**0.3671875** (47/128, delta vs baseline +1.56pp) — NOT bit-identical to
+run1 (0.3828125/49, +3.13pp), a ~1.6pp run-to-run gap on an otherwise
+identical config. Baseline reproduced exactly (matched EXP_ELO_100's
+historical reading to 7 decimal places), so this specific non-
+determinism is either new or specific to something the `net-asym` leaf
+touches (likely network-inference-adjacent, not the deterministic
+move-gen class EXP_ELO_091 fixed) — worth a dedicated investigation, but
+both treatment readings are positive and both are well inside the noise
+floor, so it doesn't change the ship decision here.
 
 Disposition: **SHIPPED**. Both verification legs hold: (1) ground-truth
 bit-for-bit ply scoring confirms the exact diagnosed mechanism is fixed
