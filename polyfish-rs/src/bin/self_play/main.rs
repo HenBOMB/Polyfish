@@ -7,12 +7,11 @@ use polyfish::ai::brain::{Brain, SearchBackend, SearchBackendArg};
 use polyfish::ai::macro_agent::{MacroLeaf, MacroParams};
 use polyfish::ai::eval_backend::{self, EvalBackendKind, PlayerBackend};
 use polyfish::ai::eval_server::{EvalServerConfig, EvalServerStats, Evaluator};
-use polyfish::ai::features::{self, GameFeatures};
-use polyfish::ai::mapper::DecomposedMapper;
+use polyfish::ai::features;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::ai::reward;
 use polyfish::game::Game;
-use polyfish::replayer::{ModReplay, ReplayPlayer, ReplayTurn};
+use polyfish::replayer::ModReplay;
 use polyfish::states::{GameState, PlayerId};
 use polyfish::types::MapSize;
 use serde_json::json;
@@ -26,6 +25,8 @@ use strum::IntoEnumIterator;
 
 mod crutches;
 use crutches::{ANCHOR_FRAC_DECAY, HEURISTIC_PRIOR_DECAY, HEURISTIC_PRIOR_W0, decay_crutch};
+mod result;
+use result::{DecomposedPolicyData, GameResult, HistoryStep, decompose_visits, group_recap};
 mod stats;
 mod tempo;
 use stats::{finish_milestones, is_net_seat, record_spt_at_turn_start, t2c_turn,
@@ -652,50 +653,6 @@ fn dump_macro_policy_row(
 }
 
 
-/// Decomposed policy probability distributions for a single step
-struct DecomposedPolicyData {
-    action_type: Vec<f32>,    // [11]
-    source_spatial: Vec<f32>, // [H * W]
-    target_spatial: Vec<f32>, // [H * W]
-    move_option: Vec<f32>,    // [192]
-}
-
-/// One recorded decision point. `my_score`/`opp_score`/`turn` are snapshotted
-/// BEFORE this step's move executes. `root_value` is that same pre-move
-/// state's post-search root value (see `GumbelMctsAgent::last_root_value`) —
-/// the TD bootstrap target used by whichever *earlier* step's label lands on
-/// this step as its "next decision" horizon.
-struct HistoryStep {
-    features: GameFeatures,
-    policy: DecomposedPolicyData,
-    player_id: PlayerId,
-    my_score: f32,
-    opp_score: f32,
-    turn: i32,
-    root_value: Option<f32>,
-    /// Raw NN root value (tanh-bounded, pre-search) — value-head calibration only.
-    root_own_value: Option<f32>,
-    /// Ground-truth (unfogged) non-invisible enemy-unit occupancy at decision
-    /// time, POV-relative — the aux_fog_units target.
-    enemy_units: Vec<f32>,
-    my_spt: i32,
-    opp_spt: i32,
-    /// `(city tile, production)` for every city the POV holds at decision time
-    /// — the raw material for the aux_city_spt target.
-    city_spt: Vec<(i32, i32)>,
-    /// Pursuit proximity to the nearest capturable village at decision time,
-    /// POV-relative, normalized to [0,1] — the aux_pursuit target.
-    pursuit: f32,
-    /// EXP_ELO_061 (Stage 3b): the macro root's own candidate ballot and
-    /// post-search visit counts, captured once per (turn, pov) via
-    /// `macro_ballot_for_history_step` — `None` on every ply after the
-    /// first within a turn (the ballot is stable all turn; capturing it on
-    /// every ply would just duplicate the same target across each ply's
-    /// distinct feature vector), or when this seat isn't running
-    /// macro-mcts. Raw material for the macro_stance/macro_order targets;
-    /// marginalized in post-game processing, not here.
-    macro_ballot: Option<(Vec<polyfish::ai::oracle_macro::MacroGoal>, Vec<f32>)>,
-}
 
 /// The subset of `HistoryStep` the TD(lambda) label computation needs —
 /// split out so `td_lambda_labels` is a pure, directly testable function
@@ -1032,144 +989,7 @@ fn macro_ballot_for_history_step(
     Some(ballot)
 }
 
-/// Result from a single game - contains all data needed for training
-struct GameResult {
-    history: Vec<HistoryStep>,
-    scores: HashMap<i32, i32>,
-    /// Per-player `score + shape_w_label·Φ` at game end — the terminal
-    /// snapshot for TD labels, consistent with the shaped step snapshots.
-    /// Equals raw score when shaping is off.
-    final_potentials: HashMap<i32, f32>,
-    final_cities: HashMap<i32, i32>,
-    total_cities: i32,
-    moves: usize,
-    /// Net-seat plies only (excludes Greedy/opponent seats) — the seat-clean
-    /// counterpart of `moves` for the avg_moves behavior chart.
-    net_moves: usize,
-    winner_score: i32,
-    /// Adjudicated winner: sole survivor, else higher final score at timeout.
-    winner_id: i32,
-    recap: ModReplay,
-    cap_ruins: usize,
-    cap_villages: usize,
-    cap_cities: usize,
-    cap_capitals: usize,
-    action_counts: HashMap<polyfish::types::MoveType, usize>,
-    /// Move-type counts keyed by turn number, for the "move mix by turn"
-    /// training-progress chart (see parse_metrics.py / dashboard).
-    moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>>,
-    /// NET-seat tile-exploration and territory-ownership counts at game end
-    /// (anchor/opponent seats excluded since Jul 2026; in mirror self-play
-    /// this still sums both seats).
-    revealed_tiles: i32,
-    captured_tiles: i32,
-    /// Realized level of the adjacency hubs a net seat BUILT, as
-    /// `(hubs, partner_sum, hubs_at_most_1, hubs_lost)` per structure type.
-    /// `max_affordable_pop` prices a hub at its BEST placement, so this is the
-    /// planned-vs-delivered pop gap; a hub at 1 partner costs 5★ for 1 pop,
-    /// worse than the LumberHut feeding it. Attribution is by builder, not by
-    /// end-of-game tile owner — the latter credits captured anchor hubs.
-    hub_levels: HashMap<polyfish::types::StructureType, (u32, i64, u32, u32)>,
-    /// First hub of each type the net built, as
-    /// `(partners_chosen, partners_best, sites_that_beat_it, sites_available,
-    /// terrain_ceiling_chosen, terrain_ceiling_best)`. The first pair is scored
-    /// on hubs actually built (so it inherits the net's hut policy); the ceiling
-    /// pair is terrain+resource only, i.e. the site's potential.
-    first_hub_rank: HashMap<polyfish::types::StructureType, (i64, i64, u32, u32, i64, i64)>,
-    /// Turn by which 50%/80%/100% of the map's initial open villages (and
-    /// ruins) had been captured by a NET-controlled seat — how *directly*
-    /// the net seeks them out. Censored at max_turns when a game never gets
-    /// there (incl. when the anchor takes them first — losing the race
-    /// reads as censored, not captured).
-    villages_t2c_p50: f32,
-    villages_t2c_p80: f32,
-    villages_t2c_all: f32,
-    /// First-village stats, per NET SEAT (2 in a mirror game, 1 in an
-    /// anchor/league game) so the aggregator can divide by seats rather than
-    /// games — matching the t2c_Nth_rate family. `censored_sum` charges
-    /// max_turns to a seat that never captured; `turn_sum` covers only the
-    /// seats that did.
-    villages_first_seats: u32,
-    villages_first_captured: u32,
-    villages_first_turn_sum: f64,
-    villages_first_censored_sum: f64,
-    ruins_t2c_p50: f32,
-    ruins_t2c_p80: f32,
-    ruins_t2c_all: f32,
-    /// Mean tribe SPT sampled at the start of game turns 0, 5, 10, … (player 1
-    /// to act, before any moves on that turn).
-    spt_at_turn: HashMap<i32, f32>,
-    /// (mean unit worth, mean army stars per city) over net seats, at the same
-    /// milestones as `spt_at_turn`. Absolute ratios with no opponent term, so
-    /// unlike contested counts they can move in mirror self-play; measured
-    /// cv ~1.5%/iteration against a Greedy reference of ~3.7 / ~10.0 at t15.
-    army_ratios_at_turn: HashMap<i32, (f32, f32)>,
-    /// End-of-game ground truth for the aux heads: raw per-tile owner ids,
-    /// per-player SPT, and per-player researched-tech multi-hot.
-    final_owner: Vec<i32>,
-    final_spt: HashMap<PlayerId, i32>,
-    final_tech: HashMap<PlayerId, Vec<f32>>,
-    /// Per-player tempo curves + unit-accounting counters.
-    tempo: HashMap<PlayerId, TempoTrack>,
-    /// Seat roles (index = player_id - 1): "model", "model_vs_anchor",
-    /// "anchor", or "opponent" — lets the aggregator split tempo curves into
-    /// intrinsic (mirror), contested (vs anchor), and reference populations.
-    roles: [&'static str; 2],
-}
 
-
-/// Aggregate a move-visit distribution into the four decomposed policy-target
-/// arrays (action / source-spatial / target-spatial / option), each normalized
-/// to sum 1. Shared by the MCTS visit target and the EXP_ELO_020 DAgger
-/// Greedy-teacher target so both are built identically before blending.
-fn decompose_visits(
-    move_visits: &[polyfish::ai::mcts_types::MoveVisit],
-    map_size: usize,
-) -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>) {
-    let spatial = features::MAP_SIZE * features::MAP_SIZE;
-    let mut p_action = vec![0.0; 11];
-    let mut p_source = vec![0.0; spatial];
-    let mut p_target = vec![0.0; spatial];
-    let mut p_option = vec![0.0; 192];
-    let mut total = 0.0;
-    for mv in move_visits {
-        total += mv.visits;
-        let t = DecomposedMapper::move_visit_to_targets(mv, map_size);
-        if t.action_type < p_action.len() {
-            p_action[t.action_type] += mv.visits;
-        }
-        if let Some(i) = t.source_spatial {
-            if i < p_source.len() {
-                p_source[i] += mv.visits;
-            }
-        }
-        if let Some(i) = t.target_spatial {
-            if i < p_target.len() {
-                p_target[i] += mv.visits;
-            }
-        }
-        if let Some(i) = t.target_type {
-            if i < p_option.len() {
-                p_option[i] += mv.visits;
-            }
-        }
-    }
-    if total > 0.0 {
-        for x in &mut p_action {
-            *x /= total;
-        }
-        for x in &mut p_source {
-            *x /= total;
-        }
-        for x in &mut p_target {
-            *x /= total;
-        }
-        for x in &mut p_option {
-            *x /= total;
-        }
-    }
-    (p_action, p_source, p_target, p_option)
-}
 
 
 
@@ -2786,26 +2606,6 @@ fn play_single_game(
     })
 }
 
-fn group_recap(flat: Vec<(i32, i32, serde_json::Value)>) -> Vec<ReplayTurn> {
-    let mut turns: Vec<ReplayTurn> = Vec::new();
-    for (turn_num, player_id, cmd) in flat {
-        if turns.is_empty() || turns.last().unwrap().turn != turn_num {
-            turns.push(ReplayTurn {
-                turn: turn_num,
-                players: Vec::new(),
-            });
-        }
-        let turn = turns.last_mut().unwrap();
-        if turn.players.is_empty() || turn.players.last().unwrap().player_id != player_id {
-            turn.players.push(ReplayPlayer {
-                player_id,
-                commands: Vec::new(),
-            });
-        }
-        turn.players.last_mut().unwrap().commands.push(cmd);
-    }
-    turns
-}
 
 /// Tribe name (case-insensitive) to `TribeType`. Shared by CLI
 /// --tribe1/--tribe2 parsing and --seed-file per-entry tribe pins. Unknown
