@@ -11430,3 +11430,93 @@ budget-dependent, not purely geometric, so a real fix needs to reason
 about cost-efficiency across the whole candidate set, not just
 partnership) is worth preserving for whoever picks this up next; the
 specific implementation attempted here is not.
+
+## EXP_ELO_099 — `eco_plan`'s forge-site level 3 at tile 61 was already correctly computed; the bug was in which VIEW got read, not in the allocator. Shipped fix reverted; net code change is zero.
+
+CONTEXT: after EXP_ELO_098 was reverted, Verdi pushed back on `eco_plan`
+itself: "if eco_plan doesnt recognize the optimal forge spot at tile 61,
+we need to fix that." Diagnosed (via `eco_plan --explain` on the real
+seed0 state) that city 49's forge at tile 61 topped out at 2 partners
+(mines at 50 and, cross-city, 51) when it should reach 3 (the third from
+tile 62, once claimed). Traced this to `empire::extend_for_border_growth`
+resolving a tile contested between two of our own growing cities by pure
+nearest-city + array-index tiebreak, with zero value awareness — and
+SHIPPED a fix that resolved contested tiles by marginal SPT/giants gain
+instead, reassigning tile 62 from city 84 to city 49's own territory.
+Verified against `--explain`/`--verify` on the real state; both showed
+`61@3` as expected. Reported this as done.
+
+**Verdi corrected it, and the correction was right on every count:**
+
+1. **The `--explain`-based diagnosis of city 41's forge was also wrong**,
+   independent of the allocator question. I'd reported tile 39 as "not
+   adjacent to 40" — an arithmetic error (idx 39 = row 3 col 6, idx 40 =
+   row 3 col 7, chebyshev 1 — adjacent). The real final state
+   (`idx506`, tile 40) confirms it: `structure {type: Forge, level: 6}`,
+   fed by 4 own partners in city 41's territory (29/30/51/52) PLUS mines
+   at 39 and 50 — both standing, both owned by player 1, both ruled by
+   city 49 — credited across city boundaries. Verdi's exact framing
+   ("the mine at tile 39 and tile 50 would feed that forge, though those
+   two mines belong to city at tile 49") matches the real state exactly.
+
+2. **The real BorderGrowth mechanic is not a value judgment at all.**
+   `actions/city.rs::claim_territory`, invoked per-city from
+   `CityRewardType::BorderGrowth` in `moves/reward.rs`, claims every
+   currently-UNOWNED tile in that city's growing square the instant that
+   city's own BorderGrowth reward fires — first city to grow into a
+   contested tile takes it, full stop. There is no "which city benefits
+   more" step anywhere in the real engine. `extend_for_border_growth` is
+   therefore always a SEQUENCING GUESS about which city gets there first,
+   never a value optimization — and the real game's actual outcome
+   settles which guess was right: `idx506` shows tile 62 ruled by the
+   CAPITAL (84), with a standing Mine founded turn 10. The ORIGINAL
+   nearest-city + ci-tiebreak code predicted exactly this (both cities
+   are chebyshev-2 from tile 62; ci order in `cities` breaks the tie
+   toward the capital, which is first in that list) — it was right. My
+   marginal-value replacement predicted the opposite and was wrong.
+
+3. **The joint frontier (`enumerate_empire`) already had the right
+   answer, using the right mechanism, without any allocator change.**
+   `enumerate_empire` pools every city's PLANNED (not yet built) partner-
+   type buys into one player-wide `partners_by_type` set and scores every
+   city's hub candidates against it — so city 84's own "+border" plan
+   (`--explain 0`: `Mine x3 [62, 106, 107]`, tile 62 correctly IN the
+   capital's own territory) already credits city 49's forge at 61 with a
+   partner there, purely through pooling, with tile 62's ownership never
+   moved. Confirmed directly: `eco_plan --state <idx94> ` (default report,
+   no flags) prints a "MAX-SPT BALANCED" joint plan with `hubs @ level:
+   73@3 61@3 40@6` — city 49's forge at 61 is level 3, city 41's forge at
+   40 is level 6 (both match or exceed what Verdi described), computed
+   entirely from the ORIGINAL, unmodified allocator.
+
+**What was actually wrong, then**: not `eco_plan`'s computation, but the
+VIEW I was reading. `build_out`/`site_value`/`plan_city` — the machinery
+behind `--explain`, `--optimal`, the per-city summary table, AND the one
+hot-path consumer `eco_plan_best_city` — always call `city_build_on` with
+`empire_partners: None`, so they can only credit a cross-city partner
+that is ALREADY STANDING (the `owner == pov` fallback in
+`city_build_on`'s partner filter), never one that's merely PLANNED in a
+neighbouring city's own scenario. `enumerate_empire`'s pooled view sees
+the plan; the per-city view only sees what's already built. Reading only
+the per-city view made a correctly-computed system look broken.
+
+Disposition: **REVERTED** (`git revert c5a14f0 1e73c6c`, clean). Net code
+change from this experiment: zero — `empire.rs` is back to its original
+form, confirmed via `git log -- src/rules/eco_plan/empire.rs` showing no
+diff since before this experiment and full CI green (316 lib tests,
+matching the pre-098 baseline). The two new diagnostic examples
+(`hub_site_probe2.rs`, `dump_mine_reward_moves.rs`) are independent of
+the reverted mechanism and were kept — they're what surfaced tile 62's
+real ownership and are worth having for the next investigation.
+
+**One genuine, narrow gap remains, left unfixed and flagged rather than
+acted on unrequested**: the per-city view (`--explain`/`--optimal`/
+`plan_city`) cannot model a neighbour's PLANNED future mine, only an
+already-standing one — a real limitation of that view, but a display-only
+one, since `eco_plan_best_city` (the sole hot-path consumer) always
+requests a `!border_growth` scenario, where this gap cannot arise at all
+(no not-yet-owned tiles are ever in play). Threading `enumerate_empire`'s
+pooled `partners_by_type` into `build_out`/`site_value`/`plan_city` would
+close it, but that's the third code change attempted in this exact area
+this week (098 and this one both reverted after real measurement) — not
+worth a third speculative attempt without Verdi weighing in first.
