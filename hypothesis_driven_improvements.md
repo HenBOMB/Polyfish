@@ -11520,3 +11520,81 @@ pooled `partners_by_type` into `build_out`/`site_value`/`plan_city` would
 close it, but that's the third code change attempted in this exact area
 this week (098 and this one both reverted after real measurement) — not
 worth a third speculative attempt without Verdi weighing in first.
+
+## EXP_ELO_100 (PRE-REGISTERED, design in progress — no code shipped) — commit real building to a computed plan, not just compute the plan correctly
+
+CONTEXT: after EXP_ELO_099's revert, Verdi reframed the ask: the plan
+should be a VISION the actual game commits to and builds toward over
+subsequent turns ("momentum... makes more sense to do the rest of the
+plan from a cost->result POV"), and asked to verify eco_plan is computing
+the right plan in-game and that real resource choices stay aligned with
+it. This is a different, bigger ask than 098/099: those were about
+`eco_plan`'s own correctness as a diagnostic; this is about connecting
+it to real move scoring for the first time.
+
+HYPOTHESIS: `scoring.rs`'s Mine-lane heuristic is purely reactive
+(rewards local mine clustering density around any empty tile, with zero
+connection to any computed plan — this is literally the "gravity" problem
+Verdi originally flagged). If real Mine/Forge choices instead scored
+against a per-turn-cached JOINT plan (`enumerate_empire`, not the
+narrower per-city `build_out` — 099 proved only the joint view sees
+cross-city credit correctly), building would stop wasting stars on tiles
+that don't feed the empire's actual best hubs, and turn-to-turn choices
+would stay consistent instead of flip-flopping.
+
+VALIDATION SO FAR (research only, no scoring.rs change made):
+- `enumerate_empire` is cheap enough to cache once per real turn: <1ms
+  for "natural" scenarios, ~3-4ms for "+border" on a 3-city Tiny-map real
+  state. Catastrophic if called per candidate move (rank_plies scores
+  ~38 candidates x 30+ calls per decision); fine once per turn, mirroring
+  the existing `plan_key`-gated per-turn cache `MacroMctsAgent::select_move`
+  already uses for macro-goal recompute.
+- **The turn-4 trap, confirmed real**: a plan computed over only the
+  CURRENTLY HELD cities (84, 49) at the exact turn-4 decision still
+  endorses mine@37 — Verdi's named bad move — because city 41 (about to
+  be captured) isn't in the picture yet, so the tile-62-style cross-city
+  credit that makes 50/39 the right picks doesn't exist yet either. The
+  macro-goal layer already commits to this capture in advance
+  (`game0.jsonl`: `orders=[["Expand",41],["Expand",49]]` at turns 2-3,
+  before the real capture) — a real plan needs to plan around PROSPECTIVE
+  cities (committed Expand targets), not just held ones.
+- **Convergence check, partially confirmed**: feeding city 41 into the
+  joint frontier as a prospective claimant (radius-2 speculative
+  territory) at the real turn-4 state does make tile 50 partner a
+  committed hub (61) while 37/38/39 partner none of the top plan's three
+  hubs — the core mechanism works directionally.
+- **Real wrinkle found, not yet solved**: naively unioning "real cities'
+  own +border territory" (computed as if only the real cities existed)
+  with "a prospective city's own radius-2 ring" double-claims contested
+  ground — city 49's solo +border allocation grabs tile 40 (and 51/52/53)
+  for itself simply because no OTHER real city exists yet to contest it
+  at that snapshot, starving village 41's prospective territory of the
+  exact tiles (40, 51) that make its real eventual forge (level 6, tile
+  40) work. `engine_territory`/`allocate_value`'s all-or-nothing real-vs-
+  synthetic branching does not currently support a MIX of real and
+  prospective claimants resolved jointly — this needs an actual code
+  change (a hybrid contested-tile pass covering real + prospective
+  cities together), not just glue code around the existing functions.
+
+NOT YET DONE, in order: (1) fix the hybrid real+prospective territory
+allocation properly; (2) re-run the convergence check and confirm it
+reproduces "50 then 39, forge@61" using the corrected territory, not
+today's confounded one; (3) design the per-turn plan cache and its
+invalidation/hysteresis rule (recompute on `plan_key`-style turn
+boundary, keep the previous plan unless a new one clearly beats it,
+invalidate hard on city gained/lost); (4) replace (not stack on top of)
+`scoring.rs`'s existing Mine clustering heuristic with plan-membership +
+partner-of-committed-hub scoring, Mine lane only this round; (5) verify
+against the real seed0 trace; (6) paired gauge at n=128, both arms
+reproduced, before shipping — the gauge is the ship gate, and 098's
+lesson stands: "matches Verdi's stated vision" and "wins more" are not
+guaranteed to be the same finding, and if they diverge that's Verdi's
+call, not mine.
+
+Disposition: **PAUSED for a design check-in**, not shipped, not
+abandoned. This is the third attempt at connecting `eco_plan` to real
+decisions in one week (098 and 099 both reverted); the remaining work is
+a genuine multi-hour architecture change (the hybrid allocator) with a
+real, not-yet-fully-specified invalidation/hysteresis design — worth
+confirming direction with Verdi before spending that time, rather than
+risking a fourth revert.
