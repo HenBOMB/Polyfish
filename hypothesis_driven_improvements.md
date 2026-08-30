@@ -11291,3 +11291,34 @@ run next, before considering this shipped. This term pays standing Φ every
 ply for any city holding Explorer (not just at the pick), so a base-size
 cut this large could shift behavior well past the reward-pick moment
 itself; the gauge is the real check, not optional given that.
+
+**PAIRED GAUGE RESULT** (n=128, `--actors 14`, worktree-isolated single-commit
+diff `fcfd7d2` -> `c0eb846`, identical `model.safetensors` copied into both):
+
+| | prefix (`fcfd7d2`, EXP_ELO_096) | fixed (`c0eb846`, EXP_ELO_097) |
+|---|---|---|
+| anchor_net_wr | 0.4063 (52/128) | 0.3516 (45/128) |
+| avg_moves | 249.10 | 228.64 |
+| avg_score | 4898.95 | 4483.91 |
+
+**Both arms reproduced bit-for-bit across two independent runs** (fixed
+arm: identical to full float precision on both runs; prefix arm is
+`fcfd7d2` itself, already validated 2/2-reproducible in EXP_ELO_096's own
+gauge) — this **-5.47pp** swing is real and reproducible, not noise.
+
+**Disposition: NOT shipped pending Verdi's call.** The behavioral fix is
+verified correct against every falsifier registered above (crisp probe,
+fire-rate, unit tests) — the model now picks Workshop exactly where
+Verdi's stated rule says it should. But it costs real win rate against
+the heuristic anchor in this specific paired-seed/tribe recipe. Leading
+hypothesis: the explorer term pays STANDING Φ every ply for any city that
+holds Explorer (not just at the pick), so cutting the base 700->80 doesn't
+just change the one-time pick — it reduces the ongoing incentive for
+exploration-adjacent behavior across the rest of the game, and less
+exploration (fewer villages/ruins found) could plausibly cost enough
+economy/army by midgame to explain a win-rate hit against an anchor that
+doesn't share that weakness. Unconfirmed — would need a village/ruin-
+capture-rate comparison between the two arms to test directly, matching
+this project's own "evaluate full behavior, not just the flagged
+decision" discipline. Registered as the open next step rather than
+guessed at.
