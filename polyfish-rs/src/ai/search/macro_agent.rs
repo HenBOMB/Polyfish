@@ -177,8 +177,16 @@ impl MacroScriptAgent {
         // No UnitGoalStore: MacroScriptAgent is a fixed comparison arm
         // (arena constructs it per match) -- pricing must stay byte-
         // identical so past-vs-future measurements don't silently move.
-        let ranked =
-            rank_view(&mut view, pov, &goal, &mut self.lane_state, &mut self.counters, self.lambda, None);
+        let ranked = rank_view(
+            &mut view,
+            pov,
+            &goal,
+            &mut self.lane_state,
+            &mut self.counters,
+            self.lambda,
+            None,
+            None,
+        );
         let m = first_true_legal(game, ranked);
         self.counters.count(m.as_ref());
         Some(m)
@@ -196,6 +204,12 @@ pub(crate) fn rank_view(
     counters: &mut TurnCounters,
     lambda: f32,
     unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
+    // Read-only and already up to date: the owning agent updates its own
+    // `EcoPlanCommit` once per real turn (mirroring `commit_macro_goal`'s
+    // own call, BEFORE any ply ranking happens, real or simulated-rollout),
+    // so this can be shared freely into probe/lookahead rollouts too — same
+    // treatment `unit_goals` already gets in `micro_probe`'s walk.
+    eco_plan: Option<&crate::ai::eco_plan_commit::EcoPlanCommit>,
 ) -> Vec<(f32, Box<dyn Move>)> {
     // Per-ply: observe only. The LANE is a turn-level identity chosen by
     // `select_lane` at the turn boundary — re-selecting it 20x a turn
@@ -210,7 +224,7 @@ pub(crate) fn rank_view(
         Some(lane_state),
     );
     let gate = tech_discipline_active(&view.state, pov, goal);
-    macro_exec::rank_plies(view, pov, goal, &aux, gate, lambda, unit_goals)
+    macro_exec::rank_plies(view, pov, goal, &aux, gate, lambda, unit_goals, eco_plan)
 }
 
 /// Candidate directive set: the committed script base first, then stance
@@ -489,6 +503,7 @@ impl<'a> MacroLookaheadAgent<'a> {
             &mut self.lane_state,
             &mut self.counters,
             self.params.lambda,
+            None,
             None,
         );
         let m = first_true_legal(game, ranked);

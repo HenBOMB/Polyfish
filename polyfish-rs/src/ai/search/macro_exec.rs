@@ -272,6 +272,7 @@ pub fn rank_plies(
     star_gate: bool,
     lambda: f32,
     unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
+    eco_plan: Option<&crate::ai::eco_plan_commit::EcoPlanCommit>,
 ) -> Vec<(f32, Box<dyn Move>)> {
     // Pre-increment value doubles as a unique per-call ID for the dphi
     // probe below — two rows sharing a call_id came from the same ply
@@ -333,7 +334,7 @@ pub fn rank_plies(
     let mut scored: Vec<(f32, Box<dyn Move>)> = moves
         .into_iter()
         .map(|m| {
-            let mut s = scoring::score_move_with_unit_goals(game, m.as_ref(), unit_goals);
+            let mut s = scoring::score_move_with_unit_goals(game, m.as_ref(), unit_goals, eco_plan);
             if lambda != 0.0 && m.move_type() != MoveType::EndTurn {
                 if let Some(undo) = game.simulate_move(m.as_ref()) {
                     let phi_post = reward::goal_potential_with_belief(
@@ -482,7 +483,7 @@ pub fn execute_turn_recorded(
         // Rollout branches never see the real trajectory's UnitGoalStore
         // (Fork 2 of the per-unit-goal design: real-trajectory-only for
         // v1) -- this call stays byte-identical to pre-store behavior.
-        let mut ranked = rank_plies(game, player, goal, &aux, gate, lambda, None);
+        let mut ranked = rank_plies(game, player, goal, &aux, gate, lambda, None, None);
         if ranked.is_empty() {
             break;
         }
@@ -493,7 +494,7 @@ pub fn execute_turn_recorded(
         if let Some(r) = rec.as_deref_mut() {
             let key = best.serialize().to_string();
             // Same gate, no directive PULL: isolates the lambda*dphi term.
-            let no_phi = rank_plies(game, player, goal, &aux, gate, 0.0, None);
+            let no_phi = rank_plies(game, player, goal, &aux, gate, 0.0, None, None);
             // No directive at all: gate open, default goal — the whole Tier-2
             // channel removed, both filter and pull.
             let bare = MacroGoal::default();
@@ -505,7 +506,7 @@ pub fn execute_turn_recorded(
                 counters.tier3_bought,
                 Some(lane_state),
             );
-            let no_goal = rank_plies(game, player, &bare, &bare_aux, false, 0.0, None);
+            let no_goal = rank_plies(game, player, &bare, &bare_aux, false, 0.0, None, None);
             let top = |v: &Vec<(f32, Box<dyn Move>)>| {
                 v.first().map(|(_, m)| m.serialize().to_string()).unwrap_or_default()
             };
@@ -631,7 +632,7 @@ mod tests {
                 crate::ai::oracle_macro::TIER3_CAP_PER_GAME,
                 None,
             );
-            let ranked = rank_plies(&mut game, pov, &goal, &aux, true, 1.0, None);
+            let ranked = rank_plies(&mut game, pov, &goal, &aux, true, 1.0, None, None);
             assert!(!ranked.is_empty(), "seed {seed}: rank_plies returned empty");
             assert!(
                 ranked
@@ -671,7 +672,7 @@ mod tests {
             save_target: None,
         };
         let aux = compute_goal_aux(&game.state, 1, &goal, 0, 0, None);
-        let ranked = rank_plies(&mut game, 1, &goal, &aux, true, 1.0, None);
+        let ranked = rank_plies(&mut game, 1, &goal, &aux, true, 1.0, None, None);
 
         let steps: Vec<_> = ranked.iter().filter(|(_, m)| m.move_type() == MoveType::Step).collect();
         assert!(!steps.is_empty(), "fixture should offer the Rider Step options");

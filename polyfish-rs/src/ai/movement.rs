@@ -33,7 +33,7 @@ fn move_class(state: &GameState, player: PlayerId, idx: i32, climbing: bool) -> 
 /// Multi-source turns-to-reach for a land unit with `movement` points under
 /// simplified Polytopia rules: 8-directional steps, entering rough terrain
 /// ends the turn. Returns per-tile turn counts (`u32::MAX` = unreachable).
-fn turns_to_reach(
+pub(crate) fn turns_to_reach(
     state: &GameState,
     player: PlayerId,
     anchors: &[i32],
@@ -97,6 +97,18 @@ fn turns_to_reach(
     turns
 }
 
+/// Does this tribe have Climbing (Mountains passable)? Shared by every
+/// `turns_to_reach` caller so the tech lookup cannot drift between them.
+fn tribe_climbs(tribe: &crate::states::TribeState) -> bool {
+    crate::settings::technology::is_tech_unlocked(
+        &tribe.tech_vanilla,
+        crate::settings::technology::resolve_tech_for_tribe(
+            TechnologyType::Climbing,
+            tribe.tribe_type,
+        ),
+    )
+}
+
 /// Path-aware rider advantage: max over `targets` of (walker turns − rider
 /// turns) along real explored terrain from the player's units (fallback:
 /// cities). A forest pocket off the route costs nothing; a forest corridor
@@ -113,13 +125,7 @@ pub fn rider_turns_saved(state: &GameState, player: PlayerId, targets: &[i32]) -
     if anchors.is_empty() || targets.is_empty() {
         return 0;
     }
-    let climbing = crate::settings::technology::is_tech_unlocked(
-        &tribe.tech_vanilla,
-        crate::settings::technology::resolve_tech_for_tribe(
-            TechnologyType::Climbing,
-            tribe.tribe_type,
-        ),
-    );
+    let climbing = tribe_climbs(tribe);
     let walk = turns_to_reach(state, player, &anchors, 1, climbing);
     let ride = turns_to_reach(state, player, &anchors, 2, climbing);
     targets
@@ -130,6 +136,63 @@ pub fn rider_turns_saved(state: &GameState, player: PlayerId, targets: &[i32]) -
         })
         .max()
         .unwrap_or(0)
+}
+
+/// Turn lead over the nearest visible threat that counts as "safe to plan
+/// around" — below this, a contested village is too close a race to commit
+/// resources to it yet.
+pub const RACE_CONFIDENCE_MARGIN: i32 = 2;
+
+/// Confidence in [0, 1] that `player` captures `village_tile` before any
+/// enemy visible to `player` does, from turns-to-reach on each side's own
+/// anchors under `player`'s own fog. 1.0 at a `RACE_CONFIDENCE_MARGIN`-turn
+/// lead or better (including "no enemy visible at all" — `threat_units`
+/// empty), ramping linearly to 0.0 at no lead, 0.0 if `player` cannot reach
+/// the tile at all.
+///
+/// FOW-honest by construction, not by a filter bolted on after: both
+/// `turns_to_reach` calls below pass `player` (never the enemy's id) as the
+/// fog gate, so the walk only ever trusts terrain `player` has actually
+/// explored — an enemy unit only seeds the enemy-side frontier because
+/// `threat_units` already restricted it to tiles WE have explored
+/// (`explorers.contains(&player)` at the enemy unit's own tile). Calling
+/// `turns_to_reach` with the enemy's id instead would silently consult the
+/// enemy's own true exploration record (`TileState::explorers` is never
+/// redacted by `obscure_fog`) — a real leak, not a hypothetical one.
+pub fn village_race_confidence(state: &GameState, player: PlayerId, village_tile: i32) -> f32 {
+    let Some(tribe) = state.tribes.get(&player) else {
+        return 0.0;
+    };
+    let our_anchors: Vec<i32> = if tribe.units.is_empty() {
+        tribe.cities.iter().map(|c| c.idx).collect()
+    } else {
+        tribe.units.iter().map(|u| u.coords.idx).collect()
+    };
+    if our_anchors.is_empty() {
+        return 0.0;
+    }
+    let climbing = tribe_climbs(tribe);
+    let our_turns = turns_to_reach(state, player, &our_anchors, 1, climbing);
+    let ours = our_turns.get(village_tile as usize).copied().unwrap_or(u32::MAX);
+    if ours == u32::MAX {
+        return 0.0;
+    }
+
+    let enemy_anchors: Vec<i32> = crate::ai::combat::threat_units(state, player)
+        .into_iter()
+        .map(|(u, _trust)| u.coords.idx)
+        .collect();
+    if enemy_anchors.is_empty() {
+        return 1.0;
+    }
+    let enemy_turns = turns_to_reach(state, player, &enemy_anchors, 1, climbing);
+    let theirs = enemy_turns.get(village_tile as usize).copied().unwrap_or(u32::MAX);
+    if theirs == u32::MAX {
+        return 1.0;
+    }
+
+    let lead = theirs as i32 - ours as i32;
+    (lead as f32 / RACE_CONFIDENCE_MARGIN as f32).clamp(0.0, 1.0)
 }
 
 /// Shared greedy nearest-pair core behind `assign_expand_targets`/
@@ -354,4 +417,117 @@ pub fn road_relief(state: &GameState, player: PlayerId, tile_idx: i32) -> i32 {
             Some((b - a).max(0))
         })
         .sum()
+}
+
+#[cfg(test)]
+mod race_confidence_tests {
+    use super::*;
+    use crate::coords::Coords;
+    use crate::states::{CityState, GameState, TribeState, UnitState};
+
+    fn unit_at(idx: i32, owner: PlayerId, size: i32) -> UnitState {
+        UnitState { owner, coords: Coords::from_index(idx, size), ..Default::default() }
+    }
+
+    fn state_with_units(size: i32, mine: &[i32], theirs: &[i32]) -> GameState {
+        let mut state = GameState::default();
+        state.settings.size = size;
+        let mut me = TribeState { id: 1, ..Default::default() };
+        me.units = mine.iter().map(|&i| unit_at(i, 1, size)).collect();
+        let mut them = TribeState { id: 2, ..Default::default() };
+        them.units = theirs.iter().map(|&i| unit_at(i, 2, size)).collect();
+        state.tribes.insert(1, me);
+        state.tribes.insert(2, them);
+        state
+    }
+
+    /// Every tile is unexplored by design (`move_class` reads unexplored as
+    /// open), so these tests isolate the race arithmetic from terrain.
+    fn mark_explored(state: &mut GameState, tiles: &[i32], player: PlayerId) {
+        for &idx in tiles {
+            state.tiles.entry(idx).or_default().explorers.insert(player);
+        }
+    }
+
+    #[test]
+    fn no_visible_enemy_gives_full_confidence() {
+        let center = 3 * 7 + 3;
+        let state = state_with_units(7, &[center], &[]);
+        assert_eq!(village_race_confidence(&state, 1, center + 1), 1.0);
+    }
+
+    #[test]
+    fn enemy_already_on_the_tile_gives_zero_confidence() {
+        let size = 7;
+        let village = 3 * size + 3;
+        let mut state = state_with_units(size, &[0], &[village]);
+        mark_explored(&mut state, &(0..size * size).collect::<Vec<_>>(), 1);
+        assert_eq!(village_race_confidence(&state, 1, village), 0.0);
+    }
+
+    #[test]
+    fn matching_the_margin_lead_gives_full_confidence() {
+        let size = 11;
+        let village = 5 * size + 5;
+        // Our unit adjacent (1 turn); enemy RACE_CONFIDENCE_MARGIN + 1 turns
+        // out under movement-1 BFS (chebyshev distance == turn count on an
+        // all-open board).
+        let ours = village - 1;
+        let theirs = village + (RACE_CONFIDENCE_MARGIN + 1) * size;
+        let mut state = state_with_units(size, &[ours], &[theirs]);
+        mark_explored(&mut state, &(0..size * size).collect::<Vec<_>>(), 1);
+        assert_eq!(village_race_confidence(&state, 1, village), 1.0);
+    }
+
+    #[test]
+    fn half_the_margin_lead_gives_half_confidence() {
+        let size = 11;
+        let village = 5 * size + 5;
+        let ours = village; // 0 turns
+        // 1 turn away (half of margin=2) -> lead 1 -> confidence 0.5.
+        let theirs = village + size;
+        let mut state = state_with_units(size, &[ours], &[theirs]);
+        mark_explored(&mut state, &(0..size * size).collect::<Vec<_>>(), 1);
+        assert_eq!(village_race_confidence(&state, 1, village), 0.5);
+    }
+
+    #[test]
+    fn unreachable_by_us_gives_zero_confidence_even_with_no_enemy() {
+        let size = 7;
+        let village = 3 * size + 3;
+        // Water ring around the village, explored, with no Climbing --
+        // our own unit can never reach it.
+        let mut state = state_with_units(size, &[0], &[]);
+        for dr in -1..=1 {
+            for dc in -1..=1 {
+                if dr == 0 && dc == 0 {
+                    continue;
+                }
+                let idx = village + dr * size + dc;
+                let mut t = crate::states::TileState::default();
+                t.terrain_type = crate::types::TerrainType::Ocean;
+                t.explorers.insert(1);
+                state.tiles.insert(idx, t);
+            }
+        }
+        assert_eq!(village_race_confidence(&state, 1, village), 0.0);
+    }
+
+    #[test]
+    fn falls_back_to_city_anchor_when_no_units() {
+        let size = 7;
+        let village = 3 * size + 3;
+        let mut state = GameState::default();
+        state.settings.size = size;
+        let mut me = TribeState { id: 1, ..Default::default() };
+        me.cities.push(CityState { idx: village - 1, owner: 1, ..Default::default() });
+        state.tribes.insert(1, me);
+        assert_eq!(village_race_confidence(&state, 1, village), 1.0);
+    }
+
+    #[test]
+    fn no_tribe_for_player_gives_zero_confidence() {
+        let state = GameState::default();
+        assert_eq!(village_race_confidence(&state, 1, 5), 0.0);
+    }
 }

@@ -161,6 +161,7 @@ fn run_micro_probe(
     counters: TurnCounters,
     lambda: f32,
     unit_goals: &crate::ai::search::unit_goals::UnitGoalStore,
+    eco_plan: Option<&crate::ai::eco_plan_commit::EcoPlanCommit>,
     ranked: &[(f32, Box<dyn Move>)],
 ) {
     let Some(sims) = micro_probe_sims() else { return };
@@ -202,6 +203,7 @@ fn run_micro_probe(
                 &mut probe_counters,
                 lambda,
                 Some(unit_goals),
+                eco_plan,
             );
             if next.is_empty() {
                 break;
@@ -885,6 +887,11 @@ pub struct MacroMctsAgent<'a> {
     stance_commit: StanceCommit,
     lane_state: LaneState,
     counters: TurnCounters,
+    /// EXP_ELO_100: which Mine tiles currently partner a committed Forge
+    /// hub, so real building can follow the SAME plan `eco_plan`'s joint
+    /// frontier computes — the one real per-ply commit path only (see
+    /// `scoring::score_move_with_unit_goals`'s doc comment).
+    eco_plan_commit: crate::ai::eco_plan_commit::EcoPlanCommit,
     plan_key: Option<(i32, PlayerId)>,
     turn_goal: Option<MacroGoal>,
     pub divergent_turns: u32,
@@ -1121,6 +1128,7 @@ impl<'a> MacroMctsAgent<'a> {
             stance_commit: StanceCommit::default(),
             lane_state: LaneState::default(),
             counters: TurnCounters::default(),
+            eco_plan_commit: crate::ai::eco_plan_commit::EcoPlanCommit::default(),
             plan_key: None,
             turn_goal: None,
             divergent_turns: 0,
@@ -1204,6 +1212,12 @@ impl<'a> MacroMctsAgent<'a> {
             }
             let base =
                 commit_macro_goal(&view0.state, pov, &mut self.stance_commit, self.counters.tier3_bought);
+            // EXP_ELO_100: once per real turn, same gate as everything else
+            // here — the Mine-lane scoring signal `rank_view` reads below
+            // (real ply AND every simulated rollout that reuses this same
+            // committed snapshot) must not go stale mid-turn or recompute
+            // per candidate (`enumerate_empire` costs single-digit ms).
+            self.eco_plan_commit.update(&view0.state, pov);
             // Tier 1, once per turn: score every lane and commit one. The
             // executor plies below only OBSERVE, so the lane stays the
             // turn's identity instead of drifting ply to ply. In-tree turns
@@ -1330,6 +1344,7 @@ impl<'a> MacroMctsAgent<'a> {
             &mut self.counters,
             self.params.lambda,
             Some(&self.unit_goals),
+            Some(&self.eco_plan_commit),
         );
         let mut pending_micro_carry: Option<(
             serde_json::Value,
@@ -1373,6 +1388,7 @@ impl<'a> MacroMctsAgent<'a> {
             self.counters,
             self.params.lambda,
             &self.unit_goals,
+            Some(&self.eco_plan_commit),
             &ranked,
         );
         if let Some(path) = ply_trace_path() {

@@ -404,7 +404,7 @@ mod tests {
             let goal = compute_macro_goal(&view.state, pov, 0);
             let aux = compute_goal_aux(&view.state, pov, &goal, 0, 0, None);
             let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
-            let ranked = rank_plies(&mut view, pov, &goal, &aux, star_gate, 1.0, None);
+            let ranked = rank_plies(&mut view, pov, &goal, &aux, star_gate, 1.0, None, None);
             if ranked.len() < 2 {
                 continue;
             }

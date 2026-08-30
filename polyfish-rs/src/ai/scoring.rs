@@ -7,29 +7,45 @@ use crate::types::{
     AbilityType, CityRewardType, ModeType, MoveType, StructureType, TerrainType,
 };
 
+/// EXP_ELO_100: bonus for a Mine candidate that partners a committed Forge
+/// hub in the current `EcoPlanCommit` plan, replacing the reactive
+/// "cluster near whatever's already built" heuristic for this one lane
+/// (Sawmill/Windmill keep it). First-fit magnitude, comparable to what a
+/// well-clustered tile earned under the old heuristic (up to ~2.5 per
+/// bordering prereq, several empty neighbours summed) — dial against a
+/// measured paired gauge, not assumed correct: EXP_ELO_098's flat +18 for a
+/// similarly-shaped signal was roughly 2x too strong and cost -2.34pp.
+const MINE_PARTNERS_COMMITTED_HUB_BONUS: f32 = 12.0;
+
 /// Score a move based on heuristics
 pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
-    score_move_inner(game, mv, None)
+    score_move_inner(game, mv, None, None)
 }
 
 /// Same as [`score_move`], but the Step branch's capturable-pull search
 /// skips targets a DIFFERENT unit's per-unit Expand goal already claims --
-/// see [`nearest_visible_capturable_excluding`]. `macro_exec::rank_plies`
-/// (the real per-ply commit path) is the only caller that has a
-/// `UnitGoalStore` to offer; every other backend keeps calling `score_move`
-/// unchanged.
+/// see [`nearest_visible_capturable_excluding`] -- and the Mine branch
+/// prefers a tile `eco_plan` has credited as partnering a committed Forge
+/// hub (`ai::eco_plan_commit::EcoPlanCommit`) over the old reactive
+/// clustering-only signal. `macro_exec::rank_plies` (the real per-ply
+/// commit path) is the only caller that has either to offer; every other
+/// backend keeps calling `score_move` unchanged — including the frozen
+/// comparison arms `MacroScriptAgent`/`MacroLookaheadAgent`, which pass
+/// `None` for both so past-vs-future measurements never silently move.
 pub fn score_move_with_unit_goals(
     game: &Game,
     mv: &dyn Move,
     unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
+    eco_plan: Option<&crate::ai::eco_plan_commit::EcoPlanCommit>,
 ) -> f32 {
-    score_move_inner(game, mv, unit_goals)
+    score_move_inner(game, mv, unit_goals, eco_plan)
 }
 
 fn score_move_inner(
     game: &Game,
     mv: &dyn Move,
     unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
+    eco_plan: Option<&crate::ai::eco_plan_commit::EcoPlanCommit>,
 ) -> f32 {
     let state = &game.state;
     let move_type = mv.move_type();
@@ -335,9 +351,15 @@ fn score_move_inner(
                     // Future Adjacency Prediction (Clustering Potential)
                     // If building a prereq, value empty tiles that could host the Hub.
                     // If multiple existing prereqs surround the same empty tile, reward it more.
+                    //
+                    // Mine is deliberately absent here (EXP_ELO_100): this
+                    // rewards density around ANY empty tile regardless of
+                    // whether it is the city's actual best Forge site --
+                    // exactly the "gravity" bug that motivated this whole
+                    // investigation. See the `eco_plan`-driven bonus below,
+                    // which replaces it for this one lane.
                     let matching_hub = match s_type {
                         StructureType::LumberHut => Some(StructureType::Sawmill),
-                        StructureType::Mine => Some(StructureType::Forge),
                         StructureType::Farm => Some(StructureType::Windmill),
                         _ => None,
                     };
@@ -365,6 +387,20 @@ fn score_move_inner(
                             // 1 prereq = 2.5 bonus, 2 prereqs = 5.0 bonus, etc.
                             score += (existing_prereqs + 1) as f32 * 2.5;
                         }
+                    }
+
+                    // EXP_ELO_100: a Mine that partners a hub `eco_plan`'s
+                    // joint frontier has actually committed to, rather than
+                    // whatever tile clustering density happens to favor.
+                    // `None` (no committed plan yet, or not the one real
+                    // per-ply commit path) falls back to zero -- the old
+                    // heuristic contributed nothing to Mine either once
+                    // removed above, so this is a straight replacement, not
+                    // an added signal on top of it.
+                    if s_type == StructureType::Mine
+                        && eco_plan.is_some_and(|ep| ep.is_mine_partner(target as i32))
+                    {
+                        score += MINE_PARTNERS_COMMITTED_HUB_BONUS;
                     }
 
                     if !prereqs.is_empty() {
@@ -1132,7 +1168,7 @@ mod tests {
     use super::*;
     use crate::actions::units::summon_unit;
     use crate::game::Game;
-    use crate::moves::{EndTurnMove, StepMove};
+    use crate::moves::{BuildMove, EndTurnMove, StepMove};
     use crate::states::{ResourceState, TileState, TribeState};
     use crate::types::{ResourceType, TribeType, UnitType};
 
@@ -1594,6 +1630,128 @@ mod tests {
              the identical move once that corner is already revealed ({score_revealed}) by \
              exactly the lighthouse pull (+12) and nothing else -- once revealed, the pull must \
              vanish entirely"
+        );
+    }
+
+    /// EXP_ELO_100: a Mine that partners a hub `EcoPlanCommit` has actually
+    /// committed to must outscore one that doesn't, by exactly the new
+    /// bonus -- and neither gets the old clustering-potential credit, which
+    /// this lane no longer uses (replaced, not stacked).
+    ///
+    /// Minimal hand-built state, not `explored_field_state`'s full 121-tile
+    /// map: `enumerate_empire`'s Balanced knee is cost-sensitive, and a
+    /// bigger territory means more unrelated buys priced into "build a hub
+    /// at all", which can tip the knee toward no hub for reasons unrelated
+    /// to this test (see `ai::eco_plan_commit`'s own tests for the same
+    /// fixture shape, already proven to reliably pick a hub).
+    #[test]
+    fn mine_scoring_prefers_a_tile_eco_plan_committed_to() {
+        let player_id = 1;
+        let size = 11;
+        let center = 5 * size + 5;
+        let hub = 5 * size + 6;
+        let standing_mine = 4 * size + 6; // already built, adjacent to hub -- establishes it
+        let committed_mine = 4 * size + 7; // NOT yet built, also adjacent to hub -- the one under test
+        let isolated_mine = 8 * size + 8; // outside the city's territory entirely
+
+        let mut state = crate::states::GameState::default();
+        state.settings.size = size;
+        state.settings.current_player_turn_id = player_id;
+
+        let owned_field = |_idx: i32| -> TileState {
+            let mut t = TileState::default();
+            t.terrain_type = TerrainType::Field;
+            t.owner = player_id;
+            t.ruling_city_coords = Some(Coords::from_index(center, size));
+            t
+        };
+        state.tiles.insert(center, owned_field(center));
+        state.structures.insert(
+            center,
+            Some(crate::states::StructureState {
+                structure_type: StructureType::Village,
+                level: 1,
+                founded: 0,
+            }),
+        );
+        state.tiles.insert(hub, owned_field(hub));
+        let mut standing_mine_tile = owned_field(standing_mine);
+        standing_mine_tile.terrain_type = TerrainType::Mountain;
+        state.tiles.insert(standing_mine, standing_mine_tile);
+        state.resources.insert(standing_mine, Some(ResourceState { resource_type: ResourceType::Metal }));
+        state.structures.insert(
+            standing_mine,
+            Some(crate::states::StructureState { structure_type: StructureType::Mine, level: 1, founded: 0 }),
+        );
+        let mut committed_mine_tile = owned_field(committed_mine);
+        committed_mine_tile.terrain_type = TerrainType::Mountain;
+        state.tiles.insert(committed_mine, committed_mine_tile);
+        state.resources.insert(committed_mine, Some(ResourceState { resource_type: ResourceType::Metal }));
+        let crops = [4 * size + 4, 4 * size + 5, 5 * size + 4, 6 * size + 4];
+        for &c in &crops {
+            state.tiles.insert(c, owned_field(c));
+            state.resources.insert(c, Some(ResourceState { resource_type: ResourceType::Crop }));
+        }
+        // Isolated candidate: real Metal/Mountain terrain so it is a legal
+        // Mine build, but deliberately outside the city's `_territory` --
+        // `eco_plan` cannot credit ground it was never asked to plan.
+        let mut isolated_tile = TileState::default();
+        isolated_tile.terrain_type = TerrainType::Mountain;
+        isolated_tile.owner = player_id;
+        state.tiles.insert(isolated_mine, isolated_tile);
+        state.resources.insert(isolated_mine, Some(ResourceState { resource_type: ResourceType::Metal }));
+
+        let mut territory: Vec<i32> = vec![center, hub, standing_mine, committed_mine];
+        territory.extend(crops);
+        state.tribes.insert(player_id, TribeState { id: player_id, ..Default::default() });
+        state.tribes.get_mut(&player_id).unwrap().cities.push(crate::states::CityState {
+            idx: center,
+            owner: player_id,
+            _territory: territory,
+            ..Default::default()
+        });
+        state.tribes.insert(2, TribeState { id: 2, ..Default::default() });
+
+        let mut eco_plan = crate::ai::eco_plan_commit::EcoPlanCommit::default();
+        eco_plan.update(&state, player_id);
+        assert!(
+            eco_plan.is_mine_partner(committed_mine),
+            "fixture sanity: the adjacent-to-hub mine must actually be credited"
+        );
+        assert!(
+            !eco_plan.is_mine_partner(isolated_mine),
+            "fixture sanity: ground outside the planned territory must not be credited"
+        );
+
+        // Isolate purely the `eco_plan` contribution: score the SAME tile
+        // with and without a plan, rather than comparing the two tiles
+        // directly against each other -- they differ in more than just
+        // plan credit (position, standing-Mine adjacency for the OTHER
+        // structure-adjacency bonus block, etc.), and this is the one
+        // difference this test is actually about.
+        let game = Game { state };
+        let committed_move = BuildMove::new(committed_mine, StructureType::Mine);
+        let isolated_move = BuildMove::new(isolated_mine, StructureType::Mine);
+
+        let committed_with_plan =
+            score_move_with_unit_goals(&game, &committed_move, None, Some(&eco_plan));
+        let committed_without_plan =
+            score_move_with_unit_goals(&game, &committed_move, None, None);
+        assert!(
+            (committed_with_plan - committed_without_plan - MINE_PARTNERS_COMMITTED_HUB_BONUS).abs()
+                < 0.01,
+            "with_plan={committed_with_plan} without_plan={committed_without_plan}, expected \
+             exactly +{MINE_PARTNERS_COMMITTED_HUB_BONUS} from the committed-hub credit"
+        );
+
+        let isolated_with_plan =
+            score_move_with_unit_goals(&game, &isolated_move, None, Some(&eco_plan));
+        let isolated_without_plan =
+            score_move_with_unit_goals(&game, &isolated_move, None, None);
+        assert!(
+            (isolated_with_plan - isolated_without_plan).abs() < 0.01,
+            "a tile the plan never credited must score identically with or without one, got \
+             with_plan={isolated_with_plan} without_plan={isolated_without_plan}"
         );
     }
 }

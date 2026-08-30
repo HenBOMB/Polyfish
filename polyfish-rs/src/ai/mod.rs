@@ -2,6 +2,7 @@ pub mod belief;
 pub mod combat;
 pub mod decision_trace;
 pub mod economy;
+pub mod eco_plan_commit;
 pub mod eval_backend;
 pub mod eval_server;
 pub mod evaluator;

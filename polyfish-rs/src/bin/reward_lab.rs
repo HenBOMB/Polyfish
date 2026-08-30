@@ -226,6 +226,7 @@ fn main() -> anyhow::Result<()> {
         gate,
         args.lambda,
         Some(&store),
+        None,
     );
 
     println!(

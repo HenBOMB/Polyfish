@@ -7,7 +7,7 @@
 use super::*;
 use super::city::*;
 use super::tech::*;
-use crate::functions::{get_adjacent_indices, get_chebyshev_distance, MARKET_MAX_LEVEL};
+use crate::functions::{get_adjacent_indices, get_chebyshev_distance, get_square_indices, MARKET_MAX_LEVEL};
 use crate::rules::economy::{level_at_pop, super_units_at_level as giants_at_level};
 use crate::states::GameState;
 use crate::types::*;
@@ -146,7 +146,7 @@ pub fn allocate_value(
 /// is left alone rather than reassigned. Contested rings between two of
 /// OUR OWN growing cities resolve to the nearer one, same tie-break as the
 /// synthetic radius model below.
-fn extend_for_border_growth(
+pub(crate) fn extend_for_border_growth(
     state: &GameState,
     cities: &[i32],
     scs: &[Scenario],
@@ -184,6 +184,58 @@ fn extend_for_border_growth(
         v.dedup();
     }
     real
+}
+
+/// `allocate_value`, but a `prospective` city — one we don't yet hold, but
+/// are confident enough about (see `ai::movement::village_race_confidence`)
+/// to plan around — is seeded with the same radius-1 square a real capture
+/// claims immediately (`actions::city::create_city`'s
+/// `get_square_indices(tile, 1, size)`), filtered to ground no held city
+/// already owns. Every city then goes through the SAME `extend_for_border_
+/// growth` resolution together, so a prospective city's outer ring contests
+/// real neighbours exactly like a real city's would — not two allocators
+/// bolted together after the fact, which double-claims ground (a solo held
+/// city's own +border sweep grabs tiles a neighbour-to-be would have taken,
+/// since nothing else exists yet to contest them at that snapshot).
+///
+/// `cities` and `scs` stay one-to-one, in order, whether an entry is real or
+/// prospective — every other consumer of the returned territory indexes by
+/// that same position.
+pub fn allocate_value_with_prospective(
+    state: &GameState,
+    cities: &[i32],
+    prospective: &HashSet<i32>,
+    scs: &[Scenario],
+    monuments: i32,
+) -> Vec<Vec<i32>> {
+    if prospective.is_empty() {
+        return allocate_value(state, cities, scs, monuments);
+    }
+    let real_cities: Vec<i32> =
+        cities.iter().copied().filter(|c| !prospective.contains(c)).collect();
+    let real_terr: HashMap<i32, Vec<i32>> = engine_territory(state, &real_cities)
+        .map(|terr| real_cities.iter().copied().zip(terr).collect())
+        .unwrap_or_default();
+
+    let owned: HashSet<i32> = real_terr.values().flatten().copied().collect();
+    let real: Vec<Vec<i32>> = cities
+        .iter()
+        .map(|c| {
+            if let Some(t) = real_terr.get(c) {
+                t.clone()
+            } else {
+                // Prospective (or a held city with no real territory, which
+                // should not happen — `engine_territory`'s own doc guarantees
+                // it for every city that actually is one): the same square a
+                // real capture would claim on the spot.
+                get_square_indices(*c, 1, state.settings.size)
+                    .into_iter()
+                    .filter(|i| state.tiles.contains_key(i) && !owned.contains(i))
+                    .collect()
+            }
+        })
+        .collect();
+    extend_for_border_growth(state, cities, scs, real)
 }
 
 pub fn allocate(state: &GameState, cities: &[i32], border_growth: bool) -> Vec<Vec<i32>> {
@@ -758,6 +810,91 @@ pub fn pick_for_goal<'a>(front: &'a [EmpirePlan], g: Goal) -> Option<&'a EmpireP
 mod tests {
     use super::*;
     use crate::states::{CityState, TileState, TribeState};
+
+    /// Regression for the EXP_ELO_100 double-claim bug: naively unioning a
+    /// solo `allocate_value` call for the held cities with a separately-
+    /// computed radius ring for a prospective village hands the held city
+    /// ground the prospective village would actually get, because nothing
+    /// exists yet to contest it in the held-cities-only view. Mirrors the
+    /// real seed0 XinXi geometry: held city 49, prospective (not yet
+    /// captured, but high-confidence) village 41, radius-2 rings overlapping
+    /// at tile 40.
+    #[test]
+    fn allocate_value_with_prospective_does_not_double_claim_contested_ground() {
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        state.settings.current_player_turn_id = 1;
+        let held = 49;
+        let prospective_village = 41;
+
+        let inner: Vec<i32> =
+            get_adjacent_indices(&state, held, 1).into_iter().chain([held]).collect();
+        for &idx in &inner {
+            let mut t = TileState::default();
+            t.terrain_type = TerrainType::Field;
+            t.owner = 1;
+            t.ruling_city_coords = Some(crate::coords::Coords::from_index(held, 11));
+            state.tiles.insert(idx, t);
+        }
+        // Every tile either city's radius-2 could reach, unclaimed.
+        for idx in get_adjacent_indices(&state, held, 2)
+            .into_iter()
+            .chain(get_adjacent_indices(&state, prospective_village, 2))
+            .chain([prospective_village])
+        {
+            state.tiles.entry(idx).or_insert_with(|| {
+                let mut t = TileState::default();
+                t.terrain_type = TerrainType::Field;
+                t
+            });
+        }
+        let mut tribe = TribeState::default();
+        tribe.id = 1;
+        let city = CityState { idx: held, owner: 1, _territory: inner.clone(), ..Default::default() };
+        tribe.cities.push(city);
+        state.tribes.insert(1, tribe);
+
+        let cities = [held, prospective_village];
+        let scs = [SCENARIOS[1], SCENARIOS[1]]; // sawmill +border, both growing
+        let mut prospective = HashSet::new();
+        prospective.insert(prospective_village);
+
+        let solo_held = allocate_value(&state, &[held], &[SCENARIOS[1]], 0);
+        let with_prospective =
+            allocate_value_with_prospective(&state, &cities, &prospective, &scs, 0);
+
+        assert!(
+            !with_prospective[1].is_empty(),
+            "the prospective village must get a territory, not an empty one"
+        );
+        assert!(
+            with_prospective[1].contains(&prospective_village),
+            "the prospective village's own tile must be in its territory"
+        );
+        // A tile every neighbour test of this bug actually failed on: solo
+        // `held` grabs it because nothing else exists to contest it, but
+        // jointly it must go to whichever city is really closer (40 is
+        // adjacent to 41, distance 2 from 49 -- prospective wins on
+        // distance, same tiebreak `extend_for_border_growth` always used).
+        let contested_tile = 40;
+        assert!(
+            solo_held[0].contains(&contested_tile),
+            "fixture sanity: solo allocation must exhibit the bug this test guards against"
+        );
+        assert!(
+            with_prospective[1].contains(&contested_tile),
+            "jointly, the contested tile must go to the closer (prospective) city, not double-claim to `held`"
+        );
+        assert!(
+            !with_prospective[0].contains(&contested_tile),
+            "a tile cannot belong to both cities at once"
+        );
+        // The held city's own real, uncontested inner ring must survive
+        // untouched -- "believe reality" still holds for it.
+        for &idx in &inner {
+            assert!(with_prospective[0].contains(&idx), "held city lost its own real tile {idx}");
+        }
+    }
 
     /// Regression for the Aug 2026 bug: planning a BorderGrowth scenario from
     /// a REAL state (`engine_territory` succeeds) used to hand back the exact
