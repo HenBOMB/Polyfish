@@ -11,7 +11,7 @@ use polyfish::ai::features::{self, GameFeatures};
 use polyfish::ai::mapper::DecomposedMapper;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::ai::reward;
-use polyfish::game::{Game, STARTING_OWNER_ID};
+use polyfish::game::Game;
 use polyfish::replayer::{ModReplay, ReplayPlayer, ReplayTurn};
 use polyfish::states::{GameState, PlayerId};
 use polyfish::types::MapSize;
@@ -26,6 +26,11 @@ use strum::IntoEnumIterator;
 
 mod crutches;
 use crutches::{ANCHOR_FRAC_DECAY, HEURISTIC_PRIOR_DECAY, HEURISTIC_PRIOR_W0, decay_crutch};
+mod stats;
+mod tempo;
+use stats::{finish_milestones, is_net_seat, record_spt_at_turn_start, t2c_turn,
+            turn_milestones};
+use tempo::{TempoTrack, tempo_sample, unit_tally};
 
 // Absolute yardstick for the value target; 8K points is a good place to end a 30T game
 const GOOD_BOT_FINAL_SCORE: f32 = 8000.0;
@@ -646,115 +651,6 @@ fn dump_macro_policy_row(
     }
 }
 
-/// One per-player development-tempo sample, taken at the start of that
-/// player's turn (before any of their moves).
-#[derive(Clone)]
-struct TempoSample {
-    turn: i32,
-    cities: i32,
-    city_levels: i32,
-    spt: i32,
-    units: i32,
-    /// Σ star-cost of living units — army size weighted by quality.
-    army_stars: i32,
-    revealed: i32,
-    techs: i32,
-    /// Enemy units destroyed so far, read straight off `TribeState::kills`
-    /// (engine-maintained, undo-safe). Conversions are not kills.
-    kills: i32,
-    /// Cumulative counters through this sample (mirrors of the TempoTrack
-    /// counters, snapshotted so both curve and totals are per-turn/per-role).
-    trained_cum: i32,
-    lost_cum: i32,
-    /// Σ star-cost of units lost so far — a dead giant costs 10, not 1.
-    stars_lost_cum: i32,
-}
-
-/// One player's tempo curve plus event-accounted unit counters for the game.
-/// Counters come from per-move unit-count diffs, so ruin grants, level-up
-/// giants, conversions, and retaliation deaths are all captured without
-/// hooking the actions layer (a conversion counts as lost+granted).
-#[derive(Default, Clone)]
-struct TempoTrack {
-    samples: Vec<TempoSample>,
-    /// Units gained by a Summon move — star-spent production only.
-    units_trained: i32,
-    /// Units gained any other way (ruins, conversion, level-up rewards).
-    units_granted: i32,
-    units_lost: i32,
-    giants_made: i32,
-    /// Σ star-cost of lost units (army VALUE destroyed, not just count).
-    army_stars_lost: i32,
-}
-
-fn tempo_sample(state: &GameState, pov: PlayerId) -> Option<TempoSample> {
-    let tribe = state.tribes.get(&pov)?;
-    let army_stars: i32 = tribe
-        .units
-        .iter()
-        .map(polyfish::rules::combat::unit_worth)
-        .sum();
-    Some(TempoSample {
-        turn: state.settings.turn,
-        cities: tribe.cities.len() as i32,
-        city_levels: tribe.cities.iter().map(|c| c.level).sum(),
-        spt: polyfish::functions::get_tribe_spt(state, tribe),
-        units: tribe.units.len() as i32,
-        army_stars,
-        revealed: state
-            .tiles
-            .values()
-            .filter(|t| t.explorers.contains(&pov))
-            .count() as i32,
-        techs: tribe.tech_vanilla.len() as i32,
-        kills: tribe.kills,
-        // Attached from the TempoTrack counters at the push site.
-        trained_cum: 0,
-        lost_cum: 0,
-        stars_lost_cum: 0,
-    })
-}
-
-/// `(unit_count, giant_count, army_star_cost)` per player, for post-move
-/// diff accounting.
-fn unit_tally(state: &GameState) -> HashMap<PlayerId, (i32, i32, i32)> {
-    state
-        .tribes
-        .iter()
-        .map(|(id, t)| {
-            // Per-tribe super unit, not just Giant — Polaris/Aquarion/Elyrion/
-            // Cymanti super units were invisible to this metric.
-            let super_unit = polyfish::settings::units::get_super_unit(t.tribe_type);
-            let giants = t
-                .units
-                .iter()
-                .filter(|u| u.unit_type == super_unit)
-                .count() as i32;
-            let stars: i32 = t
-                .units
-                .iter()
-                .map(polyfish::rules::combat::unit_worth)
-                .sum();
-            (*id, (t.units.len() as i32, giants, stars))
-        })
-        .collect()
-}
-
-/// Up to 5 evenly spaced turn thresholds for periodic in-game progress.
-fn turn_milestones(max_turns: i32) -> Vec<i32> {
-    const MAX_REPORTS: usize = 5;
-    if max_turns <= 0 {
-        return Vec::new();
-    }
-    (1..=MAX_REPORTS)
-        .map(|i| (max_turns * i as i32 + MAX_REPORTS as i32 - 1) / MAX_REPORTS as i32)
-        .collect()
-}
-
-/// Game-count milestones at 20%, 40%, …, 100% for large runs.
-fn finish_milestones(num_games: usize) -> Vec<usize> {
-    (1..=5).map(|i| num_games * i / 5).collect()
-}
 
 /// Decomposed policy probability distributions for a single step
 struct DecomposedPolicyData {
@@ -1221,15 +1117,6 @@ struct GameResult {
     roles: [&'static str; 2],
 }
 
-const SPT_MILESTONES: [i32; 7] = [0, 5, 10, 15, 20, 25, 30];
-
-/// True when `pid`'s seat is controlled by the training net ("model" /
-/// "model_vs_anchor") — anchor (Greedy) and league-opponent seats are
-/// excluded from the aggregate metrics so mixed games report the net only.
-fn is_net_seat(seat_roles: [&'static str; 2], pid: PlayerId) -> bool {
-    let i = (pid - 1) as usize;
-    i < 2 && matches!(seat_roles[i], "model" | "model_vs_anchor")
-}
 
 /// Aggregate a move-visit distribution into the four decomposed policy-target
 /// arrays (action / source-spatial / target-spatial / option), each normalized
@@ -1284,96 +1171,7 @@ fn decompose_visits(
     (p_action, p_source, p_target, p_option)
 }
 
-/// Mean SPT over net-controlled tribes only (all tribes as a fallback if
-/// none qualify — shouldn't happen with valid seat_roles).
-fn mean_net_spt(state: &polyfish::states::GameState, seat_roles: [&'static str; 2]) -> f32 {
-    let vals: Vec<f32> = state
-        .tribes
-        .iter()
-        .filter(|(id, _)| is_net_seat(seat_roles, **id))
-        .map(|(_, t)| polyfish::functions::get_tribe_spt(state, t) as f32)
-        .collect();
-    if vals.is_empty() {
-        let n = state.tribes.len().max(1) as f32;
-        return state
-            .tribes
-            .values()
-            .map(|t| polyfish::functions::get_tribe_spt(state, t) as f32)
-            .sum::<f32>()
-            / n;
-    }
-    vals.iter().sum::<f32>() / vals.len() as f32
-}
 
-/// Mean over net seats of (Σ unit star cost ÷ unit count, Σ unit star cost ÷
-/// city count). A seat with no units (or no cities) contributes 0 to that
-/// component rather than being skipped, so the denominator stays the seat count.
-fn mean_net_army_ratios(
-    state: &polyfish::states::GameState,
-    seat_roles: [&'static str; 2],
-) -> (f32, f32) {
-    let (mut worth, mut per_city, mut seats) = (0.0f32, 0.0f32, 0u32);
-    for (_, t) in state
-        .tribes
-        .iter()
-        .filter(|(id, _)| is_net_seat(seat_roles, **id))
-    {
-        let stars: i32 = t
-            .units
-            .iter()
-            .map(polyfish::rules::combat::unit_worth)
-            .sum();
-        if !t.units.is_empty() {
-            worth += stars as f32 / t.units.len() as f32;
-        }
-        if !t.cities.is_empty() {
-            per_city += stars as f32 / t.cities.len() as f32;
-        }
-        seats += 1;
-    }
-    if seats == 0 {
-        return (0.0, 0.0);
-    }
-    (worth / seats as f32, per_city / seats as f32)
-}
-
-fn record_spt_at_turn_start(
-    state: &polyfish::states::GameState,
-    spt_at_turn: &mut HashMap<i32, f32>,
-    army_ratios_at_turn: &mut HashMap<i32, (f32, f32)>,
-    next_idx: &mut usize,
-    seat_roles: [&'static str; 2],
-) {
-    if state.settings.current_player_turn_id != STARTING_OWNER_ID {
-        return;
-    }
-    while *next_idx < SPT_MILESTONES.len() {
-        let milestone = SPT_MILESTONES[*next_idx];
-        if state.settings.turn < milestone {
-            break;
-        }
-        if state.settings.turn == milestone {
-            spt_at_turn.insert(milestone, mean_net_spt(state, seat_roles));
-            army_ratios_at_turn.insert(milestone, mean_net_army_ratios(state, seat_roles));
-        }
-        *next_idx += 1;
-    }
-}
-
-/// Turn by which `frac` of `initial` capturables were taken, given the
-/// chronological list of capture turns (`frac` 0.0 = the first capture).
-/// `censor` (game length) when the game never reached that fraction or the
-/// map had none to begin with.
-fn t2c_turn(capture_turns: &[i32], initial: usize, frac: f64, censor: i32) -> f32 {
-    if initial == 0 {
-        return censor as f32;
-    }
-    let needed = ((initial as f64 * frac).ceil() as usize).max(1);
-    capture_turns
-        .get(needed - 1)
-        .map(|&t| t as f32)
-        .unwrap_or(censor as f32)
-}
 
 /// Load the main network (and opponent network, defaulting to the main one)
 /// onto the given device from `model.safetensors`.
