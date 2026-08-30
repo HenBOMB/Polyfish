@@ -523,7 +523,7 @@ fn dump_turn_state(
         return;
     };
     let cities: Vec<i32> = tribe.cities.iter().map(|c| c.idx).collect();
-    let visible_villages: Vec<i32> = open_villages
+    let mut visible_villages: Vec<i32> = open_villages
         .iter()
         .copied()
         .filter(|idx| {
@@ -533,6 +533,9 @@ fn dump_turn_state(
                 .map_or(false, |t| t.explorers.contains(&pov))
         })
         .collect();
+    // Sorted: `open_villages` is a std HashSet, so its iteration order is
+    // randomized per process and would otherwise leak into this dump.
+    visible_villages.sort_unstable();
     let units: Vec<i32> = tribe.units.iter().map(|u| u.coords.idx).collect();
     let city_detail: Vec<serde_json::Value> = tribe
         .cities
@@ -2183,7 +2186,7 @@ fn play_single_game(
         if let Some((trigger_unit_idx, trigger_village_idx)) = trigger_info {
             if let Some(trace) = current_agent.take_trace() {
                 if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
-                    let visible_villages: Vec<i32> = open_villages
+                    let mut visible_villages: Vec<i32> = open_villages
                         .iter()
                         .copied()
                         .filter(|idx| {
@@ -2193,6 +2196,9 @@ fn play_single_game(
                                 .map_or(false, |t| t.explorers.contains(&pov))
                         })
                         .collect();
+                    // Sorted: `open_villages` is a std HashSet, so its iteration order is
+                    // randomized per process and would otherwise leak into this dump.
+                    visible_villages.sort_unstable();
                     write_decision_trace(
                         "decision_traces",
                         &trace,
@@ -2255,7 +2261,7 @@ fn play_single_game(
         if let Some((trigger_unit, turns_since)) = wander_capture {
             if let Some(trace) = current_agent.take_trace() {
                 if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
-                    let visible_villages: Vec<i32> = open_villages
+                    let mut visible_villages: Vec<i32> = open_villages
                         .iter()
                         .copied()
                         .filter(|idx| {
@@ -2265,6 +2271,9 @@ fn play_single_game(
                                 .map_or(false, |t| t.explorers.contains(&pov))
                         })
                         .collect();
+                    // Sorted: `open_villages` is a std HashSet, so its iteration order is
+                    // randomized per process and would otherwise leak into this dump.
+                    visible_villages.sort_unstable();
                     write_decision_trace(
                         "decision_traces_wander",
                         &trace,
