@@ -275,15 +275,43 @@ EXP_ELO_091's move-gen determinism fix.
      already-won game closes out, not whether it's won, the same
      "clean wash on win rate, verified underneath" shape EXP_ELO_102
      shipped on. Committed (`a0b1917`).
-- Current best game for the next analysis pass: the **EXP_ELO_107** game
-  (`replays/exp107_seed0_watch/`, turn **18**, score 7260, 7 lost, 9
-  killed, 5 giants by t12). First shipped game to get inside single
-  digits of the turn-count target (<=15) — units-lost (<3) is now the
-  clearly dominant remaining gap, unchanged since EXP_ELO_106 (this
-  fix was conversion-speed only, not combat behavior). The
-  retaliation/exposure pricing lever below (EXP_ELO_105's diagnosis,
-  still unimplemented) is the most direct remaining path to units-lost
-  <3.
+  7. **EXP_ELO_108** (`unit_goal_approach_unassigned`'s `assigned` set
+     read from the frozen `UnitGoalStore` instead of live `tribe.units`,
+     SHIPPED). Found by an `ml-expert` pass-6 analysis of the
+     EXP_ELO_107 game, launched to check whether the still-open
+     EXP_ELO_105 retaliation/exposure diagnosis was still the dominant
+     units-lost cause (confirmed: 6/7 losses trace to it) — but the
+     agent ALSO found a distinct, sharper bug along the way: a known-
+     lethal suicide Attack (engine-confirmed `attacker_dies`, base
+     floored at 1.0) still won its ply 101.000 vs a safe Step's 48.104,
+     because the dying pursuer dropping out of live `tribe.units`
+     un-claimed its Expand target for `unit_goal_approach_unassigned`,
+     which then paid a DIFFERENT idle unit's sudden "closest to an
+     unassigned target" credit — a death subsidizing itself, the
+     collapse-on-transition family inverted. Fixed by reading
+     `UnitGoalStore.active_targets()` (frozen for the whole ply)
+     instead of re-deriving `assigned` from live unit positions.
+     Ground truth: flagged ply 101.000 -> **-1099.000**, matching the
+     agent's own hand-estimate. Both must-not-regress reference plies
+     (101's capture chain, 107's capture ply) held bit-exact. Added 1
+     pinning test (338/338 total). Regenerated game: units_lost
+     **7 -> 5** — real progress on the loop's most stubborn KPI.
+     Paired gauge, two independent seed blocks: both landed on the
+     IDENTICAL small delta (-0.78pp, exactly one game/128 in each),
+     smaller than EXP_ELO_104's own shipped -1.56pp wash. Committed
+     (`2beabb0`).
+- Current best game for the next analysis pass: the **EXP_ELO_108** game
+  (`replays/exp108_seed0_watch/`, turn **17**, 5 lost, 9 killed, 5
+  giants by t12). Units-lost is down to 5 (from a starting-loop value
+  of 29) but still misses the <3 target — the clearest remaining gap.
+  The retaliation/exposure pricing lever below (EXP_ELO_105's
+  diagnosis, still unimplemented after two related-but-distinct bugs
+  in its neighborhood have now been fixed) is still the most direct
+  remaining path, with a pass-6-recommended narrower design (a
+  move-level, acting-unit-only post-move lethality penalty reusing the
+  already-frozen `threat_units` snapshot, not EXP_ELO_105's broad
+  per-unit-per-candidate `hypo_damage` rescan) as the next candidate
+  attempt.
 - **EXP_ELO_105 was attempted and REVERTED** (2026-08-30, see the
   ledger for the full writeup) — the retaliation/exposure pricing gap
   below is still the diagnosed primary lever, but the specific fix
@@ -517,3 +545,38 @@ EXP_ELO_091's move-gen determinism fix.
   (turn-18, 7 lost), and/or the still-unimplemented retaliation/
   exposure pricing lever, now the single clearest remaining path to
   the units-lost <3 target.
+- **2026-08-31, iteration 9 (pass-6 analysis + EXP_ELO_108)**: `ml-expert`
+  pass-6 analysis of the EXP_ELO_107 game, launched to check whether
+  the still-open EXP_ELO_105 retaliation/exposure diagnosis was still
+  the dominant units-lost cause. Confirmed: 6 of 7 losses trace to that
+  family. But it ALSO found a distinct, sharper bug while investigating:
+  a Warrior with an active Expand goal attacked a Defender KNOWING it
+  would die to retaliation (engine-confirmed `attacker_dies`, base
+  floored at 1.0) — and the ply still won outright, 101.000 vs a safe
+  Step's 48.104. Root cause: `unit_goal_approach_unassigned`'s
+  "assigned" set was derived from LIVE `tribe.units`, so the dying
+  pursuer simply dropping out of the roster this candidate's own move
+  un-claimed its Expand target — and a DIFFERENT idle unit's sudden
+  "closest to an unassigned target" credit (+1200) outweighed both the
+  pursuer's own lost credit (-1000) and its death charge (-100)
+  combined. Same collapse-on-transition family as 101/103/104/106/107,
+  but inverted into a death subsidy instead of a success forfeiture.
+  Fixed by reading `UnitGoalStore.active_targets()` (frozen for the
+  whole ply, unaffected by which units are alive in any one candidate's
+  simulated state) instead of re-deriving `assigned` from live unit
+  positions. Ground truth: flagged ply 101.000 -> **-1099.000**,
+  matching the agent's own independent hand-estimate essentially
+  exactly. Both must-not-regress reference plies (101's capture chain,
+  107's capture ply) held bit-exact. Added 1 pinning test (338/338
+  total). Regenerated game: units_lost **7 -> 5**, real progress on
+  the loop's most stubborn KPI (down from 29 at the start of this
+  loop), turn count also improved slightly (18->17). Paired gauge, two
+  independent seed blocks: both landed on the IDENTICAL small delta
+  (-0.78pp, exactly one game out of 128 in each) — smaller than
+  EXP_ELO_104's own shipped -1.56pp wash. **SHIPPED** (`2beabb0`).
+  Next: pass 7 on the EXP_ELO_108 game (turn-17, 5 lost), and/or the
+  pass-6-recommended narrower re-attempt of the retaliation/exposure
+  lever (a move-level, acting-unit-only post-move lethality penalty
+  reusing the already-frozen `threat_units` snapshot rather than
+  EXP_ELO_105's broad per-unit-per-candidate `hypo_damage` rescan) —
+  still the single clearest remaining path to units-lost <3.
