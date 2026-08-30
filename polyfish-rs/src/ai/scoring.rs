@@ -7,6 +7,17 @@ use crate::types::{
     AbilityType, CityRewardType, ModeType, MoveType, StructureType, TerrainType,
 };
 
+/// EXP_ELO_098: the same "forge natural" scenario `eco_plan`'s own CLI uses
+/// (`rules::eco_plan::SCENARIOS[6]`) — no border growth, since a real-time
+/// Build-Mine decision should target what the city can feed with the
+/// territory it already rules, not a hoped-for future border.
+const FORGE_NATURAL_SCENARIO: crate::rules::eco_plan::Scenario = crate::rules::eco_plan::Scenario {
+    name: "forge natural",
+    lane: crate::rules::eco_plan::Lane::Mine,
+    border_growth: false,
+    convert: false,
+};
+
 /// Score a move based on heuristics
 pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
     score_move_inner(game, mv, None)
@@ -342,7 +353,80 @@ fn score_move_inner(
                         _ => None,
                     };
 
-                    if let Some(_hub) = matching_hub {
+                    if s_type == StructureType::Mine {
+                        // EXP_ELO_098 (Verdi, Aug 2026): the old reactive
+                        // heuristic (below, kept for LumberHut/Farm) counts
+                        // ALREADY-BUILT neighbors of a candidate's own empty
+                        // adjacent tiles — so whichever mine gets built
+                        // FIRST wins by accumulated local credit, and every
+                        // later mine (and the eventual Forge) gets pulled
+                        // toward wherever that gravity happened to settle,
+                        // not the city's actual best site. Confirmed on the
+                        // seed0 map: city 49 built all four metal tiles
+                        // (37/38/39/50) in path-dependent order, but
+                        // eco_plan's own ground truth (`hub_candidates`,
+                        // the same ranker this reuses) says the optimal set
+                        // is only 38/39/50 — 37 is pure waste.
+                        //
+                        // Forward-looking instead: find this city's best
+                        // forge site among ALL its metal deposits (built or
+                        // not) up front, then price a candidate purely by
+                        // whether it partners THAT site. No gravity: the
+                        // site is the same regardless of build order.
+                        let best_forge_site = state
+                            .tiles
+                            .get(&(target as i32))
+                            .and_then(|t| t.ruling_city_coords.as_ref())
+                            .and_then(|c| tribe.cities.iter().find(|city| city.idx == c.idx))
+                            .and_then(|city| {
+                                let territory: Vec<i32> =
+                                    crate::rules::economy::territory_tiles(state, city).collect();
+                                crate::rules::eco_plan::hub_candidates(
+                                    state,
+                                    &territory,
+                                    FORGE_NATURAL_SCENARIO,
+                                    1,
+                                )
+                                .first()
+                                .copied()
+                            });
+                        match best_forge_site {
+                            // A real best site exists and this candidate
+                            // feeds it: full value, matching the old
+                            // heuristic's own cap (existing_prereqs >= 3).
+                            Some(site) if get_adjacent_indices(state, site, 1).contains(&(target as i32)) => {
+                                score += 18.0;
+                            }
+                            // A real best site exists but this candidate
+                            // ISN'T one of its partners: no clustering
+                            // credit at all — exactly the "37 was wasted
+                            // money" case.
+                            Some(_) => {}
+                            // No legal hub site anywhere yet (fewer than
+                            // the engine's own 1-partner minimum) — fall
+                            // back to the old reactive count so an opening
+                            // mine isn't zeroed out before the city has
+                            // enough resources to form a real hub at all.
+                            None => {
+                                let adj = get_adjacent_indices(state, target as i32, 1);
+                                for empty_idx in
+                                    adj.iter().filter(|&&idx| get_structure_at(state, idx).is_none())
+                                {
+                                    let neighbors_of_empty =
+                                        get_adjacent_indices(state, *empty_idx, 1);
+                                    let existing_prereqs = neighbors_of_empty
+                                        .iter()
+                                        .filter(|&&n| {
+                                            n != target as i32
+                                                && crate::functions::get_structure_type_at(state, n)
+                                                    == Some(s_type)
+                                        })
+                                        .count();
+                                    score += (existing_prereqs + 1) as f32 * 2.5;
+                                }
+                            }
+                        }
+                    } else if let Some(_hub) = matching_hub {
                         let adj = get_adjacent_indices(state, target as i32, 1);
                         for empty_idx in adj
                             .iter()
@@ -1528,6 +1612,67 @@ mod tests {
             plain_score - hub_worthy_score >= 14.0,
             "a Monument on a tile that would make a good hub ({hub_worthy_score}) must score \
              meaningfully below a plain tile ({plain_score}), not tie with it"
+        );
+    }
+
+    /// EXP_ELO_098: a Mine on a tile that partners the city's actual best
+    /// forge site must outscore one that doesn't — the fix for the
+    /// "gravity" bug (an isolated metal deposit used to win the old
+    /// reactive clustering bonus just by being built first, regardless of
+    /// whether it fed the city's real best site). Reproduces the seed0
+    /// city 49 shape: two metal tiles (38, 50) share an empty neighbor (49)
+    /// forming a real 2-partner site, and a third (20) sits alone with no
+    /// partner anywhere — matching the game's own 37-was-wasted finding.
+    #[test]
+    fn mine_scoring_favors_the_citys_actual_best_forge_site_over_an_isolated_deposit() {
+        let player_id = 1;
+        let city_idx = 60;
+        let hub_site = 49; // empty, adjacent to both partnered_a and partnered_b
+        let partnered_a = 38;
+        let partnered_b = 50;
+        let isolated = 20; // far away, no second metal tile anywhere nearby
+
+        let mut state = crate::states::GameState::default();
+        state.settings.size = 11;
+        state.settings.current_player_turn_id = player_id;
+        for &i in &[city_idx, hub_site, partnered_a, partnered_b, isolated] {
+            let mut tile = TileState::default();
+            tile.terrain_type = if [partnered_a, partnered_b, isolated].contains(&i) {
+                TerrainType::Mountain // Metal only registers as a Mine buy on Mountain
+            } else {
+                TerrainType::Field
+            };
+            tile.owner = player_id;
+            tile.ruling_city_coords = Some(Coords::from_index(city_idx, 11));
+            state.tiles.insert(i, tile);
+        }
+        for &i in &[partnered_a, partnered_b, isolated] {
+            state.resources.insert(i, Some(ResourceState { resource_type: ResourceType::Metal }));
+        }
+        let mut tribe = TribeState::default();
+        tribe.id = player_id;
+        tribe.tribe_type = TribeType::Imperius;
+        tribe.cities.push(crate::states::CityState {
+            idx: city_idx,
+            owner: player_id,
+            _territory: vec![city_idx, hub_site, partnered_a, partnered_b, isolated],
+            ..Default::default()
+        });
+        state.tribes.insert(player_id, tribe);
+
+        let game = Game { state };
+        let onto_partnered =
+            crate::moves::build::BuildMove::new(partnered_a, StructureType::Mine);
+        let onto_isolated =
+            crate::moves::build::BuildMove::new(isolated, StructureType::Mine);
+
+        let partnered_score = score_move(&game, &onto_partnered);
+        let isolated_score = score_move(&game, &onto_isolated);
+
+        assert!(
+            partnered_score - isolated_score >= 15.0,
+            "a Mine feeding the city's real best forge site ({partnered_score}) must score \
+             well above one with no partner anywhere ({isolated_score}), not tie with it"
         );
     }
 
