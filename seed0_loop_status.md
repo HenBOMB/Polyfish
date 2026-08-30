@@ -218,15 +218,34 @@ EXP_ELO_091's move-gen determinism fix.
      -1.56pp average, comfortably inside the noise floor — baseline
      reproduced 103's own gauge average almost exactly, confirming this
      isn't 103's gain being given back. Committed.
-- Current best game for the next analysis pass: [pending regeneration
-  with EXP_ELO_104 applied — see next log entry once run]. Prior best
-  (EXP_ELO_103 game, turn 23, 554 moves, score 8755, 12 lost, 13 killed,
-  **3 giants by t12 — first target hit this loop**) -- city 49 (the
-  contested city from the defend-signal investigation) held the whole
-  game. Still misses turn-count (<=15) and units-lost (<3) targets.
+- Current best game for the next analysis pass: the EXP_ELO_104 game
+  (turn 21, 509 moves, score 8245, 11 lost, 14 killed, 4 giants by t12).
+  Still misses turn-count (<=15) and units-lost (<3) targets, though by
+  a smaller margin than every prior iteration.
+- **EXP_ELO_105 was attempted and REVERTED** (2026-08-30, see the
+  ledger for the full writeup) — the retaliation/exposure pricing gap
+  below is still the diagnosed primary lever, but the specific fix
+  tried (a broad, always-on per-unit `unit_exposure` Φ term, gated to
+  Arm stance, `lethality^2`-damped) failed its own paired gauge:
+  -8.59pp average win rate across 2x2 cross-pairings (every pairing
+  negative, not noise-shaped), PLUS a real ~30-45% self-play throughput
+  regression from the added `hypo_damage` calls -- this despite the
+  mechanism being individually verified correct on 8/8 ground-truth
+  reference plies, and despite the single regenerated seed0 game
+  looking spectacular (turn 21->14, units_lost 11->3, clearing the
+  turn-count target for the first time). This is exactly the kind of
+  gap the loop's own paired-gauge discipline exists to catch — do NOT
+  ship a fix on the strength of one flagged game looking better.
+  Leading hypothesis for the disagreement (unverified): the seed0 game
+  is asymmetric (net usually pressing an advantage, where caution costs
+  little); the gauge is a symmetric mirror where the same caution may
+  cost real tempo in an evenly-matched fight. Code fully reverted to
+  EXP_ELO_104's committed state. Candidate directions for a future
+  retry are in the ledger entry — none yet designed.
 - Next candidate fix, identified by pass-3 `ml-expert` analysis of the
-  EXP_ELO_103 game (2026-08-30, not yet implemented — this is the
-  primary lever for the units_lost<3 target):
+  EXP_ELO_103 game (2026-08-30, diagnosis still believed correct; the
+  EXP_ELO_105 attempt above was the wrong IMPLEMENTATION of this fix,
+  not evidence the diagnosis itself is wrong):
   **retaliation damage and post-move exposure are priced at zero.**
   9-10 of 12 net-seat losses in the EXP_ELO_103 game trace directly or
   upstream to the same shape: a non-lethal chip Attack into a healthy
@@ -331,3 +350,24 @@ EXP_ELO_091's move-gen determinism fix.
   103's own gauge average almost exactly. **SHIPPED**. Next: design and
   implement the exposure-pricing fix (Finding 1), the loop's biggest
   remaining lever for units_lost<3.
+- **2026-08-30, iteration 6 (EXP_ELO_105, REVERTED)**: designed and
+  implemented `unit_exposures`/`unit_exposure` (per-unit lethality Φ
+  term) across two advisor passes -- the first pass caught a
+  suicide-relief exploit before any code was written (a doomed unit's
+  death is exposure RELIEF, so it must be priced strictly below the
+  unit's own `arm_value` death charge or dying becomes the cheap way
+  out) and resolved the cost-weighting question as the mechanism that
+  enforces that invariant. Ground-truth verified on 8 reference plies:
+  5 clean fixes (flagged chip attacks flip from winning their ply to
+  losing it, e.g. t13 idx191 49.32->-8.28 vs 39.81), 1 correctly
+  untouched (Grow-stance ply, outside this fix's deliberate scope), 2
+  unchanged as required (Giant kill, Summon-at-49 stay on top). Single
+  regenerated seed0 game: turn 21->14 (first time clearing the <=15
+  target), units_lost 11->3. Paired gauge (n=128, seed 770425, 2x2
+  cross-pairings): -8.59pp average, EVERY pairing negative (not a
+  noise pattern), plus every treatment throughput reading below every
+  baseline reading (~30-45% slower generation). **REVERTED** per the
+  loop's own rule -- a real, measured gauge regression beats one good
+  flagged game, however dramatic. Full writeup and candidate future
+  directions in the ledger; diagnosis (Finding 1) still believed
+  correct, this specific implementation was not the right fix.

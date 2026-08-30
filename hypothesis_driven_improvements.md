@@ -12242,3 +12242,203 @@ reference plies unaffected or improved as predicted), `cargo test --lib`
 bug during development), and a paired gauge with 2 reruns per arm
 showing a clean, noise-floor wash together clear this for shipping —
 a real, verified pricing bug closed with no measurable win-rate cost.
+
+## EXP_ELO_105 — retaliation damage and post-move exposure were priced at zero; added a continuous per-unit exposure potential
+
+CONTEXT: pass-3 `ml-expert` analysis (see EXP_ELO_104's context above)
+found the dominant remaining `units_lost` driver: 9-10 of 12 net-seat
+losses in the EXP_ELO_103 game trace directly or upstream to the same
+shape — a non-lethal chip Attack into a healthy Defender wins its ply
+by 5-25 points over a safe Step (bit-exact reproduced, e.g. t13 idx191
+Attack 59->60: 49.32 vs 40.00), the unit eats real retaliation, ends
+the ply at 1-2hp adjacent to what it just chipped, and dies on the
+enemy's very next move. Root cause, code-verified: (1) `scoring.rs`'s
+Attack base reads `damage_to_attacker` only via a binary
+`attacker_dies` check; (2) the Step branch has no threat/danger term
+at all; (3) the φ layer only priced exposure through CITIES
+(`city_risk`, the defend family), never through open-field units; (4)
+`rank_plies` is one-ply greedy, so the death (next enemy ply) is
+beyond every simulated horizon.
+
+DESIGN (worked out with the advisor across two passes — the first
+surfaced a live exploit before any code was written):
+
+1. **`unit_exposures(state, player, threats)`** (`combat.rs`, mirrors
+   `city_risks_with_threats`'s signature/frozen-threats pattern): for
+   each of the player's own units, sums `hypo_damage x attack_weight x
+   ghost_weight` across every entry in the (FOW-honest, THIS-turn)
+   `threats` list reachable via `can_attack_tile`, divides by the
+   unit's current health, caps at 1.0 -> `lethality`. Reuses
+   `hypo_damage`'s existing HP-sensitivity on BOTH sides (a wounded
+   attacker deals less, a wounded defender takes proportionally more),
+   so healing this unit or killing the threat both lower its lethality
+   for free -- no separate bookkeeping needed for either.
+2. **Pricing** (`goal_potential.rs`, Stance::Arm block only): `acc.sub(
+   "unit_exposure", SHAPE_GOAL_EXPOSURE_PER_COST * unit_worth(u) *
+   lethality^2 )`, summed per unit. Lethality is SQUARED, not linear:
+   ordinary front-line contact (lethality ~0.5) pays a quarter of a
+   near-certain kill (lethality ~1.0) -- continuous fire-rate
+   protection per the EXP_ELO_075 lesson, since this term (unlike
+   101-104's narrow triggers) evaluates on every unit every ply.
+3. **The invariant that makes this safe** (advisor's first-pass catch,
+   before any code existed): a Φ state term charging exposure means a
+   unit that DIES takes its own exposure charge with it -- a doomed
+   unit's death is `unit_exposure` RELIEF. Naively sized, this makes
+   suiciding the cheapest way to clear exposure, worse than the exact
+   bug this fix targets. Resolved by pricing `SHAPE_GOAL_EXPOSURE_PER_COST`
+   (30) strictly below `SHAPE_GOAL_ARM_PER_COST` (50, the per-star rate
+   `arm_value` already charges on death) -- max exposure per unit
+   (Warrior ~60, Giant ~300 at lethality=1.0) is always less than that
+   same unit's own death charge (Warrior 100, Giant 500), so death is
+   never the discount exit. This is WHY the cost-weighting isn't
+   optional: it's the mechanism enforcing the invariant, not a tuning
+   knob. **Scope limitation, deliberate**: `unit_exposure` only fires
+   under `Stance::Arm`, matching exactly where `arm_value`'s death
+   charge exists -- extending it to Grow/Save/Unlock would need a
+   different invariant-protection mechanism first (no death charge to
+   compare against there yet). Confirmed this leaves at least one of
+   the 9 flagged losses (t18, id=30) genuinely untouched, since that
+   ply runs under Grow -- registered as future work, not silently
+   dropped.
+
+VERIFICATION -- 8 reference plies probed via `attack_pricing_probe3`,
+covering every category the advisor asked for:
+- **3 sampled flagged chip attacks**: t13 idx191 (Attack 59->60) flips
+  from the recorded 49.319 to **-8.280** against the safe Step's
+  39.812 (was losing by ~9pp before the fix at 49.32 vs 40.00 -- a full
+  sign flip). t15 idx252 (Attack 68->57) flips identically: recorded
+  45.000 -> **-12.601** vs 39.812. t18 idx352 (Attack 68->78): **no
+  change at all** (both candidates `[MATCH]`, dphi=0.000) -- this ply
+  runs under `Stance::Grow`, exactly the deliberate scope limit above,
+  not a miss in the fix's own logic.
+- **2 suicide-chip candidates** (that also happen to be the Finding-3
+  irreproducible-score plies from EXP_ELO_104's ledger entry, now
+  moot as ranking questions since neither wins under HEAD regardless):
+  t11 idx147 (Attack 62->51, historically chosen at 1141.000) now
+  totals -608.260 vs the safe alternative's 142.812 (per the EXP_ELO_104
+  entry, the actual 79->67 candidate) / t11's own Attack 62->51 totals
+  327.667 vs Step's 336.792 -- loses either way, `unit_exposure`'s
+  relief on the suicide is +26.667 (well under the 100-point death
+  charge, invariant confirmed numerically).
+- **The Giant kill** (t11 idx150, Attack 41->51, `defender_dies`):
+  319.848, essentially unchanged (+0.188) from before EXP_ELO_105 --
+  stays clearly on top of every alternative, confirming the kill-vs-
+  chip distinction this term exists to price doesn't get muddied for
+  an actual kill.
+- **Summon-at-49** (EXP_ELO_103/104's own flagship ply): 715.213, down
+  a negligible 0.6 from EXP_ELO_104's 715.813 -- stays decisively on
+  top of the +43.5 alternative.
+- **The t6 heal ply** (EXP_ELO_104's flagship ply): `unit_exposure`
+  delta is exactly 0.000 for both candidates -- neither helped nor
+  hurt. Traced to the mechanism, not a bug: `unit_exposures` uses
+  THIS-TURN-only reachability (`can_attack_tile`), while `CityRisk`'s
+  own `attackers` list (which DID show a live threat here) uses a
+  multi-turn horizon (`THREAT_HORIZON`) -- the besieger genuinely can't
+  reach city 49 THIS turn at t6, so zero immediate exposure is the
+  correct read, not a missed opportunity for this specific ply.
+
+`cargo test --lib`: 338/338 passed (4 new `unit_exposures` tests in
+`combat.rs`). Building this surfaced two pre-existing test-fixture gaps
+in `goal_potential_tests.rs`, both fixed, neither a production bug:
+`contested_target_pays_one_extra_converger` used the owner-less/tile-less
+`unit_at` helper, which crashed once `unit_exposure` became the first
+code path to actually dereference `unit.owner`/`unit.coords.idx` for a
+real tribe/tile lookup (`get_defense_bonus`) -- fixed by setting owner
+and tiles explicitly in that one fixture, not by loosening production
+code for a case that can't occur in a real `GameState` (real states
+always have owner-matched units and a full tile grid).
+`defend_order_prices_hold_cover_and_leash`'s exact-equality assertion
+broke because standing on a Fortify-bonused city tile is now
+genuinely, correctly safer (lower lethality) than the field tile next
+to it -- a real, desirable effect layered on top of `SHAPE_GOAL_DEFEND_HOLD`,
+not a replacement for it; loosened to a lower-bound assertion with a
+comment explaining why.
+
+Not yet done: throughput check (this term is O(own units x threats) of
+`hypo_damage` per candidate per ply, unlike 101-104's narrower
+triggers -- advisor flagged this explicitly as a real training-cost
+question to measure, not assume) and the regenerated-game + paired
+gauge. Pre-registered falsifiers for those: (a) moves/sec should not
+collapse (baseline ~250 on this harness; a halving would be a real
+finding to record, not silently absorbed); (b) regenerated seed0
+should show fewer units lost with no new pathology (e.g. units frozen
+in place refusing to ever engage); (c) gauge must show no regression
+at the noise floor established by 101-104's own readings on this
+harness.
+
+REGENERATED SEED0 GAME (same recipe, same seed 1787500020): dramatic,
+almost suspiciously good single-game improvement. Turn 21 -> **14**
+(clears Verdi's <=15 target for the first time this loop). Units_lost
+11 -> **3** (from 12 originally, essentially at the <3 target boundary).
+Units_killed 14 -> 9 (game simply ends much faster). Giants by turn 12
+stays at 4. This is the single best game result of the entire loop.
+
+PAIRED GAUGE (n=128, seed 770425 harness, Imperius mirror,
+worktree-isolated at commit `85d7b8e` (EXP_ELO_104 shipped) for both
+arms, model.safetensors MD5-verified identical, binaries MD5-confirmed
+distinct): 2 runs per arm, run 2 done on BOTH sides for full symmetry
+given how much this result mattered.
+
+| | baseline | treatment | throughput (base/treat) |
+|---|---|---|---|
+| run 1 | 0.492188 (63/128) | 0.375000 (48/128) | 227.24 / 145.03 mv/s |
+| run 2 | 0.460938 (59/128) | 0.406250 (52/128) | 333.40 / 161.69 mv/s |
+| avg | 0.476563 | 0.390625 | -- |
+
+**This is a real, consistent regression, not noise.** Every one of the
+4 cross-pairings is negative (-5.47pp, -8.59pp, -8.59pp, -11.72pp;
+average -8.59pp) -- a true noise situation would show roughly half
+positive, half negative, not 4-for-4 in the same direction. Throughput
+tells the same story even more starkly: treatment's WORST reading
+(161.69) is still below baseline's WORST reading (227.24) -- every
+treatment run is slower than every baseline run, a ~30-45% generation
+throughput cost from the O(own-units x threats) `hypo_damage` calls
+this term adds per candidate per ply, exactly the cost the advisor
+flagged as a real possibility to measure rather than assume.
+
+WHY THE SINGLE GAME AND THE GAUGE DISAGREE (reasoned, not yet
+independently verified -- registered as the lead for any future
+attempt): the seed0 game is an ASYMMETRIC XinXi-vs-decaying-Imperius-
+anchor matchup where the net is generally pressing an advantage; the
+gauge is a SYMMETRIC Imperius mirror where both the tested side and
+the anchor are evenly matched. `unit_exposure` fires on nearly every
+ply for nearly every unit near contact (by design, for fire-rate
+reasons it's `lethality^2`-damped but never fully gated off for
+ordinary front-line combat, only for genuinely safe positions) --
+plausible that this generally discourages the net from committing to
+otherwise-necessary engagements/tempo in an evenly-matched fight
+(this project's own notes flag early aggression and tempo, e.g.
+"third city decides games", as unusually load-bearing in Polytopia),
+while in the seed0 game the net is often already ahead and caution
+costs little. This is a hypothesis, not a proven mechanism -- has NOT
+been ground-truth-verified the way EXP_ELO_101-104's mechanisms were.
+
+Disposition: **REVERTED**. Fails this loop's own operating rule ("if
+the paired gauge fails, revert and try a different mechanism -- do not
+force a fix through because it makes the one flagged game look
+better"). The underlying diagnosis (Finding 1: retaliation/exposure
+priced at zero) is very likely still correct and still the loop's
+biggest remaining lever -- the flagged plies' individual pricing fixes
+were verified correct and precise (8/8 reference plies, ground-truth
+matched to within 1 point in multiple cases) -- but THIS implementation
+(a broad, always-on per-unit Φ term at `lethality^2`, gated only by
+stance) is too blunt: real, measurable win-rate cost in the harness
+that matters, plus a real throughput cost neither this ledger nor the
+advisor's own risk-flagging anticipated fully. Candidate directions
+for a future attempt, none yet designed or advisor-reviewed: (a) gate
+exposure OFF when the unit's current move is itself en route to
+completing a valuable objective (mirroring how `unit_goal_approach`/
+`contest_second` already protect in-progress commitments) so it only
+fires on genuinely gratuitous exposure, not necessary engagement; (b)
+raise the power further (lethality^3+) or add a floor below which it
+doesn't fire at all, tightening the fire-rate beyond squared; (c)
+address the throughput cost first (cache/share `hypo_damage` results
+across a ply's sibling candidates, since most of a ply's candidates
+share the same board minus one unit's move) before re-attempting a
+gauge, since a 30-45% generation slowdown is itself disqualifying
+independent of the win-rate question. Code reverted to the EXP_ELO_104
+state; `unit_exposures`/`unit_exposures_default` and the two test-
+fixture fixes in `goal_potential_tests.rs` were NOT kept (see commit
+history -- this entry stands as the historical record of what was
+tried and why it didn't ship, per this project's append-only ledger
+discipline).
