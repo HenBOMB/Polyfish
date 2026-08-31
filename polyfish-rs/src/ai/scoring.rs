@@ -820,23 +820,33 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
             base + 8.0
         }
         CityRewardType::BorderGrowth => {
-            // Only worth it if border expansion covers valuable terrain
-            // Heuristic: smaller cities benefit more from border growth
+            // EXP_ELO_113: the old heuristic keyed on TOTAL existing
+            // territory (`city_territory < 10`), a proxy that conflates
+            // "already large" with "boxed in" — a city ringed by other
+            // cities/ocean scores identically to one on open frontier as
+            // long as their current territory sizes happen to land on the
+            // same side of an arbitrary threshold. Replaced with a direct
+            // count of tiles the NEXT border growth would actually newly
+            // claim (`get_square_indices` at `border_size + 1`, filtered to
+            // neutral `owner == 0` tiles — matching `claim_territory`'s own
+            // `force=false` filter exactly, since an enemy-owned tile in
+            // range is NOT actually claimable by this move) — the real
+            // quantity that determines whether the pick is worth anything,
+            // continuous instead of a single hardcoded cliff (CLAUDE.md's
+            // own "prefer continuous over discrete pricing" rule;
+            // EXP_ELO_096 measured +10.9pp from removing an analogous cliff).
             let city_idx = mv.target_idx().unwrap_or(0) as i32;
-            if let Some(tribe) = state.tribes.get(&player_id) {
-                let city_territory = tribe
-                    .cities
-                    .iter()
-                    .find(|c| c.idx == city_idx)
-                    .map(|c| c._territory.len())
-                    .unwrap_or(0);
-                if city_territory < 10 {
-                    base + 9.0 // Small city — border growth reveals/claims more
-                } else {
-                    base + 5.0 // Large city — pop growth is usually better
-                }
-            } else {
-                base + 5.0
+            let new_tiles = state.tribes.get(&player_id).and_then(|tribe| {
+                tribe.cities.iter().find(|c| c.idx == city_idx).map(|c| {
+                    crate::functions::get_square_indices(city_idx, c.border_size + 1, state.settings.size)
+                        .iter()
+                        .filter(|&&t| state.tiles.get(&t).map_or(false, |tl| tl.owner == 0))
+                        .count()
+                })
+            });
+            match new_tiles {
+                Some(n) => base + 2.0 + 0.6 * (n as f32).min(16.0),
+                None => base + 5.0,
             }
         }
 
@@ -1188,6 +1198,97 @@ mod tests {
             state.tiles.insert(i, tile);
         }
         state
+    }
+
+    fn city_state_with_border(idx: i32, border_size: i32) -> crate::states::CityState {
+        let mut city = crate::states::CityState::default();
+        city.idx = idx;
+        city.owner = 1;
+        city.border_size = border_size;
+        city
+    }
+
+    /// EXP_ELO_113: a city fully boxed in by already-owned tiles (zero new
+    /// claimable land) must score BorderGrowth well below PopGrowth's flat
+    /// `base+8.0` -- the old `city_territory < 10` proxy could still read
+    /// this city as "small" and hand it the `base+9.0` win regardless of
+    /// there being nothing left to claim.
+    #[test]
+    fn border_growth_scores_low_when_fully_boxed_in() {
+        let player_id = 1;
+        let mut state = explored_field_state(player_id);
+        let city_idx = 5 * 11 + 5;
+        let mut tribe = TribeState::default();
+        tribe.id = player_id;
+        tribe.tribe_type = TribeType::Imperius;
+        tribe.cities.push(city_state_with_border(city_idx, 1));
+        state.tribes.insert(player_id, tribe);
+        for t in crate::functions::get_square_indices(city_idx, 2, 11) {
+            state.tiles.get_mut(&t).unwrap().owner = player_id;
+        }
+        let mv = crate::moves::RewardMove::new(city_idx, CityRewardType::BorderGrowth);
+        let border_score = score_reward(&state, &mv);
+        let pop_mv = crate::moves::RewardMove::new(city_idx, CityRewardType::PopGrowth);
+        let pop_score = score_reward(&state, &pop_mv);
+        assert!(
+            border_score < pop_score,
+            "boxed-in BorderGrowth ({border_score}) should lose to PopGrowth ({pop_score})"
+        );
+    }
+
+    /// A city on an open frontier (nothing claimed nearby) must score
+    /// BorderGrowth clearly above PopGrowth -- the real new-tile count is
+    /// large regardless of the city's own current (small) total territory.
+    #[test]
+    fn border_growth_scores_high_on_an_open_frontier() {
+        let player_id = 1;
+        let mut state = explored_field_state(player_id);
+        let city_idx = 5 * 11 + 5;
+        let mut tribe = TribeState::default();
+        tribe.id = player_id;
+        tribe.tribe_type = TribeType::Imperius;
+        tribe.cities.push(city_state_with_border(city_idx, 1));
+        state.tribes.insert(player_id, tribe);
+        state.tiles.get_mut(&city_idx).unwrap().owner = player_id;
+        let mv = crate::moves::RewardMove::new(city_idx, CityRewardType::BorderGrowth);
+        let border_score = score_reward(&state, &mv);
+        let pop_mv = crate::moves::RewardMove::new(city_idx, CityRewardType::PopGrowth);
+        let pop_score = score_reward(&state, &pop_mv);
+        assert!(
+            border_score > pop_score,
+            "open-frontier BorderGrowth ({border_score}) should beat PopGrowth ({pop_score})"
+        );
+    }
+
+    /// A city ringed by ENEMY-owned tiles (not neutral) must score
+    /// BorderGrowth low too -- `claim_territory`'s real execution
+    /// (`force=false`) only claims `owner == 0` tiles, so an enemy border
+    /// in range is not actually claimable and must not count as "new".
+    #[test]
+    fn border_growth_scores_low_when_ringed_by_enemy_territory() {
+        let player_id = 1;
+        let enemy_id = 2;
+        let mut state = explored_field_state(player_id);
+        let city_idx = 5 * 11 + 5;
+        let mut tribe = TribeState::default();
+        tribe.id = player_id;
+        tribe.tribe_type = TribeType::Imperius;
+        tribe.cities.push(city_state_with_border(city_idx, 1));
+        state.tribes.insert(player_id, tribe);
+        state.tiles.get_mut(&city_idx).unwrap().owner = player_id;
+        for t in crate::functions::get_square_indices(city_idx, 2, 11) {
+            if t != city_idx {
+                state.tiles.get_mut(&t).unwrap().owner = enemy_id;
+            }
+        }
+        let mv = crate::moves::RewardMove::new(city_idx, CityRewardType::BorderGrowth);
+        let border_score = score_reward(&state, &mv);
+        let pop_mv = crate::moves::RewardMove::new(city_idx, CityRewardType::PopGrowth);
+        let pop_score = score_reward(&state, &pop_mv);
+        assert!(
+            border_score < pop_score,
+            "enemy-ringed BorderGrowth ({border_score}) should lose to PopGrowth ({pop_score}) -- enemy tiles aren't claimable"
+        );
     }
 
     #[test]

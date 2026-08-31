@@ -860,3 +860,47 @@ EXP_ELO_091's move-gen determinism fix.
   record of what Verdi actually watched; regenerated games go to new
   directories. Committed as its own commit (ledger + status + 5 probes,
   no production code changed yet).
+- **2026-08-31, iteration 13 continued (EXP_ELO_113 SHIPPED, EXP_ELO_114
+  code complete + gauge in progress)**: implemented the first two fixes
+  from the locked priority list.
+  **EXP_ELO_113** (BorderGrowth/PopGrowth pricing): fixed the discrete
+  `city_territory<10` threshold, replaced with a continuous new-tile
+  count (caught and fixed a real bug along the way -- the first
+  implementation over-counted enemy-owned tiles as claimable, per
+  `advisor()` review). Canonical-game regen is bit-identical --
+  idx141's BorderGrowth pick turns out to be defensible once the full
+  Δφ (not just the discrete base heuristic) is counted, since the
+  claimed area includes real forest+resource value the pre-existing
+  `forest_standing` term already prices. 352/352 lib tests. Paired
+  gauge (relaunched clean twice -- once for the buggy-diff kill, once
+  for a working-dir collision that clobbered the metrics file, neither
+  invalid run's data trusted): 770425 +0.00pp (70/128 both arms),
+  770553 +3.13pp (64/128 -> 68/128) -- both inside the ~7.8pp noise
+  floor, the pre-registered wash/small-positive bar cleanly met.
+  **SHIPPED.**
+  **EXP_ELO_114** (`city_open_exposed` standing Φ term): a new,
+  order-independent charge on any owned city that's open (no garrison)
+  and reachable by a visible enemy next turn, sized (P=25.0, risk-
+  scaled) against real ply margins so the T7 kill (idx88, margin 44.4)
+  survives while the T11 giant-vacate's specific compared alternative
+  (Research, margin 8.0) flips. 355/355 lib tests (one pre-existing
+  test's fixture needed a real fix -- an ungarrisoned test city now
+  legitimately trips the new term, unrelated to what that test was
+  checking; fixed the fixture, not the term). Canonical-game regen:
+  headline KPIs unchanged (turn 17, 4 lost, 9 killed, 6 giants), T7
+  kill unaffected (sizing held), but T11's city41 window does NOT
+  close -- the giant's vacate-Step wins a LATER ply once its one
+  cheaper alternative (Research) is spent, a genuine limit of a
+  state-potential term against a greedy per-ply executor. Honest,
+  documented, not chased further this entry.
+  Both fixes' full ledger writeups (sizing box, ground truth, ply-by-
+  ply verification) are in `hypothesis_driven_improvements.md`.
+  EXP_ELO_113 committed on its own (`scoring.rs` + ledger + this file)
+  once its gauge landed clean. EXP_ELO_114 still waits on its own
+  paired gauge (worktree-isolated at the EXP_ELO_113-final commit as
+  baseline) before a ship/revert call -- not bundled into the same
+  commit as 113, per the EXP_ELO_067 lesson. Next: run EXP_ELO_114's
+  gauge, write its final ledger disposition, ship or revert, then move
+  to iteration 13's remaining two fixes (#7 capital-consolidation --
+  needs an `ml-expert` design pass first per the locked priority list
+  -- and #4 scouting/belief-map wiring).

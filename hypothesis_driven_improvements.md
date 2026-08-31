@@ -13712,3 +13712,202 @@ best (win, turn <=17, units_lost <=4, giants >=6 by t12), paired gauge
 on both seed blocks (770425/770553), fire-rate diagnostics in band,
 one mechanism per EXP_ELO entry — the EXP_ELO_067 bundling failure is
 still the reason two changes never ship in the same commit.
+
+## EXP_ELO_113 — BorderGrowth/PopGrowth reward pricing: the discrete `city_territory<10` threshold replaced with a continuous new-tile count, refuting (not fixing) the flagged idx141 pick along the way
+
+CONTEXT: EXP_ELO_112 verified claim #3 (BorderGrowth at city49, idx141)
+as a real discrete-pricing bug: `scoring.rs::score_reward` priced
+`CityRewardType::BorderGrowth` via `city_territory < 10 ? base+9.0 :
+base+5.0` against `PopGrowth`'s flat `base+8.0` — a hardcoded threshold
+on TOTAL existing territory, disconnected from how much NEW territory
+the pick would actually claim. Direct EXP_ELO_097 template (same anti-
+pattern, same "prefer continuous over discrete pricing" fix shape).
+
+FIX (`src/ai/scoring.rs`): `BorderGrowth`'s branch now computes the real
+new-tile count — `get_square_indices(city_idx, city.border_size + 1,
+size)` filtered to `owner == 0` (neutral) tiles — and prices
+`base + 2.0 + 0.6 * new_tiles.min(16.0)`. The `owner == 0` filter
+matters: the first implementation used `owner != player_id` (excludes
+only MY tiles), which over-counts enemy-owned tiles in range as
+"claimable." Caught by `advisor()` review before shipping — `claim_
+territory`'s real execution (`force=false`, `actions/city.rs:127-132`)
+only claims `owner == 0` tiles, so an enemy-owned tile in range is not
+actually claimable by this move. Fixed before the gauge (the first
+gauge launch was killed and rebuilt with the corrected diff — no wasted
+gauge data was trusted). 3 new pinning tests: fully-boxed-in (all
+neighbor tiles owned by me) scores low, open-frontier (all neutral)
+scores high, enemy-ringed (all neighbor tiles owned by the OTHER
+player) also scores low — the last one is the regression test for the
+caught bug. 352/352 lib tests (was 349 pre-fix).
+
+GROUND TRUTH at the flagged ply (idx141, city49, `city_territory_probe`
++ new `reward_choice_probe3.rs`): territory was 9 (confirmed), and the
+corrected formula finds **7** genuinely new-and-claimable tiles (not 9
+— 2 of the original 9 were enemy-owned, caught by the same review) for
+a base score of 206.2 vs PopGrowth's 208.0 — BorderGrowth now LOSES in
+isolation (was 209 vs 208, a win, pre-fix). But the REAL total score
+(via `reward_choice_probe3` against the actual `rank_plies` pipeline)
+tells a different story: BorderGrowth 357.4 vs PopGrowth 336.2 —
+BorderGrowth still wins, by a WIDER margin than before. Root cause: the
+claimed area (`scratch_border_check`, one-off probe) includes 4 new
+Forest tiles and 1 Fruit resource tile, and the pre-existing (unrelated
+to this fix) `forest_standing` Δφ term already prices owned forests —
+a real, legitimate signal my base-score fix doesn't touch. **This
+specific pick was defensible all along**, once the full potential
+(not just the discrete base heuristic) is counted — the EXP_ELO_099
+shape (the flagged instance is refuted, the underlying mechanism bug
+is real and fixed regardless).
+
+VERIFICATION (regenerated canonical game, `replays/exp113_seed0_watch/`):
+bit-identical to `exp111_seed0_watch` — same turn (17), same units_lost
+(4), same units_killed (9), same giants-by-t12 (6). idx141 still picks
+BorderGrowth (confirmed via decisions.json diff) — the fix is a
+behavioral no-op on THIS canonical game, exactly consistent with the
+"this pick was actually fine" finding above, not a failure of the fix
+itself (which is proven correct in isolation by its own unit tests).
+
+PAIRED GAUGE: worktree-isolated, `6b9dd60` (baseline) vs `6b9dd60` +
+this diff (treatment), n=128 both seed blocks (770425, 770553), each
+(arm, seed) combination run from its own isolated working directory
+(the first attempt shared working directories across seeds within an
+arm and clobbered `.last_self_play_metrics.json` between them — caught
+before trusting any number, relaunched with 4 fully separate dirs).
+First launch (before that) used the pre-correction (enemy-tiles-
+included) diff and was killed before completion once THAT bug was
+caught — no data from either invalid run was used.
+
+| seed | baseline anchor_net_wr | treatment anchor_net_wr | delta |
+|---|---|---|---|
+| 770425 | 0.546875 (70/128) | 0.546875 (70/128) | +0.00pp |
+| 770553 | 0.500000 (64/128) | 0.531250 (68/128) | +3.13pp |
+
+Both non-negative (one exact tie, one small positive), both comfortably
+inside the project's own ~7.8pp n=128 noise floor — the pre-registered
+"wash or small positive is shippable" bar, cleanly met. Consistent with
+the canonical game's own bit-identical finding: this fix mostly
+corrects a LATENT discrete-pricing bug (real for cases the current
+seed0/Imperius-mirror corpus doesn't happen to stress hard) rather than
+changing behavior on the specific games these two harnesses generate.
+
+Disposition: **SHIPPED.**
+
+## EXP_ELO_114 — a standing `city_open_exposed` Φ term for a city left ungarrisoned and reachable mid-turn, independent of any Defend order
+
+CONTEXT: EXP_ELO_112 verified claims #1 and #5 as the same recurring
+pattern: a city's garrison vacates (an Attack that relocates on a kill,
+or a Step elsewhere) with no replacement, leaving the city open while a
+visible enemy sits within walk-in range — twice in one 17-turn game
+(city49/turn7, city41/turn11), both times with NO Defend order active
+for that city. Root mechanism (confirmed by reading `goal_potential_
+inner`): the entire existing cover/hold/recall apparatus
+(`defend_garrison_hold`/`defend_cover`/`defend_hold`/recall, the
+EXP_ELO_040-110 family) is gated behind `goal.orders.iter().any(Defend)`
+— it never engages at all for a city with no Defend order, which is
+exactly both flagged cases (`goal.orders` at T7 was `[Expand(21),
+Expand(43)]`; at T11 was `[Expand(43), Expand(79), Attack(24)]` — no
+Defend either time). Orders commit once per turn start
+(`oracle_macro::commit_macro_goal`); a mid-turn vacate is invisible
+until the next commit.
+
+Consulted `advisor()` before design (graveyard-adjacent territory —
+EXP_ELO_105/109's move-level exposure penalties measured net-negative
+from being scoped too broadly). Guidance, followed exactly: (1) the
+user's own prescriptions were "refill by end of turn" or "walk a
+warrior back," not "never open the window" — a move-level SUPPRESSION
+penalty (the EXP_ELO_111 Steps-only shape) can only prevent, it can't
+fund a same-turn repair; the right shape is a STANDING state potential,
+so a same-turn Train/step-back-in earns back what the vacate spent
+(the same regret-asymmetric shape as EXP_ELO_111, for free); (2) reuse
+`combat::city_risks`'s already-computed `open`/`arrives_next_turn`
+predicate rather than writing a second reachability model; (3) gate
+the new term off for any city already carrying a Defend order, so it
+doesn't double-pay on top of `defend_cover`/`defend_hold`.
+
+SIZING BOX (ground-truth, `find_ply_idx` + direct ply_trace inspection):
+idx88 (city49's T7 vacate, `Attack: 49->61`) wins by **44.4** over the
+next-best Step — a real kill; must NOT be suppressed (109's mistake).
+idx163's actual decision ply (found at ply_trace line 83, not the
+naive `find_ply_idx` hit) shows `Step 41->51` (175.97) beating the
+next-best non-self alternative, a Research pick (168.0), by only
+**8.0** — must clear this. `scratch_risk_check` (one-off probe) found
+`CityRisk.risk` varies by city: city41 post-vacate reads 0.450, city49
+post-vacate reads 1.000 — not saturated the same way, so the constant
+is scaled by `risk` (continuous, not a flat trigger) and sized against
+the EFFECTIVE (risk-scaled) charge: need `P*0.45 > 8` (P > 17.8) and
+`P*1.0 < 44.4` (P < 44.4). Landed on **P = 25.0**, centered with margin
+on both sides (effective 11.25 at city41, 25 at city49).
+
+FIX (`src/ai/reward/goal_potential.rs` + `goal_shape_consts.rs`): hoisted
+the existing `city_risks_with_threats`/`city_risks` call out from
+inside the `if ... any(Defend)` gate so it computes once regardless of
+whether any Defend order exists (avoids a second, duplicate scan — the
+existing Defend-order block below still reuses the same cached result).
+New block, unconditional on Defend orders: for every city risk where
+`open && arrives_next_turn` and the city ISN'T already named by a
+Defend order, `acc.sub("city_open_exposed", SHAPE_GOAL_CITY_OPEN_EXPOSED
+* r.risk)`. New diagnostic counters `CITY_OPEN_EXPOSED_EVALS`/`_FIRES`
+(mirrors EXP_ELO_111's pair), wired into `self_play`'s summary.
+
+One real regression caught by the full test suite (not by design intent
+— an honest side effect of adding a global term): `economy_completion::
+tests::stranded_progress_penalizes_only_uncompletable_unthreatened_
+cities` placed its test city with ZERO garrison for its entire run,
+which is exactly the state this new term prices — once an enemy Warrior
+appears nearby (that test's own final scenario), the new term now also
+fires, breaking a tight point-value assertion that expected ONLY the
+test's own "threat exemption" mechanism to move. Fixed by garrisoning
+the test city immediately before the enemy is introduced and
+re-baselining against a garrisoned reading, isolating the term this
+test actually checks (its own economy-completion concern) from the new,
+unrelated `city_open_exposed` signal — not by weakening the new term.
+3 new pinning tests for the term itself (fires when open+reachable with
+no order; zero once garrisoned; zero under an active Defend order).
+352/352 lib tests before this fix, 355/355 after (economy_completion's
+existing test count unchanged, net +3 new).
+
+VERIFICATION (regenerated canonical game with both EXP_ELO_113 and
+EXP_ELO_114 applied, `replays/exp114_seed0_watch/`): headline KPIs held
+— turn 17, units_lost 4, units_killed 9, giants-by-t12 6, decisive win,
+all identical to the pre-fix game. idx88's T7 kill (`Attack: 49->61`)
+is UNCHANGED, confirming the sizing held (44.4 margin comfortably
+survives a 25-effective charge). idx163's T11 vacate (`Step: 41->51`)
+is **partially affected but not closed**: the ply ordering shifted —
+`Research Organization` now wins the SPECIFIC comparison the sizing
+box was built against (the giant's Step candidate now scores below it,
+exactly as predicted), but the giant simply gets re-evaluated a few
+plies later in the SAME turn once Research is spent, and `Step 41->51`
+is STILL its best remaining option then — nothing else changed for it.
+`city_garrison_probe 41` confirms city41 is STILL `garrison=None` at
+end of turn 11 in the post-fix game, identically to before. **Honest
+finding, not a bug**: a standing Φ term prices the STATE, and correctly
+demotes the vacate below whatever ELSE is available at the ply it's
+compared against — but it cannot force a unit to stay home for an
+entire turn if vacating remains its single best move once cheaper
+alternatives (here, one Research pick) are exhausted. Closing this
+specific window fully would need either a bigger P (which the sizing
+box already shows breaks the T7 kill) or a genuinely different
+mechanism (e.g., an explicit same-turn recall/reassignment, closer to
+`defend_cover`'s own richer machinery, gated on there being no
+alternative unit to send instead) — registered as a real limitation,
+not chased further this entry per the same discipline that closed the
+exposure-pricing family in EXP_ELO_111/112.
+
+Fire-rate diagnostic (`CITY_OPEN_EXPOSED_FIRES`/`_EVALS`, single-game
+run): 2366/9716 (24.4%) — much higher than EXP_ELO_111's ~4%, but this
+counts every `goal_potential` evaluation across every candidate at
+every ply where SOME owned city is open+reachable (an ambient state,
+not a per-candidate trigger) — most of those evaluations charge the
+SAME amount on every candidate at that ply (the regret-asymmetric
+design point), so a high ambient rate is expected and not itself a red
+flag. The real question is the paired gauge.
+
+PAIRED GAUGE: not yet run (queued after EXP_ELO_113's gauge finishes —
+same worktree-isolation discipline, one variable at a time).
+
+Disposition: **implementation complete, tests green (355/355), sizing
+box holds on both original plies (no suppressed kill, correctly
+demoted at the compared ply) — but the fix does NOT close either
+originally-flagged window on this specific canonical game, for the
+greedy-per-ply reason explained above. Real, useful, well-tested
+mechanism; modest expectations for THIS seed's specific instances.
+Paired gauge still needed before any ship/revert call.**
