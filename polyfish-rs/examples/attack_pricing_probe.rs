@@ -159,8 +159,8 @@ fn main() {
 
     // Real, authoritative decomposition -- not a hand recomputation.
     use std::collections::HashMap;
-    let (phi_pre, bd_pre) = polyfish::ai::reward::goal_potential_breakdown(&view.state, POV, &goal, None, None, None, None);
-    let (phi_post, bd_post) = polyfish::ai::reward::goal_potential_breakdown(&probe.state, POV, &goal, None, None, None, None);
+    let (phi_pre, bd_pre) = polyfish::ai::reward::goal_potential_breakdown(&view.state, POV, &goal, None, None, None, None, None);
+    let (phi_post, bd_post) = polyfish::ai::reward::goal_potential_breakdown(&probe.state, POV, &goal, None, None, None, None, None);
     println!("\nphi_pre={phi_pre:.4} phi_post={phi_post:.4} dphi={:.4}", phi_post - phi_pre);
 
     let sum_by_label = |bd: &[(&'static str, f32)]| -> HashMap<&'static str, f32> {

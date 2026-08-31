@@ -36,7 +36,7 @@ fn dump_plan(label: &str, state: &polyfish::states::GameState, pov: i32, city: i
         th.risk, th.at_risk, th.need_damage, th.strike, th.attackers);
     let plan = polyfish::ai::combat::defend_plan(state, pov, th, &attack_targets);
     println!("  plan (real):  hold_margin={:.3} shortfall={:.3} assigned={:?}", plan.hold_margin, plan.shortfall, plan.assigned);
-    let open = polyfish::ai::combat::defend_plan_open_framing(state, pov, th, &attack_targets);
+    let open = polyfish::ai::combat::defend_plan_open_framing(state, pov, th, &attack_targets, None);
     println!("  plan (open):  hold_margin={:.3} shortfall={:.3} assigned={:?}", open.hold_margin, open.shortfall, open.assigned);
     let garrison = polyfish::functions::get_unit_at(state, city);
     println!("  garrison at {city}: {:?}", garrison.map(|u| (u.owner, u.health, u.unit_type)));

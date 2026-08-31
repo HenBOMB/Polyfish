@@ -13138,3 +13138,189 @@ shrink it and free budget for other units mid-comparison. After that
 lands, re-probe idx122/180/266 before deciding whether any residual
 move-level penalty is needed at all -- at 5-6 point margins on two of
 the three, the answer may be none.
+
+## EXP_ELO_110 — `defend_plan_impl`'s live own-roster health read floored against a per-ply pre-health snapshot, closing the self-wounding-chip subsidy category (b) diagnosed but did not fix
+
+CONTEXT: EXP_ELO_109's revert registered a concrete next lever --
+`defend_plan_impl` (`combat.rs`) reads each covering unit's health via
+a LIVE `hypo_damage(state, &pu, ...)` call, so a chip that wounds the
+ACTOR itself (retaliation) shrinks that unit's own waterfall
+contribution, which can free budget that re-credits OTHER covering
+units at a higher `credit_frac` -- self-wounding near a Defend order
+reads as Φ-PROFITABLE, not merely zero-priced (pass-7's "category (b)",
+which it recommended addressing via a move-level penalty instead of
+fixing directly; EXP_ELO_109 tried exactly that and failed twice).
+A pass-8 `ml-expert` design review, launched specifically to verify
+and design this fix before implementing (not just trust the
+description), confirmed the mechanism against the actual code and
+ground-truth-verified it against real plies before proposing a design
+-- independently re-verified here (both corrections below, plus the
+`defend_cover` fraction-pay code, checked directly against source):
+
+1. **The exact read** (`combat.rs`'s `defend_plan_impl` candidate
+   loop): `let pu = probe(u); ... hypo_damage(state, &pu, s, threat.city)`
+   -- `pu` is a fresh clone of the LIVE unit `u` (current, in-ply
+   health), not a frozen snapshot. `hypo_damage` feeds `attacker.health`
+   directly into `calculate_combat`'s attack-force term, so a wounded
+   `pu` computes strictly less `dmg`.
+2. **The asymmetry that turns this into a subsidy, not just a zero**:
+   `defend_cover` (`goal_potential.rs`) pays `sat * credit_frac` -- a
+   FRACTION -- while the waterfall (`combat.rs`'s `fill()`) consumes
+   ABSOLUTE `dmg * sat` damage. A self-wounded unit whose shrunken
+   contribution still fits the open gap keeps `credit_frac == 1.0`
+   (its own pay is UNCHANGED) while consuming far less of the shared
+   `need_damage` budget -- the freed slack cascades to every unit
+   after it in the fill order, which is exactly EXP_ELO_106's own
+   "the defend pool scales with the live besieger" bug pattern, but on
+   the OWN side instead of the enemy side.
+3. **A third payout channel beyond `defend_cover`/`defend_hold`**:
+   `defend_recall` also reads off the same floored/live `got`, so a
+   self-wound that opens a `shortfall` that didn't exist pre-move can
+   ALSO unlock the recall gradient -- confirmed on a real ply (idx242,
+   below).
+
+FIX (`combat.rs` + `goal_potential.rs` + `macro_exec.rs` +
+`attack_pricing_probe3.rs`, one commit for parity): `defend_plan_impl`
+gains `pre_health: Option<&FxHashMap<u32, f32>>` (unit id -> health at
+ply start); in the candidate loop, `pu.health = pu.health.max(h)` for
+any unit with a `pre_health` entry -- a FLOOR, not a clamp, so healing
+still raises the live contribution unchanged (nothing to floor against)
+while a self-wound within the same ply can no longer drop it below
+where it started. Threaded as a new trailing param through
+`defend_plan_open_framing` -> `goal_potential_inner` ->
+`goal_potential_with_belief`/`goal_potential_breakdown` (the same
+once-per-ply-computed-and-reused pattern as `threats`/`belief`, EXP_ELO_061);
+`defend_plan` (diagnostics-only, never wired into pricing) passes
+`None` unchanged, as do all ~20 test/diagnostic call sites this touched
+mechanically. `rank_plies` (`macro_exec.rs`) builds the map once per
+ply from `tribe.units.iter().map(|u| (u.id, u.health))` and passes it
+to BOTH `phi_pre` and `phi_post` -- a no-op on `phi_pre` by
+construction (live == pre there), engaging only post-move.
+`attack_pricing_probe3` updated in the same commit to build and pass
+the identical map, keeping `[MATCH]` authoritative for it.
+
+VERIFICATION -- all 3 pass-7-flagged plies, ground truth against
+`exp108_seed0_watch`, current HEAD with the fix applied:
+- idx122 (t9, id14's fatal chip): total **125.000 -> 45.000**
+  (`defend_hold`'s +80 no longer appears at all). Research (unaffected,
+  160.000) now wins by 115 -- was losing by 6.2.
+- idx180 (t12, id16's fatal chip): total **623.570 -> 45.000**
+  (`defend_cover`'s +578.571 gone entirely). The safe Step (unaffected,
+  527.638) now wins by **482.638** -- a complete reversal from losing
+  by 95.9. This is the ply the advisor's pre-registered sizing-box math
+  flagged as needing the largest penalty under EXP_ELO_109's design;
+  fixing the subsidy directly removes the need for that penalty on
+  this ply entirely, exactly as pass-8 predicted.
+- idx266 (t15, id28's fatal chip): **unchanged**, 45.000 vs Recover's
+  40.000, chip still wins. `dphi=0.000` on both -- there is no Defend
+  order active at t15 (goal is `Attack 24` only), so this fix cannot
+  engage; this loss is genuinely a different, still-unaddressed
+  mechanism, exactly as pass-8 predicted it would NOT be fixed here.
+
+VERIFICATION -- two NEW reference plies pass-8 found and predicted,
+both confirmed bit-exact:
+- idx241 (t14, `Attack 64->52`, id3's chip): **125.000 -> 45.000**,
+  same signature as idx122. Its runner-up (`Attack 53->52`, also a
+  self-wound) independently drops to the same **45.000** -- a tie
+  decided by sort order. Registered as a known, benign artifact (not
+  engineered around -- would be scope creep beyond the verified fix);
+  either way a chip still wins over the ~40.7 Steps, correctly grinding
+  down the Defender.
+- idx242 (t14, `Attack 53->52`): **304.717 -> 66.621** (base 65 +
+  `city_risk` +1.62; the old +66.667 `defend_hold`/+171.429
+  `defend_recall` subsidy gone). Step 71->59 (unaffected, 40.729)
+  still loses -- the chip is retained but correctly deflated, exactly
+  the "correctly deflated, not flipped" shape pass-8 predicted for a
+  ply whose base score alone already favors attacking.
+
+VERIFICATION -- must-not-regress: EXP_ELO_104's flagship t6 heal ply
+(`Recover` at city 49, `exp103_seed0_watch`, trace-line 28, idx77):
+Δφ **0.000** exactly, bit-exact unchanged -- the floor is provably a
+no-op when live health is already at or above the ply-start value,
+confirming the heal/reinforce gradient this whole family of fixes
+(103/104/106) depends on survives completely intact. The 5 standard
+reference plies (idx291/358 from EXP_ELO_106, idx149 from EXP_ELO_108,
+idx369 from EXP_ELO_107, idx447 from EXP_ELO_101) all reprobed
+bit-exact unchanged against their own original diagnostic games.
+
+`cargo test --lib`: 342/342 passed (was 340; 2 new pinning tests --
+`pre_health_floor_closes_the_shortfall_a_self_wound_would_open` and
+`pre_health_floor_does_not_clamp_a_healed_unit_back_down`, both on
+`defend_plan_open_framing` directly with a synthetic wounded/healed
+covering unit).
+
+VERIFICATION -- regenerated game (`exp110_seed0_watch`, same seed
+1787500020, canonical recipe): last turn **17** (held), units_lost
+**5** (held), units_killed **9** (held), giants by t12 **5 -> 6**
+(improved). Throughput 52.19 moves/sec, up from the EXP_ELO_108
+baseline's 38.56 -- the floor is an O(1) hashmap lookup per candidate,
+not a rescan, so no throughput cost (this is exactly what separates
+this design from EXP_ELO_105's O(own-units x threats) rescan that sank
+its gauge on cost alone). EXP_ELO_085's EndTurn-revival tripwire:
+2.475% (established band 1.4-3.0%, no misfire).
+
+Units_lost held rather than dropping is a real, checked-not-assumed
+finding, not a discrepancy swept under the rug: id14 (t9) and id16
+(t12) STILL die in the regenerated game. Traced concretely (unit-ID
+diff across turns, `examples/lost_units_probe.rs`, a new small tool)
+and confirmed via the actual turn-9 command sequence: in the baseline,
+`Attack 51->50` (id14's chip) is played BEFORE `Research` within the
+turn; in the fixed game, it moves to AFTER `Research` -- the fix
+correctly demotes the chip's RELATIVE priority against the specific
+alternative it was mispriced against, exactly as ground-truth verified.
+But `rank_plies` decides ply-by-ply within a turn, not the whole turn
+at once -- once Research (and everything else better) is consumed,
+the chip is still the best REMAINING legal candidate at that later
+point and still gets played, and id14 still dies to the enemy's next
+turn. This is a correct, verified pricing fix interacting with a
+separate, structural limitation (greedy per-ply sequencing, not a
+global per-turn plan) this fix was never designed to address --
+consistent with pass-7's own classification of id14/id16 as
+"retaliation/exposure" losses whose ROOT pricing bug this fixes, not a
+promise that fixing the pricing alone prevents the unit ever attacking
+again once nothing better remains.
+
+PAIRED GAUGE (n=128 per block, seed 770425 + disjoint 770553, Imperius
+mirror, worktree-isolated at commit `ab05449` (EXP_ELO_109 reverted)
+for both arms, model.safetensors MD5-verified identical, binaries
+MD5-confirmed distinct):
+
+| seed block | baseline anchor_net_wr | treatment anchor_net_wr | Δ |
+|---|---|---|---|
+| 770425 | 0.500000 | 0.523438 | **+2.34pp** |
+| 770553 | 0.539063 | 0.570313 | **+3.13pp** |
+
+Both independent blocks land positive with a consistent sign and
+similar magnitude -- individually inside the ~7.8pp noise floor, but
+two disjoint 128-game samples both landing on the same-direction,
+similar-size delta is the same "not noise-shaped" reasoning EXP_ELO_106
+used to clear its own pair (+5.47pp/+4.69pp). EndTurn-revival tripwire
+stayed in-band on all 4 arms (1.533%-1.635%). Throughput 120-139
+moves/sec across all 4 arms, consistent with the single-game reading
+-- no cost regression from running all 4 gauge arms in parallel either.
+
+This also closes EXP_ELO_105's "why do the single game and the gauge
+disagree" hypothesis a second way (EXP_ELO_109 already refuted it by
+regressing the asymmetric game directly): the SAME underlying
+diagnosis (retaliation/exposure mispricing), fixed via the CORRECT
+mechanism (a Φ-potential-family fix on the actual pricing bug, not a
+bolted-on move-level penalty), improves BOTH the asymmetric canonical
+game (giants +1, nothing else worse) AND the symmetric mirror gauge
+(both blocks positive) -- there was never a real asymmetric-vs-symmetric
+tension in the diagnosis itself, only in EXP_ELO_109's specific,
+now-abandoned implementation of it.
+
+Disposition: **SHIPPED**. Ground-truth verified on 3 flagged + 2 newly
+discovered reference plies (all exactly as pass-8 predicted, including
+correctly predicting idx266 would NOT be fixed), 7 must-not-regress
+plies held bit-exact including EXP_ELO_104's own flagship heal ply,
+342/342 tests, a regenerated game that holds on 3 KPIs and improves on
+a 4th with no throughput cost, and a paired gauge with a consistent
+positive signal on two independent seed blocks -- clears every bar
+EXP_ELO_109 failed. Next candidate lever: id28's t15 death (idx266)
+remains genuinely unpriced (no Defend order active at that ply) and
+needs a different mechanism than this fix's family; the 2
+structurally-forced losses pass-7 classified (id7 t6 forced-vacate,
+id12 t12 Catapult-range geometry) remain out of scope for any pricing
+fix. units_lost is still the loop's one open KPI (target <3, currently
+5 held) -- id28's mechanism is the clearest next lever toward it.

@@ -786,7 +786,7 @@ pub fn defend_plan(
     threat: &CityRisk,
     attack_targets: &[i32],
 ) -> DefendPlan {
-    defend_plan_impl(state, player, threat, attack_targets, false)
+    defend_plan_impl(state, player, threat, attack_targets, false, None)
 }
 
 /// EXP_ELO_103 diagnostic: `defend_plan` but ALWAYS uses the sieged/open
@@ -794,22 +794,44 @@ pub fn defend_plan(
 /// present. Used to hand-verify whether decoupling `defend_cover`'s
 /// waterfall cap from the garrisoned branch's collapsed need_damage would
 /// actually restore credit to nearby non-garrison units, before committing
-/// to that restructuring. Not wired into any pricing path yet.
+/// to that restructuring. This IS the framing `goal_potential_inner` wires
+/// into pricing (the doc above predates that; kept for history).
 pub fn defend_plan_open_framing(
     state: &GameState,
     player: PlayerId,
     threat: &CityRisk,
     attack_targets: &[i32],
+    pre_health: Option<&rustc_hash::FxHashMap<u32, f32>>,
 ) -> DefendPlan {
-    defend_plan_impl(state, player, threat, attack_targets, true)
+    defend_plan_impl(state, player, threat, attack_targets, true, pre_health)
 }
 
+/// EXP_ELO_110: `pre_health` floors each covering candidate's health at its
+/// value from the START of the ply (unit id -> health), never below it.
+/// Position/`sat` stay fully live -- only the `hypo_damage` input is
+/// floored. Without this, a chip that wounds the ACTING unit itself (via
+/// retaliation) shrinks that unit's own contribution to the waterfall,
+/// which can free up budget that re-credits OTHER covering units at a
+/// higher `credit_frac` -- since `defend_cover` pays a FRACTION
+/// (`sat * credit_frac`) while the waterfall consumes ABSOLUTE damage
+/// (`dmg * sat`), a self-wounded unit's own pay can stay unchanged while it
+/// eats far less of the shared budget, making self-wounding attacks near a
+/// Defend order look artificially profitable rather than merely zero-
+/// priced (ground-truth verified on seed0 turn12 idx180: +107 of a +579
+/// `defend_cover` swing was exactly this artifact). `max(pre, live)` is a
+/// floor, not a clamp -- healing/reinforcement still raises a unit's
+/// contribution normally (EXP_ELO_104/106's gradients are `live > pre`,
+/// unaffected), only a HP drop within this same ply is blocked from
+/// shrinking it. `None` (every caller except `rank_plies`'s real
+/// trajectory and its `attack_pricing_probe3` parity twin) is byte-for-byte
+/// today's live-only behavior.
 fn defend_plan_impl(
     state: &GameState,
     player: PlayerId,
     threat: &CityRisk,
     attack_targets: &[i32],
     force_open_framing: bool,
+    pre_health: Option<&rustc_hash::FxHashMap<u32, f32>>,
 ) -> DefendPlan {
     let size = state.settings.size;
     let garrison = get_true_unit_at(state, threat.city).filter(|u| u.owner == player);
@@ -892,7 +914,12 @@ fn defend_plan_impl(
                 continue;
             }
             let is_garrison = u.coords.idx == threat.city;
-            let pu = probe(u);
+            let mut pu = probe(u);
+            if let Some(pre) = pre_health {
+                if let Some(&h) = pre.get(&u.id) {
+                    pu.health = pu.health.max(h);
+                }
+            }
             let sat = if is_garrison || can_attack_tile(state, &pu, threat.city) {
                 1.0
             } else if d <= 2 * m {
@@ -1102,7 +1129,7 @@ mod risk_tests {
         let threats = threat_units(&state, 1);
 
         let (_, bd_before) = crate::ai::reward::goal_potential_breakdown(
-            &state, 1, &goal, Some(&aux), Some(&threats), None, None,
+            &state, 1, &goal, Some(&aux), Some(&threats), None, None, None,
         );
         assert!(
             !bd_before.iter().any(|(k, _)| *k == "defend_kill_advance"),
@@ -1114,7 +1141,7 @@ mod risk_tests {
         state.tribes.get_mut(&2).unwrap().units.clear();
         state.tribes.get_mut(&1).unwrap().units[0].coords = Coords::from_index(37, 11);
         let (_, bd_after) = crate::ai::reward::goal_potential_breakdown(
-            &state, 1, &goal, Some(&aux), Some(&threats), None, None,
+            &state, 1, &goal, Some(&aux), Some(&threats), None, None, None,
         );
         let fired = bd_after.iter().find(|(k, _)| *k == "defend_kill_advance");
         assert!(
@@ -1431,6 +1458,68 @@ mod risk_tests {
             lethal_threat_weight(&state, &wounded, &threats),
             0.0,
             "a threat this candidate's own move killed must not count, even off the frozen snapshot"
+        );
+    }
+
+    /// EXP_ELO_110: without `pre_health`, a covering unit wounded down to
+    /// 1hp contributes almost nothing to the waterfall, leaving a real
+    /// shortfall. With `pre_health` flooring it back to its value at ply
+    /// start, its contribution is what it actually was and the shortfall
+    /// closes -- the fix for the self-wounding-chip subsidy pass-7/8
+    /// diagnosed (`defend_cover`/`defend_hold`/`defend_recall` all read
+    /// `shortfall`/`hold_margin` off this same waterfall).
+    #[test]
+    fn pre_health_floor_closes_the_shortfall_a_self_wound_would_open() {
+        let mut state = board(60);
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(61, UnitType::Archer, 2));
+        let mut a = unit_at(71, UnitType::Warrior, 1);
+        a.id = 5;
+        let full_health = a.health;
+        a.health = 1.0;
+        state.tribes.get_mut(&1).unwrap().units.push(a);
+
+        let risks = city_risks(&state, 1);
+        assert_eq!(risks.len(), 1);
+        let threat = &risks[0];
+
+        let live_plan = defend_plan_open_framing(&state, 1, threat, &[], None);
+        assert!(live_plan.shortfall > 0.0, "a 1hp covering unit alone must leave a real shortfall");
+
+        let mut pre = rustc_hash::FxHashMap::default();
+        pre.insert(5u32, full_health);
+        let floored_plan = defend_plan_open_framing(&state, 1, threat, &[], Some(&pre));
+        assert!(
+            floored_plan.shortfall < live_plan.shortfall,
+            "flooring the self-wound to its pre-ply health must shrink the shortfall: live {}, floored {}",
+            live_plan.shortfall, floored_plan.shortfall
+        );
+    }
+
+    /// The other half of the same gate: `pre_health` is a FLOOR, not a
+    /// clamp. A unit that HEALS within the ply (live > pre) must still
+    /// get credit for its higher live health -- the EXP_ELO_104/106
+    /// heal/reinforce gradients this fix must not break.
+    #[test]
+    fn pre_health_floor_does_not_clamp_a_healed_unit_back_down() {
+        let mut state = board(60);
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(61, UnitType::Archer, 2));
+        let mut a = unit_at(71, UnitType::Warrior, 1);
+        a.id = 5;
+        let full_health = a.health;
+        state.tribes.get_mut(&1).unwrap().units.push(a);
+
+        let risks = city_risks(&state, 1);
+        let threat = &risks[0];
+        let live_plan = defend_plan_open_framing(&state, 1, threat, &[], None);
+
+        // pre-ply health was much lower (this unit healed up before acting) --
+        // the floor must not claw the live contribution back down to it.
+        let mut pre = rustc_hash::FxHashMap::default();
+        pre.insert(5u32, (full_health * 0.1).max(1.0));
+        let floored_plan = defend_plan_open_framing(&state, 1, threat, &[], Some(&pre));
+        assert_eq!(
+            floored_plan.shortfall, live_plan.shortfall,
+            "a healed unit's live (higher) health must be used unchanged, not floored down"
         );
     }
 }

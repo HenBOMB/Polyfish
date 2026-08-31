@@ -247,6 +247,7 @@ fn main() -> anyhow::Result<()> {
         None,
         Some(&store),
         Some(&belief),
+        None,
     );
     let pre_agg: HashMap<&'static str, f32> = aggregate(&bd_pre).into_iter().collect();
 
@@ -274,6 +275,7 @@ fn main() -> anyhow::Result<()> {
             None,
             Some(&store),
             Some(&belief),
+            None,
         );
         undo(&mut game.state);
         let post_agg: HashMap<&'static str, f32> = aggregate(&bd_post).into_iter().collect();

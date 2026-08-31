@@ -310,6 +310,21 @@ pub fn rank_plies(
     } else {
         None
     };
+    // EXP_ELO_110: each own unit's health at ply start, so the Defend
+    // waterfall (`combat::defend_plan_impl`) can floor a covering unit's
+    // contribution against a self-wound shrinking it mid-comparison,
+    // without needing a live re-derivation. Same once-per-ply reuse
+    // pattern as `threats`/`belief` above; passed to BOTH phi_pre and
+    // phi_post below (a no-op on phi_pre, since live == pre there by
+    // construction — the floor only ever engages post-move).
+    let pre_health: Option<rustc_hash::FxHashMap<u32, f32>> = if lambda != 0.0 {
+        game.state
+            .tribes
+            .get(&player)
+            .map(|t| t.units.iter().map(|u| (u.id, u.health)).collect())
+    } else {
+        None
+    };
     let phi_pre = if lambda != 0.0 {
         reward::goal_potential_with_belief(
             &game.state,
@@ -319,6 +334,7 @@ pub fn rank_plies(
             threats.as_deref(),
             unit_goals,
             belief.as_ref(),
+            pre_health.as_ref(),
         )
     } else {
         0.0
@@ -345,6 +361,7 @@ pub fn rank_plies(
                         threats.as_deref(),
                         unit_goals,
                         belief.as_ref(),
+                        pre_health.as_ref(),
                     );
                     if let Some(path) = probe_path {
                         let phi_post_no_aux = reward::goal_potential_with_threats(

@@ -52,7 +52,7 @@ pub fn goal_potential_with_unit_goals(
     threats: Option<&[(crate::states::UnitState, f32)]>,
     unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
 ) -> f32 {
-    goal_potential_with_belief(state, player, goal, aux, threats, unit_goals, None)
+    goal_potential_with_belief(state, player, goal, aux, threats, unit_goals, None, None)
 }
 
 /// Same as [`goal_potential_with_unit_goals`], but additionally weights the
@@ -62,7 +62,11 @@ pub fn goal_potential_with_unit_goals(
 /// corner-count/uniform-progress behavior. `belief` is a pure function of
 /// the explored set (`MapBelief::observe`), so it is safe to compute once
 /// per ply and reuse across every candidate's phi_post the same way
-/// `threats` already is — see `macro_exec::rank_plies`.
+/// `threats` already is — see `macro_exec::rank_plies`. `pre_health`
+/// (EXP_ELO_110, unit id -> health at ply start) floors the Defend
+/// waterfall's own-roster contributions against a self-wound shrinking them
+/// mid-comparison — see `combat::defend_plan_impl`'s doc comment. Also
+/// safe to compute once per ply and reuse for both phi_pre and phi_post.
 pub fn goal_potential_with_belief(
     state: &GameState,
     player: i32,
@@ -71,8 +75,9 @@ pub fn goal_potential_with_belief(
     threats: Option<&[(crate::states::UnitState, f32)]>,
     unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
     belief: Option<&crate::ai::belief::map::MapBelief>,
+    pre_health: Option<&rustc_hash::FxHashMap<u32, f32>>,
 ) -> f32 {
-    goal_potential_inner(state, player, goal, aux, threats, unit_goals, belief, &mut None)
+    goal_potential_inner(state, player, goal, aux, threats, unit_goals, belief, pre_health, &mut None)
 }
 
 /// Aug 2026 (reward_lab): same computation as [`goal_potential_with_unit_goals`],
@@ -93,11 +98,13 @@ pub fn goal_potential_breakdown(
     threats: Option<&[(crate::states::UnitState, f32)]>,
     unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
     belief: Option<&crate::ai::belief::map::MapBelief>,
+    pre_health: Option<&rustc_hash::FxHashMap<u32, f32>>,
 ) -> (f32, Vec<(&'static str, f32)>) {
     let mut bd = Vec::new();
     let mut sink = Some(&mut bd);
-    let phi =
-        goal_potential_inner(state, player, goal, aux, threats, unit_goals, belief, &mut sink);
+    let phi = goal_potential_inner(
+        state, player, goal, aux, threats, unit_goals, belief, pre_health, &mut sink,
+    );
     (phi, bd)
 }
 
@@ -147,6 +154,7 @@ fn goal_potential_inner(
     threats: Option<&[(crate::states::UnitState, f32)]>,
     unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
     belief: Option<&crate::ai::belief::map::MapBelief>,
+    pre_health: Option<&rustc_hash::FxHashMap<u32, f32>>,
     breakdown: &mut Option<&mut Vec<(&'static str, f32)>>,
 ) -> f32 {
     use crate::ai::oracle_macro::{OrderKind, Stance};
@@ -682,7 +690,7 @@ fn goal_potential_inner(
             // stable, garrison-independent read of "how much defense does
             // this city objectively need" so a covering unit's own value
             // doesn't evaporate the moment a teammate closes the gap.
-            let plan = crate::ai::combat::defend_plan_open_framing(state, player, th, &attack_targets);
+            let plan = crate::ai::combat::defend_plan_open_framing(state, player, th, &attack_targets, pre_health);
             // EXP_ELO_096: credit scales with the unit's own contribution
             // (credit_frac), not a flat per-unit share — a strong unit and
             // a barely-relevant one no longer pay identically. The garrison

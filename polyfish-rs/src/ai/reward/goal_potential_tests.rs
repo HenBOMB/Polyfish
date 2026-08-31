@@ -861,7 +861,7 @@ use crate::types::UnitType;
             stance: Stance::Grow,
             save_target: None,
         };
-        let (_, bd_before) = goal_potential_breakdown(&state, 1, &goal, None, None, None, None);
+        let (_, bd_before) = goal_potential_breakdown(&state, 1, &goal, None, None, None, None, None);
         let siege_before: f32 = bd_before
             .iter()
             .filter(|(k, _)| *k == "attack_siege_hold")
@@ -878,7 +878,7 @@ use crate::types::UnitType;
         // check the returned CityState's own .owner -- which Vec holds it
         // is not consulted).
         state.tribes.get_mut(&2).unwrap().cities[0].owner = 1;
-        let (_, bd_after) = goal_potential_breakdown(&state, 1, &goal, None, None, None, None);
+        let (_, bd_after) = goal_potential_breakdown(&state, 1, &goal, None, None, None, None, None);
         let capture_after: f32 = bd_after
             .iter()
             .filter(|(k, _)| *k == "attack_capture_complete")
@@ -1140,7 +1140,7 @@ use crate::types::UnitType;
         // between real plies, not mid-comparison).
         state.tribes.get_mut(&1).unwrap().units.retain(|u| u.id != PURSUER_ID);
 
-        let (_, bd) = goal_potential_breakdown(&state, 1, &goal, None, None, Some(&store), None);
+        let (_, bd) = goal_potential_breakdown(&state, 1, &goal, None, None, Some(&store), None, None);
         assert!(
             !bd.iter().any(|(k, _)| *k == "unit_goal_approach_unassigned"),
             "a dead pursuer's target must not free up unassigned-gradient credit for a different unit mid-comparison: {bd:?}"
@@ -1271,7 +1271,7 @@ use crate::types::UnitType;
         aux: Option<&crate::ai::oracle_macro::GoalAux>,
         unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
     ) -> Option<f32> {
-        let (_, bd) = goal_potential_breakdown(state, 1, goal, aux, None, unit_goals, None);
+        let (_, bd) = goal_potential_breakdown(state, 1, goal, aux, None, unit_goals, None, None);
         bd.into_iter().find(|(label, _)| *label == "unit_train_opportunity_cost").map(|(_, v)| v)
     }
     /// The core case: no threat, one live Expand target already covered by
@@ -1360,7 +1360,7 @@ use crate::types::UnitType;
         store.assign(CAPTURER_ID, UnitGoal { kind: OrderKind::Expand, target: RUIN_IDX });
 
         let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
-        let (_, bd) = goal_potential_breakdown(&state, 1, &goal, None, None, Some(&store), None);
+        let (_, bd) = goal_potential_breakdown(&state, 1, &goal, None, None, Some(&store), None, None);
         let complete: f32 =
             bd.iter().filter(|(l, _)| *l == "unit_goal_complete").map(|(_, v)| v).sum();
         assert!(
@@ -1398,7 +1398,7 @@ use crate::types::UnitType;
         let goal =
             MacroGoal { orders: vec![(OrderKind::Expand, RUIN_IDX)], stance: Stance::Grow, save_target: None };
         let approach = |s: &GameState| -> f32 {
-            let (_, bd) = goal_potential_breakdown(s, 1, &goal, None, None, None, None);
+            let (_, bd) = goal_potential_breakdown(s, 1, &goal, None, None, None, None, None);
             bd.iter().filter(|(l, _)| *l == "expand_approach").map(|(_, v)| v).sum()
         };
 
@@ -1560,7 +1560,7 @@ use crate::types::UnitType;
         };
         let explorer_term = |s: &GameState| -> f32 {
             let belief = MapBelief::observe(s, 1);
-            let (_, bd) = goal_potential_breakdown(s, 1, &goal, None, None, None, Some(&belief));
+            let (_, bd) = goal_potential_breakdown(s, 1, &goal, None, None, None, Some(&belief), None);
             bd.iter().filter(|(l, _)| *l == "explorer").map(|(_, v)| v).sum()
         };
 
@@ -1656,12 +1656,12 @@ use crate::types::UnitType;
             stance: crate::ai::oracle_macro::Stance::Grow,
             save_target: None,
         };
-        let (_, bd) = goal_potential_breakdown(&state, 1, &goal, None, None, None, None);
+        let (_, bd) = goal_potential_breakdown(&state, 1, &goal, None, None, None, None, None);
         let explorer: f32 = bd.iter().filter(|(l, _)| *l == "explorer").map(|(_, v)| v).sum();
 
         let mut backline = state.clone();
         backline.tiles.get_mut(&60).unwrap().capital_of = 0;
-        let (_, bd2) = goal_potential_breakdown(&backline, 1, &goal, None, None, None, None);
+        let (_, bd2) = goal_potential_breakdown(&backline, 1, &goal, None, None, None, None, None);
         let non_capital: f32 = bd2.iter().filter(|(l, _)| *l == "explorer").map(|(_, v)| v).sum();
 
         assert!(

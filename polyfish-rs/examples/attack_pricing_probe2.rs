@@ -106,12 +106,12 @@ fn evaluate(
     };
     let base = scoring::score_move_with_unit_goals(true_game, m.as_ref(), None, None);
     let (phi_pre, bd_pre) = reward::goal_potential_breakdown(
-        &view.state, pov, goal, Some(aux), Some(threats), None, Some(belief),
+        &view.state, pov, goal, Some(aux), Some(threats), None, Some(belief), None,
     );
     let mut probe = Game { state: view.state.clone() };
     let undo = probe.simulate_move(m.as_ref());
     let (phi_post, bd_post) = reward::goal_potential_breakdown(
-        &probe.state, pov, goal, Some(aux), Some(threats), None, Some(belief),
+        &probe.state, pov, goal, Some(aux), Some(threats), None, Some(belief), None,
     );
     if let Some(undo) = undo {
         undo(&mut probe.state);

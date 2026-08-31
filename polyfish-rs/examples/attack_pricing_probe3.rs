@@ -150,6 +150,7 @@ fn evaluate(
     unit_goals: &UnitGoalStore,
     threats: &[(polyfish::states::UnitState, f32)],
     belief: &MapBelief,
+    pre_health: &rustc_hash::FxHashMap<u32, f32>,
     pov: i32,
     move_json: &serde_json::Value,
 ) {
@@ -160,12 +161,12 @@ fn evaluate(
     };
     let base = scoring::score_move_with_unit_goals(true_game, m.as_ref(), Some(unit_goals), None);
     let (phi_pre, bd_pre) = reward::goal_potential_breakdown(
-        &view.state, pov, goal, Some(aux), Some(threats), Some(unit_goals), Some(belief),
+        &view.state, pov, goal, Some(aux), Some(threats), Some(unit_goals), Some(belief), Some(pre_health),
     );
     let mut probe = Game { state: view.state.clone() };
     let undo = probe.simulate_move(m.as_ref());
     let (phi_post, bd_post) = reward::goal_potential_breakdown(
-        &probe.state, pov, goal, Some(aux), Some(threats), Some(unit_goals), Some(belief),
+        &probe.state, pov, goal, Some(aux), Some(threats), Some(unit_goals), Some(belief), Some(pre_health),
     );
     if let Some(undo) = undo {
         undo(&mut probe.state);
@@ -239,6 +240,16 @@ fn main() {
     let aux = compute_goal_aux(&view.state, pov, &goal, counters.techs_bought, counters.tier3_bought, Some(&lane));
     let threats = combat::threat_units(&view.state, pov);
     let belief = MapBelief::observe(&view.state, pov);
+    // EXP_ELO_110: mirror rank_plies's pre_health map (unit id -> health at
+    // ply start), so the Defend waterfall's self-wound floor stays in
+    // parity here too -- see macro_exec.rs's rank_plies for the canonical
+    // implementation this must stay in parity with.
+    let pre_health: rustc_hash::FxHashMap<u32, f32> = view
+        .state
+        .tribes
+        .get(&pov)
+        .map(|t| t.units.iter().map(|u| (u.id, u.health)).collect())
+        .unwrap_or_default();
 
     let expected: HashMap<String, f64> = trace_row["candidates"]
         .as_array()
@@ -249,6 +260,6 @@ fn main() {
     let e1 = expected.get(&serde_json::to_string(&move1).unwrap()).copied();
     let e2 = expected.get(&serde_json::to_string(&move2).unwrap()).copied();
 
-    evaluate("move1", e1, &true_game, &view, &goal, &aux, &unit_goals, &threats, &belief, pov, &move1);
-    evaluate("move2", e2, &true_game, &view, &goal, &aux, &unit_goals, &threats, &belief, pov, &move2);
+    evaluate("move1", e1, &true_game, &view, &goal, &aux, &unit_goals, &threats, &belief, &pre_health, pov, &move1);
+    evaluate("move2", e2, &true_game, &view, &goal, &aux, &unit_goals, &threats, &belief, &pre_health, pov, &move2);
 }
