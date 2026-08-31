@@ -300,18 +300,42 @@ EXP_ELO_091's move-gen determinism fix.
      IDENTICAL small delta (-0.78pp, exactly one game/128 in each),
      smaller than EXP_ELO_104's own shipped -1.56pp wash. Committed
      (`2beabb0`).
-- Current best game for the next analysis pass: the **EXP_ELO_108** game
-  (`replays/exp108_seed0_watch/`, turn **17**, 5 lost, 9 killed, 5
-  giants by t12). Units-lost is down to 5 (from a starting-loop value
-  of 29) but still misses the <3 target — the clearest remaining gap.
-  The retaliation/exposure pricing lever below (EXP_ELO_105's
-  diagnosis, still unimplemented after two related-but-distinct bugs
-  in its neighborhood have now been fixed) is still the most direct
-  remaining path, with a pass-6-recommended narrower design (a
-  move-level, acting-unit-only post-move lethality penalty reusing the
-  already-frozen `threat_units` snapshot, not EXP_ELO_105's broad
-  per-unit-per-candidate `hypo_damage` rescan) as the next candidate
-  attempt.
+- Current best game for the next analysis pass: still the **EXP_ELO_108**
+  game (`replays/exp108_seed0_watch/`, turn **17**, 5 lost, 9 killed, 5
+  giants by t12) — EXP_ELO_109 (below) was reverted, so this pointer is
+  unchanged. Units-lost is down to 5 (from a starting-loop value of 29)
+  but still misses the <3 target — the clearest remaining gap.
+- **EXP_ELO_109 was attempted and REVERTED** (2026-08-31, see the ledger
+  for the full writeup) — pass-6/7's proposed move-level lethality-
+  exposure penalty (a flat per-star charge on an Attack that leaves its
+  own actor newly single-threat-lethal) was ground-truth verified
+  bit-exact on all 3 flagged plies AND left all 5 established
+  must-not-regress plies untouched, but the regenerated canonical game
+  got WORSE in both scopings tried: all-move-types gated units_lost
+  5->9 (turn 17->20); narrowed to Attack-only, fire count dropped 4x
+  (163->39) but units_lost went to **11** (worse again, turn still 20).
+  Confirmed concretely: the baseline's turn-5 `Attack 39->27` (base 110,
+  a real kill) got penalized to net 10 and a different move won instead
+  — one suppressed correct kill, cascading through the rest of the
+  fully-deterministic game. Root cause (advisor, second review): the
+  flagged-ply margins (6.2, 5.0, 95.9) and ordinary early-game attack
+  values (45-110) occupy the same numeric range, so no flat per-star
+  multiplier can separate "flip the 3 flagged chips" from "don't
+  suppress ordinary good attacks" — and idx180's outsized 95.9 margin is
+  itself mostly an artifact of the STILL-UNFIXED `defend_cover` own-side
+  live-read subsidy (pass-7's "category (b)"), not a genuine tactical
+  gap. Third empirical failure of the exposure/retaliation-pricing
+  family (105's Φ-term, 109 broad, 109 narrow) — no fourth flat-penalty
+  attempt without fixing category (b) first. Reverted the `rank_plies`
+  wiring and `attack_pricing_probe3`'s parity block together; KEPT
+  `combat::lethal_threat_weight` + 2 pinning tests (sound primitive,
+  zero false positives on 8 real plies) and `lethality_gate_probe.rs`.
+  **Next candidate lever**: fix `defend_plan_impl`'s live own-side
+  `hypo_damage` read directly — an asymmetric floor,
+  `max(pre-ply value, live value)`, on the acting unit's own waterfall
+  contribution (healing still raises it, self-wounding can't shrink
+  it). Re-probe idx122/180/266 after that lands before deciding whether
+  any residual move-level penalty is needed at all.
 - **EXP_ELO_105 was attempted and REVERTED** (2026-08-30, see the
   ledger for the full writeup) — the retaliation/exposure pricing gap
   below is still the diagnosed primary lever, but the specific fix
@@ -580,3 +604,47 @@ EXP_ELO_091's move-gen determinism fix.
   reusing the already-frozen `threat_units` snapshot rather than
   EXP_ELO_105's broad per-unit-per-candidate `hypo_damage` rescan) —
   still the single clearest remaining path to units-lost <3.
+- **2026-08-31, iteration 10 (pass-7 analysis + EXP_ELO_109, REVERTED)**:
+  implemented pass-6/7's proposed move-level lethality-exposure penalty
+  (a flat per-star charge on an Attack whose actor becomes newly
+  single-threat-lethal-exposed post-move). Ground-truth verified
+  bit-exact on all 3 flagged plies (idx122 t9, idx180 t12, idx266 t15)
+  BEFORE writing code, per standing discipline; a design review first
+  computed the sizing box a flat penalty would need (lower bound
+  `m > 48` from idx180's 95.93 margin) and flagged a possible upper
+  bound from EXP_ELO_106's own shipped reference plies — checked
+  empirically via a new `combat::lethal_threat_weight` gate primitive
+  and `lethality_gate_probe.rs`, and the feared ceiling never actually
+  bound (both reference plies turned out not to gate at all). Wired the
+  penalty into `rank_plies` + kept `attack_pricing_probe3` in parity;
+  all 3 flagged plies flipped exactly as predicted, all 5
+  must-not-regress plies stayed bit-exact, 340/340 tests passed.
+  Regenerated the canonical game and got a REGRESSION: units_lost
+  5->9, turn 17->20 (all move types gated). Narrowed the gate to
+  Attack-only (matching what the 3 flagged plies actually are) — fire
+  count dropped 4x (163->39 in a `POLYFISH_DEBUG_LETHALITY` diagnostic)
+  but the game got WORSE AGAIN: units_lost 5->11, turn still 20.
+  Traced concretely to the baseline's turn-5 `Attack 39->27` (base 110,
+  a real kill) getting penalized to net 10 and a worse move winning
+  instead, cascading through the rest of the deterministic game. A
+  second advisor review found the real root cause: the flagged-ply
+  margins (6.2, 5.0, 95.9) overlap ordinary early-game attack values
+  (45-110) entirely, so no flat per-star multiplier can separate them —
+  and idx180's outsized margin turned out to be mostly an artifact of
+  the STILL-UNFIXED `defend_cover` own-side live-read subsidy pass-7
+  itself had flagged (and recommended NOT fixing directly, in favor of
+  this move-level penalty instead — the empirical result says that
+  priority was backwards). This also closes EXP_ELO_105's own open
+  "why does the single game disagree with the gauge" hypothesis: both
+  109 failures happened on the asymmetric canonical game itself, never
+  even reaching the gauge, refuting the idea that the asymmetric game
+  specifically tolerates this class of caution. Reverted the
+  `rank_plies` wiring and probe3's parity block together in one commit;
+  kept `combat::lethal_threat_weight` (2 new pinning tests, zero false
+  positives on 8 real plies) and `lethality_gate_probe.rs` as
+  independently useful, verified primitives. Third empirical failure of
+  the exposure/retaliation-pricing family on this loop (105, 109
+  broad, 109 narrow) — next attempt targets category (b) directly
+  (the live own-side read in `defend_plan_impl`) instead of a fourth
+  flat-penalty variant. `replays/exp109_seed0_watch/` kept on disk as
+  the regression record.
