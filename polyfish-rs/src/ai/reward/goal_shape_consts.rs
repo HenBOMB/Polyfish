@@ -184,6 +184,18 @@ pub const SHAPE_GOAL_DEFEND_COVER: f32 = 600.0;
 /// needs a defender present to stay safe.
 pub const SHAPE_GOAL_DEFEND_HOLD: f32 = 400.0;
 
+/// EXP_ELO_114: standing charge on a city that's OPEN (no friendly unit on
+/// the tile) and reachable by a visible enemy next turn, scaled by
+/// `CityRisk::risk`. Fires independent of any Defend order (orders commit
+/// once at turn start; a mid-turn vacate is otherwise invisible until the
+/// next commit) -- see `goal_potential_inner`'s `city_open_exposed` term.
+/// Sized against two real seed0 plies: must clear ~8 (city41/idx163's
+/// margin over the safe alternative, at risk=0.45 -> effective ~11.25) but
+/// stay under ~44 (city49/idx88's kill margin, at risk=1.0 -> effective 25)
+/// so a genuinely good kill-and-advance still fires. 25.0 sits centered in
+/// that band with room on both sides.
+pub const SHAPE_GOAL_CITY_OPEN_EXPOSED: f32 = 25.0;
+
 /// Rewards keeping units focused on attacking a targeted enemy city instead
 /// of wandering off — pays up to 4 attackers per target.
 pub const SHAPE_GOAL_ATTACK_PRESS: f32 = 500.0;

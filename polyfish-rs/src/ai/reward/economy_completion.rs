@@ -397,13 +397,26 @@ mod tests {
         state.resources.insert(62, None);
         let restranded = goal_potential(&state, 1, &grow, None);
         assert!((restranded - stranded).abs() < 1e-3);
+        // EXP_ELO_114: garrison the city before the enemy shows up, and
+        // re-baseline against a garrisoned reading -- an ungarrisoned city
+        // with a visible adjacent enemy also trips the new
+        // `city_open_exposed` term, which is a real, separate signal this
+        // test isn't the place to isolate. Garrisoning keeps `open=false`
+        // throughout so that term stays at zero on both sides of the
+        // comparison, leaving only the threat-exemption delta this test
+        // actually checks.
+        state.tiles.entry(60).or_insert_with(TileState::default);
+        let mut garrison = unit_at(60, UnitType::Warrior);
+        garrison.owner = 1;
+        state.tribes.get_mut(&1).unwrap().units.push(garrison);
+        let restranded_garrisoned = goal_potential(&state, 1, &grow, None);
         let mut t2 = TribeState::default();
         t2.id = 2;
         t2.units.push(unit_at(61, UnitType::Warrior));
         state.tribes.insert(2, t2);
         let threatened = goal_potential(&state, 1, &grow, None);
         assert!(
-            (threatened - restranded - SHAPE_GOAL_STRANDED).abs() < 1e-3,
+            (threatened - restranded_garrisoned - SHAPE_GOAL_STRANDED).abs() < 1e-3,
             "threat exemption must lift the penalty"
         );
     }

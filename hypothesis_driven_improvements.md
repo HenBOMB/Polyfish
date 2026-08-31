@@ -13901,13 +13901,97 @@ SAME amount on every candidate at that ply (the regret-asymmetric
 design point), so a high ambient rate is expected and not itself a red
 flag. The real question is the paired gauge.
 
-PAIRED GAUGE: not yet run (queued after EXP_ELO_113's gauge finishes —
-same worktree-isolation discipline, one variable at a time).
+PAIRED GAUGE: worktree-isolated, `5b158c6` (EXP_ELO_113, baseline) vs
+`5b158c6` + this diff (treatment), n=128 both seed blocks, each (arm,
+seed) run from its own isolated working directory from the start (the
+EXP_ELO_113 gauge's collision lesson applied up front this time).
 
-Disposition: **implementation complete, tests green (355/355), sizing
-box holds on both original plies (no suppressed kill, correctly
-demoted at the compared ply) — but the fix does NOT close either
-originally-flagged window on this specific canonical game, for the
-greedy-per-ply reason explained above. Real, useful, well-tested
-mechanism; modest expectations for THIS seed's specific instances.
-Paired gauge still needed before any ship/revert call.**
+| seed | baseline anchor_net_wr | treatment anchor_net_wr | delta |
+|---|---|---|---|
+| 770425 | 0.531250 (68/128) | 0.570313 (73/128) | +3.91pp |
+| 770553 | 0.539063 (69/128) | 0.539063 (69/128) | +0.00pp |
+
+Both non-negative (one real positive, one exact tie), both inside the
+~7.8pp n=128 noise floor — the pre-registered wash/small-positive bar
+cleanly met, same shape as EXP_ELO_113's own reading.
+
+Disposition: **SHIPPED.** Tests green (355/355), sizing box holds on
+both original plies (no suppressed kill, correctly demoted at the
+compared ply), paired gauge clean. Does NOT close either originally-
+flagged window on this specific canonical game, for the greedy-per-ply
+reason explained above — a real, honest limitation, not a reason to
+withhold a mechanism that's independently correct, well-tested, and
+gauge-clean.
+
+## EXP_ELO_115 — belief-guess scouting past COMMIT_CITY_TARGET: mechanism confirmed real, fix implemented, measured net-negative on the canonical game, reverted
+
+CONTEXT: EXP_ELO_112 verified claim #4 (fog near tile 79 not clearing
+until turn 10, when a unit could plausibly have been dedicated to that
+direction turns 7-8). Root cause, confirmed by reading
+`oracle_macro::expand_targets`: its `guess_villages` top-up (fills any
+gap below `EXPAND_TARGET_MIN=2` live targets with belief-predicted
+sites) is gated on `tribe_cities < COMMIT_CITY_TARGET (3)` — the
+seed0 game already had 3 cities by turn 3-5, so the entire belief-
+guessing mechanism was retired well before it would have mattered for
+tile 79. Verified the belief system itself was NOT the gap: a direct
+`guess_villages` call (bypassing the gate, new `village_guess_probe.rs`)
+found predicted sites at tiles 91/92 — Chebyshev distance 1-2 from the
+real village at 79 — as early as turn 7, exactly matching Verdi's own
+estimate ("turn 7 or 8").
+
+FIX (`src/ai/oracle_macro.rs`): dropped the `tribe_cities <
+COMMIT_CITY_TARGET` condition from `expand_targets`'s guess top-up,
+keeping only `targets.len() < EXPAND_TARGET_MIN` — trusting
+`guess_villages`'s own internal logic (via `MapBelief::top_village_sites`,
+which only offers sites with `p_village(idx) > 0.0`) to naturally taper
+off as the map gets explored, rather than an arbitrary city-count
+proxy. New pinning test
+(`expand_targets_keeps_guessing_past_commit_city_target`,
+`oracle_macro_tests.rs`) confirms the same state produces identical
+guesses at 0 and 3+ cities. 353/353 lib tests.
+
+VERIFICATION (regenerated canonical game with EXP_ELO_113+114+115 all
+applied, `replays/exp115_seed0_watch/`): **real, reproducible
+regression** against the current best (`exp114_seed0_watch`: turn 17,
+4 lost, 9 killed, 6 giants by t12). With this fix added: turn 19, 6
+lost, 15 killed, **giants by t12 dropped to 4** — a direct miss on
+Verdi's own explicit success target (>=3, and this loop had already
+reached 6). Reproduced on a second independent run (424 moves both
+times, same final score 7645, same decisive win) — not a one-off
+non-determinism artifact. Since EXP_ELO_113+114 alone were already
+verified bit-identical/minimal-effect on this same canonical game
+(their own entries above), the entire regression is attributable to
+this fix in isolation.
+
+Root cause of the regression (not deeply chased further, but the
+shape is clear from the numbers): `COMMIT_CITY_TARGET` isn't only an
+`expand_targets` gate — `oracle_macro_tests.rs`'s own
+`commitment_picks_nearest_is_sticky_and_retires_at_three_cities` test
+independently confirms a SEPARATE, deliberately-designed mechanism
+(`update_commitment`) also retires at exactly 3 cities, and stance
+transition logic elsewhere in `oracle_macro.rs` reads the same
+constant. Three cities appears to be a genuine, load-bearing "stop
+expanding, start consolidating/arming" signal this codebase relies on
+in multiple places — removing ONE of its uses (the Expand-target
+top-up) without touching the others reintroduced a scouting/expansion
+pull the rest of the goal system wasn't designed to coexist with past
+that point, plausibly diverting star/attention spend away from
+Forge/Giant production and toward chasing extra guessed villages
+instead (consistent with giants-by-t12 dropping 6->4 and the game
+running notably longer and bloodier).
+
+Disposition: **REVERTED.** The underlying finding is real and worth
+keeping on record — the belief system correctly predicts nearby
+villages several turns before an ungated system would find them, and
+a genuinely better design likely exists (e.g., scaling the guess
+top-up's priority down rather than an all-or-nothing gate removal;
+scoping it to `Stance::Grow` only; or reusing whatever mechanism
+already lets `Stance::Arm` correctly stop pursuing new cities without
+also cutting `expand_targets`'s wiring) — but a naive gate removal has
+a real, measured cost on this canonical game and does not clear this
+loop's own guardrail (a). Not chased further this entry given the
+scope already covered this iteration; a future pass should design
+around the `COMMIT_CITY_TARGET`-as-consolidation-signal constraint
+this entry surfaced, rather than repeating the same gate-removal shape.
+`expand_targets_probe.rs` and `village_guess_probe.rs` kept as
+independently useful, verified primitives for that future attempt.

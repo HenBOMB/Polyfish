@@ -11,6 +11,13 @@ use super::economy_completion::{completion_progress, completion_stranded};
 use super::goal_shape_consts::*;
 use crate::states::GameState;
 
+/// EXP_ELO_114 diagnostic (temporary): how often `city_open_exposed`
+/// actually fires (an owned city, open, reachable by a visible enemy next
+/// turn, no active Defend order) across every `goal_potential` evaluation —
+/// mirrors EXP_ELO_111's `STEP_LETHAL_ENTRY_CANDIDATES`/`_FIRES` pair.
+pub static CITY_OPEN_EXPOSED_EVALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static CITY_OPEN_EXPOSED_FIRES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Goal potential Φ_goal for `player` under `goal` (score-equivalent units).
 pub fn goal_potential(
     state: &GameState,
@@ -623,11 +630,52 @@ fn goal_potential_inner(
         .filter(|(k, _)| *k == OrderKind::Attack)
         .map(|(_, i)| *i)
         .collect();
-    if width > 0 && goal.orders.iter().any(|(k, _)| *k == OrderKind::Defend) {
-        let city_threats = match threats {
+    let city_threats_cache = if width > 0 {
+        Some(match threats {
             Some(t) => crate::ai::combat::city_risks_with_threats(state, player, t),
             None => crate::ai::combat::city_risks(state, player),
-        };
+        })
+    } else {
+        None
+    };
+    // EXP_ELO_114: a city can go from garrisoned to open WITHIN a turn (a
+    // kill-and-advance Attack, or a Step to another target) with no Defend
+    // order ever assigned -- orders commit once at turn start
+    // (`oracle_macro::commit_macro_goal`), so a mid-turn vacate is
+    // otherwise invisible to the Defend-order block below until the NEXT
+    // commit (confirmed on both real flagged plies: neither city41/idx163
+    // nor city49/idx88 had a Defend order active). This standing charge
+    // prices "open + a visible enemy could walk in next turn" directly off
+    // CURRENT state, independent of any order: the vacating candidate eats
+    // -P*risk (Δφ from uncharged pre-state to charged post-state), a
+    // same-turn refill or step-back-in earns it back, and every other
+    // candidate on an already-open ply carries the same charge unchanged
+    // (no distortion) -- the same regret-asymmetric shape as EXP_ELO_111's
+    // step-lethal-entry gate. Skipped for any city already carrying a
+    // Defend order: that city's exposure is priced by the richer
+    // cover/hold/recall block below, and double-charging would starve
+    // `defend_cover`'s own budget.
+    if let Some(city_threats) = &city_threats_cache {
+        let defended: std::collections::HashSet<i32> = goal
+            .orders
+            .iter()
+            .filter(|(k, _)| *k == OrderKind::Defend)
+            .map(|(_, idx)| *idx)
+            .collect();
+        for r in city_threats {
+            if defended.contains(&r.city) {
+                continue;
+            }
+            CITY_OPEN_EXPOSED_EVALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if r.open && r.arrives_next_turn {
+                CITY_OPEN_EXPOSED_FIRES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                acc.sub("city_open_exposed", SHAPE_GOAL_CITY_OPEN_EXPOSED * r.risk);
+            }
+        }
+    }
+    if let (true, Some(city_threats)) =
+        (goal.orders.iter().any(|(k, _)| *k == OrderKind::Defend), &city_threats_cache)
+    {
         for (kind, idx) in &goal.orders {
             if *kind != OrderKind::Defend {
                 continue;

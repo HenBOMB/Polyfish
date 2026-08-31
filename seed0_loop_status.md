@@ -896,11 +896,10 @@ EXP_ELO_091's move-gen determinism fix.
   Both fixes' full ledger writeups (sizing box, ground truth, ply-by-
   ply verification) are in `hypothesis_driven_improvements.md`.
   EXP_ELO_113 committed on its own (`scoring.rs` + ledger + this file)
-  once its gauge landed clean. EXP_ELO_114 still waits on its own
-  paired gauge (worktree-isolated at the EXP_ELO_113-final commit as
-  baseline) before a ship/revert call -- not bundled into the same
-  commit as 113, per the EXP_ELO_067 lesson. Next: run EXP_ELO_114's
-  gauge, write its final ledger disposition, ship or revert, then move
-  to iteration 13's remaining two fixes (#7 capital-consolidation --
-  needs an `ml-expert` design pass first per the locked priority list
-  -- and #4 scouting/belief-map wiring).
+  once its gauge landed clean. EXP_ELO_114's own paired gauge (worktree-
+  isolated at the EXP_ELO_113-final commit as baseline): 770425 +3.91pp
+  (68/128 -> 73/128), 770553 +0.00pp (69/128 both arms) -- both inside
+  the noise floor, same shape as 113's own reading. **SHIPPED**,
+  committed on its own (`goal_potential.rs`/`goal_shape_consts.rs`/
+  `economy_completion.rs`/`summary.rs` + `city_risk_probe.rs` + ledger +
+  this file) -- not bundled with 113, per the EXP_ELO_067 lesson.

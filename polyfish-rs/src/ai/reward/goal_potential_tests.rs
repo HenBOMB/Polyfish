@@ -954,6 +954,66 @@ use crate::types::UnitType;
         );
     }
 
+    /// EXP_ELO_114: an OPEN city (nothing garrisoning it) that a visible
+    /// enemy can reach next turn must eat `city_open_exposed` even with no
+    /// Defend order and no garrison at all -- the two real seed0 plies this
+    /// fixes (city49/idx88, city41/idx163) both had empty cities and no
+    /// active Defend order, so the term must not depend on either.
+    #[test]
+    fn city_open_exposed_charges_an_undefended_reachable_city() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        let mut state = defense_board(60);
+        let goal = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+        let far = goal_potential(&state, 1, &goal, None);
+        state.tribes.get_mut(&2).unwrap().units.push(combat_unit(59, UnitType::Swordsman, 2));
+        let reachable = goal_potential(&state, 1, &goal, None);
+        assert!(
+            reachable < far,
+            "an empty, reachable city must cost potential: far {far}, reachable {reachable}"
+        );
+    }
+
+    /// The same enemy, but the city is garrisoned: `open` is false, so the
+    /// new term must not fire (the pre-existing `city_risk` term above is
+    /// what prices a garrisoned-but-threatened city; this is scoped
+    /// strictly to the empty case).
+    #[test]
+    fn city_open_exposed_zero_once_garrisoned() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        let mut state = defense_board(60);
+        state.tribes.get_mut(&2).unwrap().units.push(combat_unit(59, UnitType::Swordsman, 2));
+        let goal = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+        let (_, bd_open) = goal_potential_breakdown(&state, 1, &goal, None, None, None, None, None);
+        assert!(bd_open.iter().any(|(l, _)| *l == "city_open_exposed"));
+        state.tribes.get_mut(&1).unwrap().units.push(combat_unit(60, UnitType::Rider, 1));
+        let (_, bd_garrisoned) =
+            goal_potential_breakdown(&state, 1, &goal, None, None, None, None, None);
+        assert!(!bd_garrisoned.iter().any(|(l, _)| *l == "city_open_exposed"));
+    }
+
+    /// A city already carrying a Defend order must NOT also pay
+    /// `city_open_exposed` -- that would double-charge the exact same
+    /// exposure the cover/hold/recall block below already prices, and
+    /// (per advisor review) starve `defend_cover`'s own budget.
+    #[test]
+    fn city_open_exposed_skipped_under_an_active_defend_order() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        let mut state = defense_board(60);
+        state.tribes.get_mut(&2).unwrap().units.push(combat_unit(59, UnitType::Swordsman, 2));
+        let no_order = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+        let defended = MacroGoal {
+            orders: vec![(OrderKind::Defend, 60)],
+            stance: Stance::Arm,
+            save_target: None,
+        };
+        let (_, bd_no_order) =
+            goal_potential_breakdown(&state, 1, &no_order, None, None, None, None, None);
+        assert!(bd_no_order.iter().any(|(l, _)| *l == "city_open_exposed"));
+        let (_, bd_defended) =
+            goal_potential_breakdown(&state, 1, &defended, None, None, None, None, None);
+        assert!(!bd_defended.iter().any(|(l, _)| *l == "city_open_exposed"));
+    }
+
     /// Per-unit-goal design (Aug 2026), Step 3 verification: the legacy
     /// EXPAND pricing (`None`) re-matches unit<->target fresh on every
     /// `goal_potential` call, so one unit's candidate move can change which
