@@ -14258,3 +14258,78 @@ class not visible on this specific seed, not a fix for a visible loss.
 Disposition: **REVERTED.** Root cause of both the original claim and
 the regression are both measured and on record, not guessed. Probe and
 the incidental `reward_lab.rs` fix kept/committed separately.
+
+## EXP_ELO_118 (pre-registration) — the defend/recall machinery is value-blind: a Giant garrisons while cheap Warriors sit idle nearby
+
+STATUS: investigation registered, ground truth confirmed, fix not yet
+designed/implemented.
+
+CONTEXT: Verdi, reacting to EXP_ELO_117's writeup (the giant walking
+itself back onto city41 by turn 12, cited there as evidence the
+existing `defend_cover`/`defend_recall` machinery is "proven
+sufficient"): "a giant is a super valuable unit and should be used to
+advance towards the enemy right now, not defend a siege from a loose
+defender... This is the equivalent of using your Rolex to balance out
+a table. We should have been using the cheaper throwaway units or even
+make a new one than have our giant waste strategy momentum stepping
+back onto the city." This reframes EXP_ELO_117's own "self-heals one
+commit late" finding: the mechanism doesn't just heal LATE, it heals
+with the WRONG unit.
+
+GROUND TRUTH (`polyfish-rs/examples/city41_unit_identity_probe.rs`,
+canonical seed0 game, unit IDs not just types, so this isn't a
+health-coincidence): at the moment the Giant (id=18, `unit_worth`=10)
+vacates city41 (turn 11), the nearby player-1 roster (distance <=2)
+is `[(1, 1, Warrior, 6.0, worth=2.0), (18, 1, Giant, 40.0, worth=10.0),
+(3, 2, Warrior, 10.0, worth=2.0), (16, 2, Warrior, 10.0, worth=2.0),
+(17, 2, Giant, 40.0, worth=10.0), (19, 2, Giant, 40.0, worth=10.0)]`
+(id, dist, type, hp, worth). Two Warriors (worth 2, a fifth of a
+Giant's worth) sit at distance 1-2. The gap is plugged one turn later
+(turn 12) by a Giant again (id=26 -- a DIFFERENT giant, not id=18
+walking back, and not one of the three giants already visible at
+turn 11 either, so it's freshly arrived/trained) -- never by either
+idle Warrior.
+
+MECHANISM (read, not yet changed): `defend_garrison_hold` pays a FLAT
+`SHAPE_GOAL_DEFEND_COVER * attacker_pressure` regardless of which unit
+occupies the tile -- no unit-type/worth term anywhere in it. Worse
+than neutral: `defend_plan_impl`'s waterfall (`combat.rs`) computes
+`credit_frac` off how much of the city's residual `need_damage` a
+unit's own damage contribution satisfies -- a high-damage unit (a
+Giant) satisfies more of that residual IN ONE BODY than a Warrior
+would, so it can earn a FULLER `credit_frac` for the identical
+defensive job. The machinery doesn't just fail to discourage
+conscripting a Giant for garrison duty; on the cover/waterfall side it
+structurally rewards it MORE than it would reward a cheap unit doing
+the same job. `defend_recall`'s "nearest eligible unit" search
+(`goal_potential.rs`, the shortfall branch) is nearest-only too --
+no worth term in the selection either.
+
+WHY THIS ISN'T EXP_ELO_117's BUG: 117's inversion was about WHEN the
+machinery fires (state-gated vs turn-gated) and was reverted. This is
+about WHICH unit the machinery prices highest once it does fire, on
+the currently-SHIPPED code path (real Defend orders, not anything from
+117) -- fully independent, needs its own investigation and its own
+gauge.
+
+NOT YET DONE: no fix designed or implemented. Given `goal_potential.rs`
+was just proven fragile this same session (EXP_ELO_117's collapse-on-
+success-one-level-up inversion), the next step is a design review
+(ml-expert or advisor) BEFORE touching `defend_garrison_hold`/
+`defend_cover`/`defend_plan_impl`'s waterfall -- candidate shapes to
+weigh: (a) discount credit inversely by `unit_worth` so a cheap unit
+earns the SAME or MORE Φ for garrisoning than an expensive one at
+equal distance; (b) price a fresh Train-for-defense option directly
+(closer to Verdi's "even make a new one"); (c) leave `defend_garrison_
+hold` alone (it's a STATE-fact reward paid to whoever IS there, low
+regression risk to touch) and instead only fix the SELECTION layer --
+`defend_recall`'s nearest-unit search and whatever chooses which unit
+approaches under `defend_cover`'s waterfall -- so cheap units get
+preferentially pulled in the first place. (c) is likely lower blast
+radius than (a)/(b) since it doesn't touch the already-proven reward
+magnitudes, only which unit the search prefers to spend on the job.
+Falsifier for whichever shape is chosen: re-run
+`city41_unit_identity_probe` (or an equivalent) on the canonical regen
+and confirm a Warrior (or a freshly Trained cheap unit), not a Giant,
+fills the city41 gap, with canonical KPIs (turn/units_lost/giants) not
+regressing and a paired gauge inside the established noise floor.
