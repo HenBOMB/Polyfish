@@ -19,10 +19,13 @@ use polyfish::ai::belief::map::MapBelief;
 use polyfish::game::Game;
 use polyfish::moves::Move;
 use polyfish::replayer::{replay_game, ModReplay};
-use polyfish::types::TechnologyType;
+use polyfish::types::{MoveType, TechnologyType};
 use std::collections::HashMap;
 
 const LAMBDA: f32 = 1.0;
+// EXP_ELO_111: mirrors macro_exec.rs's STEP_LETHAL_ENTRY_PENALTY exactly --
+// keep these two constants in sync by hand, same as LAMBDA above.
+const STEP_LETHAL_ENTRY_PENALTY: f32 = 3.0;
 
 fn parse_order_kind(s: &str) -> OrderKind {
     match s {
@@ -151,6 +154,7 @@ fn evaluate(
     threats: &[(polyfish::states::UnitState, f32)],
     belief: &MapBelief,
     pre_health: &rustc_hash::FxHashMap<u32, f32>,
+    pre_lethal: &rustc_hash::FxHashMap<u32, bool>,
     pov: i32,
     move_json: &serde_json::Value,
 ) {
@@ -160,6 +164,18 @@ fn evaluate(
         return;
     };
     let base = scoring::score_move_with_unit_goals(true_game, m.as_ref(), Some(unit_goals), None);
+    // EXP_ELO_111: resolve the acting unit's id from its PRE-move coords
+    // before simulate_move relocates it -- Step-only, mirrors rank_plies.
+    let step_unit_id = if m.move_type() == MoveType::Step {
+        m.source_idx().ok().and_then(|src| {
+            view.state
+                .tribes
+                .get(&pov)
+                .and_then(|t| t.units.iter().find(|u| u.coords.idx == src as i32).map(|u| u.id))
+        })
+    } else {
+        None
+    };
     let (phi_pre, bd_pre) = reward::goal_potential_breakdown(
         &view.state, pov, goal, Some(aux), Some(threats), Some(unit_goals), Some(belief), Some(pre_health),
     );
@@ -168,18 +184,29 @@ fn evaluate(
     let (phi_post, bd_post) = reward::goal_potential_breakdown(
         &probe.state, pov, goal, Some(aux), Some(threats), Some(unit_goals), Some(belief), Some(pre_health),
     );
+    let mut step_penalty = 0.0f32;
+    if let Some(uid) = step_unit_id {
+        if !pre_lethal.get(&uid).copied().unwrap_or(false) {
+            if let Some(u) = probe.state.tribes.get(&pov).and_then(|t| t.units.iter().find(|u| u.id == uid)) {
+                let post_w = combat::lethal_threat_weight(&probe.state, u, threats);
+                if post_w > 0.0 {
+                    step_penalty = STEP_LETHAL_ENTRY_PENALTY * post_w;
+                }
+            }
+        }
+    }
     if let Some(undo) = undo {
         undo(&mut probe.state);
     }
     let dphi = phi_post - phi_pre;
-    let total = base + LAMBDA * dphi;
+    let total = base - step_penalty + LAMBDA * dphi;
     let match_str = match expected_score {
         Some(e) if (e - total as f64).abs() < 0.05 => "MATCH".to_string(),
         Some(e) => format!("MISMATCH (expected {e:.3})"),
         None => "no recorded score".to_string(),
     };
     println!(
-        "\n--- {label}: {} :: {move_json}\n    base={base:.3} dphi={dphi:.3} (phi {phi_pre:.3} -> {phi_post:.3}) total={total:.3}  [{match_str}]",
+        "\n--- {label}: {} :: {move_json}\n    base={base:.3} step_penalty={step_penalty:.3} dphi={dphi:.3} (phi {phi_pre:.3} -> {phi_post:.3}) total={total:.3}  [{match_str}]",
         m.serialize()
     );
     let pre = sum_by_label(&bd_pre);
@@ -250,6 +277,19 @@ fn main() {
         .get(&pov)
         .map(|t| t.units.iter().map(|u| (u.id, u.health)).collect())
         .unwrap_or_default();
+    // EXP_ELO_111: mirror rank_plies's per-ply pre-lethal cache (unit id ->
+    // was this unit lethally exposed at its PRE-move coords/health).
+    let pre_lethal: rustc_hash::FxHashMap<u32, bool> = view
+        .state
+        .tribes
+        .get(&pov)
+        .map(|t| {
+            t.units
+                .iter()
+                .map(|u| (u.id, combat::lethal_threat_weight(&view.state, u, &threats) > 0.0))
+                .collect()
+        })
+        .unwrap_or_default();
 
     let expected: HashMap<String, f64> = trace_row["candidates"]
         .as_array()
@@ -260,6 +300,6 @@ fn main() {
     let e1 = expected.get(&serde_json::to_string(&move1).unwrap()).copied();
     let e2 = expected.get(&serde_json::to_string(&move2).unwrap()).copied();
 
-    evaluate("move1", e1, &true_game, &view, &goal, &aux, &unit_goals, &threats, &belief, &pre_health, pov, &move1);
-    evaluate("move2", e2, &true_game, &view, &goal, &aux, &unit_goals, &threats, &belief, &pre_health, pov, &move2);
+    evaluate("move1", e1, &true_game, &view, &goal, &aux, &unit_goals, &threats, &belief, &pre_health, &pre_lethal, pov, &move1);
+    evaluate("move2", e2, &true_game, &view, &goal, &aux, &unit_goals, &threats, &belief, &pre_health, &pre_lethal, pov, &move2);
 }

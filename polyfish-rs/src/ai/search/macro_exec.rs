@@ -48,6 +48,17 @@ pub static RANK_PLIES_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::A
 pub static RANK_PLIES_CANDIDATES: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+/// EXP_ELO_111 diagnostic (temporary, mirrors EXP_ELO_085's counter pair):
+/// how often a Step candidate is checked against the fresh-kill-zone gate,
+/// and how often it actually fires. A high fire rate on a game/tribe combo
+/// the canonical seed0 fixture didn't cover (e.g. the paired-gauge mirror,
+/// with borderline-one-shot Knights) is worth eyeballing before trusting
+/// that gauge's aggregate win rate.
+pub static STEP_LETHAL_ENTRY_CANDIDATES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub static STEP_LETHAL_ENTRY_FIRES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 /// Phase 0 instrumentation for the ply-distillation plan (not a standing
 /// feature): when `POLYFISH_DPHI_PROBE=<path>` is set, `rank_plies` appends
 /// one JSONL row per scored candidate with its decomposed move coordinates
@@ -245,6 +256,35 @@ pub fn gate_ok(
 /// fire on either of those cases; only much deeper Φ-collapse does.
 const ENDTURN_REVIVE_PRICE_DEFAULT: f32 = -700.0;
 
+/// EXP_ELO_111: tiebreaker-scale penalty (NOT value-scale like the reverted
+/// EXP_ELO_105/109 attempts) charged when a Step walks a unit from a safe
+/// PRE-move position into a one-shot kill zone no existing Φ term prices
+/// (`combat::lethal_threat_weight`'s doc comment). Scoped to Step only --
+/// EXP_ELO_109 found flat penalties on Attacks suppress genuine kills
+/// because flagged-ply margins and ordinary attack values share the same
+/// numeric range; a full-game scan for this fix found Step gate-fires were
+/// 3/3 true positives (all died) vs Attacks' 1/3, so Attacks are excluded
+/// by construction, not by tuning. See EXP_ELO_111 ledger entry.
+const STEP_LETHAL_ENTRY_PENALTY: f32 = 3.0;
+
+/// EXP_ELO_111: the penalty a Step candidate pays for walking `unit` (its
+/// POST-move state, already relocated by `simulate_move`) into a fresh
+/// one-shot kill zone. Zero if `unit` was already lethally exposed
+/// PRE-move (`pre_lethal`) -- an already-exposed unit gets no escape
+/// gradient from this, only from the underlying Φ terms, matching
+/// `lethal_threat_weight`'s own live-vs-frozen semantics.
+fn step_lethal_entry_penalty(
+    pre_lethal: bool,
+    post_state: &GameState,
+    unit: &crate::states::UnitState,
+    threats: &[(crate::states::UnitState, f32)],
+) -> f32 {
+    if pre_lethal {
+        return 0.0;
+    }
+    STEP_LETHAL_ENTRY_PENALTY * crate::ai::combat::lethal_threat_weight(post_state, unit, threats)
+}
+
 /// EXP_ELO_092 diagnostic: `POLYFISH_ENDTURN_REVIVE_PRICE=<f32>` overrides
 /// the compile-time default, so different floors (e.g. -400 vs -500) can
 /// be A/B'd from one binary without a rebuild -- mirrors
@@ -325,6 +365,32 @@ pub fn rank_plies(
     } else {
         None
     };
+    // EXP_ELO_111: each own unit's PRE-move lethal-exposure status, reusing
+    // the `threats` snapshot above. The gate a Step candidate charges
+    // STEP_LETHAL_ENTRY_PENALTY against is POST-move lethal AND PRE-move
+    // safe -- an already-exposed unit (e.g. mid-escape) is exempt, matching
+    // combat::lethal_threat_weight's own live-vs-frozen semantics.
+    let pre_lethal: Option<rustc_hash::FxHashMap<u32, bool>> = if lambda != 0.0 {
+        threats.as_deref().map(|th| {
+            game.state
+                .tribes
+                .get(&player)
+                .map(|t| {
+                    t.units
+                        .iter()
+                        .map(|u| {
+                            (
+                                u.id,
+                                crate::ai::combat::lethal_threat_weight(&game.state, u, th) > 0.0,
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+    } else {
+        None
+    };
     let phi_pre = if lambda != 0.0 {
         reward::goal_potential_with_belief(
             &game.state,
@@ -352,6 +418,23 @@ pub fn rank_plies(
         .map(|m| {
             let mut s = scoring::score_move_with_unit_goals(game, m.as_ref(), unit_goals, eco_plan);
             if lambda != 0.0 && m.move_type() != MoveType::EndTurn {
+                // EXP_ELO_111: resolve the acting unit's id from its
+                // PRE-move coords before simulate_move relocates it.
+                // Step-only by construction -- an Attack candidate never
+                // sets this, so it structurally can't engage the penalty
+                // below.
+                let step_unit_id = if m.move_type() == MoveType::Step {
+                    m.source_idx().ok().and_then(|src| {
+                        game.state.tribes.get(&player).and_then(|t| {
+                            t.units
+                                .iter()
+                                .find(|u| u.coords.idx == src as i32)
+                                .map(|u| u.id)
+                        })
+                    })
+                } else {
+                    None
+                };
                 if let Some(undo) = game.simulate_move(m.as_ref()) {
                     let phi_post = reward::goal_potential_with_belief(
                         &game.state,
@@ -383,6 +466,26 @@ pub fn rank_plies(
                             phi_post - phi_pre,
                             phi_post_no_aux - phi_pre_no_aux.unwrap_or(0.0),
                         );
+                    }
+                    if let Some(uid) = step_unit_id {
+                        if let (Some(th), Some(pl)) = (threats.as_deref(), pre_lethal.as_ref()) {
+                            let was_pre_lethal = pl.get(&uid).copied().unwrap_or(false);
+                            if let Some(u) = game
+                                .state
+                                .tribes
+                                .get(&player)
+                                .and_then(|t| t.units.iter().find(|u| u.id == uid))
+                            {
+                                STEP_LETHAL_ENTRY_CANDIDATES
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                let pen = step_lethal_entry_penalty(was_pre_lethal, &game.state, u, th);
+                                if pen > 0.0 {
+                                    STEP_LETHAL_ENTRY_FIRES
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                }
+                                s -= pen;
+                            }
+                        }
                     }
                     undo(&mut game.state);
                     s += lambda * (phi_post - phi_pre);
@@ -929,6 +1032,114 @@ mod tests {
         assert!(out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn));
         let out = revive_endturn_for_lone_doomed_unit(scored(), true, 0.0, &state);
         assert!(out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn));
+    }
+
+    /// EXP_ELO_111: same fixture as combat.rs's
+    /// `lethal_threat_weight_detects_a_one_shot_but_not_a_safe_hit` (a
+    /// Warrior adjacent to a Swordsman is only lethally exposed once
+    /// wounded to 1hp) -- confirms the wrapper converts the primitive's
+    /// weight into STEP_LETHAL_ENTRY_PENALTY-scaled points.
+    #[test]
+    fn step_lethal_entry_penalty_fires_on_a_fresh_one_shot() {
+        use crate::ai::combat::tests::{board, unit_at};
+        use crate::types::UnitType;
+
+        let mut state = board(60);
+        let mut wounded = unit_at(70, UnitType::Warrior, 1);
+        wounded.health = 1.0;
+        state.tribes.get_mut(&1).unwrap().units.push(wounded.clone());
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(69, UnitType::Swordsman, 2));
+        let threats = crate::ai::combat::threat_units(&state, 1);
+
+        let penalty = step_lethal_entry_penalty(false, &state, &wounded, &threats);
+        assert!(
+            penalty >= STEP_LETHAL_ENTRY_PENALTY * 0.99,
+            "a 1hp Warrior adjacent to a Swordsman must pay close to the full penalty, got {penalty}"
+        );
+    }
+
+    /// The safe half of the same fixture: full health, same adjacency --
+    /// no penalty at all.
+    #[test]
+    fn step_lethal_entry_penalty_zero_when_post_move_is_safe() {
+        use crate::ai::combat::tests::{board, unit_at};
+        use crate::types::UnitType;
+
+        let mut state = board(60);
+        let healthy = unit_at(70, UnitType::Warrior, 1);
+        state.tribes.get_mut(&1).unwrap().units.push(healthy.clone());
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(69, UnitType::Swordsman, 2));
+        let threats = crate::ai::combat::threat_units(&state, 1);
+
+        assert_eq!(step_lethal_entry_penalty(false, &state, &healthy, &threats), 0.0);
+    }
+
+    /// The pre-exposed exemption: even a fresh one-shot must pay nothing
+    /// if the unit was ALREADY lethally exposed before this Step -- no
+    /// escape gradient for units already in danger, matching
+    /// `lethal_threat_weight`'s live-vs-frozen semantics and pass-9's
+    /// explicit non-goal for this fix.
+    #[test]
+    fn step_lethal_entry_penalty_exempts_an_already_exposed_unit() {
+        use crate::ai::combat::tests::{board, unit_at};
+        use crate::types::UnitType;
+
+        let mut state = board(60);
+        let mut wounded = unit_at(70, UnitType::Warrior, 1);
+        wounded.health = 1.0;
+        state.tribes.get_mut(&1).unwrap().units.push(wounded.clone());
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(69, UnitType::Swordsman, 2));
+        let threats = crate::ai::combat::threat_units(&state, 1);
+
+        assert_eq!(
+            step_lethal_entry_penalty(true, &state, &wounded, &threats),
+            0.0,
+            "pre_lethal=true must exempt the candidate regardless of post-move exposure"
+        );
+    }
+
+    /// End-to-end wiring check via rank_plies itself -- a Step that walks
+    /// a wounded unit into a fresh one-shot kill zone must rank BELOW an
+    /// otherwise-symmetric Step to a tile that stays safe (both 70 and 50
+    /// are Chebyshev distance 1 from the source AND from the far-off P1
+    /// city, so nothing else on this featureless board should distinguish
+    /// them). Insurance against the wiring above regressing silently.
+    #[test]
+    fn rank_plies_prices_a_step_into_a_fresh_kill_zone_below_a_safe_alternative() {
+        use crate::ai::combat::tests::{board, unit_at};
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        use crate::types::UnitType;
+
+        let mut state = board(0);
+        let mut wounded = unit_at(50, UnitType::Warrior, 1);
+        wounded.health = 1.0;
+        state.tribes.get_mut(&1).unwrap().units.push(wounded);
+        // Swordsman has Dash (move 1 + range 1 = reach 2), so its
+        // Chebyshev-2 danger zone extends past plain adjacency -- 60 sits
+        // in that zone, 61 does not, even though both are one Step from
+        // the source at 50.
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(69, UnitType::Swordsman, 2));
+        let mut game = Game::new();
+        game.state = state;
+        game.post_load();
+
+        let goal = MacroGoal { orders: vec![], stance: Stance::Save, save_target: None };
+        let aux = compute_goal_aux(&game.state, 1, &goal, 0, 0, None);
+        let ranked = rank_plies(&mut game, 1, &goal, &aux, true, 1.0, None, None);
+
+        let lethal = ranked
+            .iter()
+            .find(|(_, m)| m.move_type() == MoveType::Step && m.target_idx().ok() == Some(60));
+        let safe = ranked
+            .iter()
+            .find(|(_, m)| m.move_type() == MoveType::Step && m.target_idx().ok() == Some(61));
+        let (lethal_score, _) = lethal.expect("Step 50->60 must be a legal candidate");
+        let (safe_score, _) = safe.expect("Step 50->61 must be a legal candidate");
+        assert!(
+            safe_score > lethal_score,
+            "safe={safe_score} lethal={lethal_score}: the fresh-kill-zone Step must not \
+             outrank the safe alternative"
+        );
     }
 
     #[test]

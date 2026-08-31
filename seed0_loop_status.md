@@ -331,15 +331,49 @@ EXP_ELO_091's move-gen determinism fix.
      limitation, not a flaw in this fix. Paired gauge, two independent
      seed blocks: BOTH positive (+2.34pp, +3.13pp), same direction and
      similar magnitude. Committed.
-- Current best game for the next analysis pass: the **EXP_ELO_110** game
-  (`replays/exp110_seed0_watch/`, turn **17**, 5 lost, 9 killed, 6
-  giants by t12). Units-lost is still 5 (down from a starting-loop
-  value of 29) but still misses the <3 target — the clearest remaining
-  gap. id28's t15 death (idx266) is confirmed genuinely unpriced by
-  every fix shipped so far (no Defend order active at that ply) and is
-  the next concrete lever; 2 of the 5 losses (id7 t6, id12 t12) are
-  pass-7-classified as structurally forced and out of scope for a
-  pricing fix.
+  9. **EXP_ELO_111** (Steps-only, tiebreaker-scale lethal-entry penalty,
+     SHIPPED). EXP_ELO_110's own turn-9 reorder cascaded into a
+     different set of subsequent deaths — id28/idx266 no longer exists
+     in the current trajectory. A pass-9 `ml-expert` re-scan found the
+     CURRENT losses (id16 t12, id12 t14, id13 t15) all trace to the
+     same p2 Catapult (tile 24) creating a static Chebyshev-3 kill zone;
+     a full-game scan of `lethal_threat_weight` gate-fires found Steps
+     3/3 true-positive vs Attacks 1/3 (idx60 was EXP_ELO_109's wrongly-
+     suppressed correct kill), directly justifying a Steps-only,
+     tiebreaker-scale (`STEP_LETHAL_ENTRY_PENALTY=3.0`, not value-scale)
+     design — structurally unable to repeat EXP_ELO_109's failure since
+     an Attack move can never even compute the penalty. Ground truth:
+     idx230 271→268 vs 270 (flips, safe wins by 2), idx268 41→38 vs 40
+     (flips, safe wins by 2), idx187 unchanged as predicted (margin
+     15.58, too large for a 3-point tiebreaker by design). 4 new pinning
+     tests (350/350). Regenerated game: turns 0-13 bit-identical, t14
+     diverges exactly as predicted, **units_lost 5→4** (real but partial
+     — not the hoped-for <3). Traced with a new tool
+     (`unit_trace_probe.rs`) why: id13 now fully survives, but id12
+     avoids its t14 trap only to walk into a SEPARATE 265-point-margin
+     kill zone at t15 (a large goal-approach pull, not a close-margin
+     tiebreak) that this fix correctly does NOT override — superseding
+     pass-7's stale "id12 structurally forced" classification a second
+     time. Paired gauge, two seed blocks: mixed sign (+1.56pp, -3.91pp),
+     both inside the ~7.8pp noise floor — a pre-registered wash, shipped
+     on the canonical game's clean evidence. Committed.
+- Current best game for the next analysis pass: the **EXP_ELO_111** game
+  (`replays/exp111_seed0_watch/`, turn **17**, **4** lost, 9 killed, 6
+  giants by t12). Units-lost is now 4 (down from a starting-loop value
+  of 29, and from EXP_ELO_110's 5) but still misses the <3 target.
+  **The remaining 3 losses are no longer a pricing-fixable gap**: id7
+  (t6, forced vacate, no legal alternative existed), id14 (t9, a
+  correctly-priced chip still played once nothing better remains later
+  the same turn — greedy per-ply sequencing, not a pricing bug), id12
+  (t15, a 265-point goal-approach term overwhelming survival — a
+  different pricing family than exposure/retaliation, not one a
+  tiebreaker should be widened to fix). This puts units_lost at a
+  practical floor of **3-4 for this seed under the current search
+  architecture** (frozen per-ply threat snapshot, no whole-turn
+  lookahead). **This is a decision point for Verdi, not a lever for
+  another autonomous `ml-expert` pass**: either accept 3-4 as the floor,
+  or the next real lever is a search-architecture change (whole-turn
+  planning/lookahead) — materially bigger than another reward term.
 - **EXP_ELO_109 was attempted and REVERTED** (2026-08-31, see the ledger
   for the full writeup) — pass-6/7's proposed move-level lethality-
   exposure penalty (a flat per-star charge on an Attack that leaves its
@@ -724,3 +758,42 @@ EXP_ELO_091's move-gen determinism fix.
   needs a different mechanism than the Defend-waterfall family; the
   other 2 losses (id7, id12) are structurally forced per pass-7 and
   out of scope for any pricing fix.
+- **2026-08-31, iteration 12 (EXP_ELO_111, SHIPPED)**: the "id28's
+  t15 death" lever pointed to above no longer existed to chase —
+  EXP_ELO_110's own turn-9 reorder cascaded into a different set of
+  subsequent deaths (id16 t12, id12 t14, id13 t15, all new), all
+  traced by a pass-9 `ml-expert` to one p2 Catapult's static
+  Chebyshev-3 kill zone. A full-game scan of the existing
+  `lethal_threat_weight` primitive's gate-fires (kept from EXP_ELO_109)
+  found Steps 3/3 true-positive vs Attacks 1/3 — directly justifying a
+  narrower design than EXP_ELO_109's: Steps-only (structurally, not by
+  tuning — an Attack candidate never even computes the penalty) and
+  tiebreaker-scale (`STEP_LETHAL_ENTRY_PENALTY=3.0`, not value-scale
+  like 105/109). Consulted `advisor()` before implementing (third
+  attempt in this mechanism family); proceeded with the sharpening to
+  pre-register the gauge as an expected wash. Ground truth: 2 of 3
+  flagged plies flip exactly as predicted (idx230, idx268, both
+  1-point margins), the third correctly stays lost (idx187, margin
+  15.58, too large for a 3-point tiebreaker by design — an honest
+  non-claim, not an oversight). 4 new pinning tests (350/350).
+  Regenerated game: turns 0-13 bit-identical, t14 diverges exactly as
+  predicted, **units_lost 5→4**. Investigated why not 3: a new tool
+  (`unit_trace_probe.rs`) traced id12 avoiding its original t14 trap
+  only to walk into a SEPARATE, 265-point-margin kill zone at t15 (a
+  large goal-approach pull the fix correctly does NOT override, since
+  overriding it would just be EXP_ELO_105/109's mistake again) —
+  superseding pass-7's stale "id12 structurally forced" classification
+  a second time. Paired gauge, two seed blocks: mixed sign (+1.56pp,
+  -3.91pp), both inside the ~7.8pp noise floor — the pre-registered
+  wash, shipped on the canonical game's clean evidence per the
+  EXP_ELO_102/107 precedent. Fire-rate diagnostic (new,
+  `STEP_LETHAL_ENTRY_CANDIDATES`/`_FIRES`, printed every run going
+  forward): ~4% of checked Step candidates on the Imperius mirror,
+  sane. EndTurn tripwire in-band. Committed.
+  **Loop paused here, per the advisor's explicit guidance and pass-9's
+  own honest ceiling acknowledgment: the remaining 3 losses (id7
+  forced-vacate, id14 accepted per-ply sequencing, id12 a different
+  large-margin pricing family) are not a lever another exposure-pricing
+  pass can close. units_lost=3-4 is the practical floor for this seed
+  under the current search architecture. Reported to Verdi as a
+  decision point rather than auto-launching a 6th `ml-expert` pass.**

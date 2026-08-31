@@ -87,6 +87,16 @@ pub(crate) fn print_run_summary(
         polyfish::ai::combat::SHARED_ATTACKER_PARTIAL_WEIGHTS.load(std::sync::atomic::Ordering::Relaxed)
     );
     {
+        let candidates = polyfish::ai::search::macro_exec::STEP_LETHAL_ENTRY_CANDIDATES
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let fires = polyfish::ai::search::macro_exec::STEP_LETHAL_ENTRY_FIRES
+            .load(std::sync::atomic::Ordering::Relaxed);
+        println!(
+            "  - EXP_ELO_111 Step lethal-entry gate (diagnostic, temporary): {fires}/{candidates} ({:.3}%)",
+            100.0 * fires as f64 / (candidates as f64).max(1.0)
+        );
+    }
+    {
         let cover_total =
             polyfish::ai::combat::DEFEND_CREDIT_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
         let cover_partial =

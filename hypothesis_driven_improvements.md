@@ -13324,3 +13324,235 @@ structurally-forced losses pass-7 classified (id7 t6 forced-vacate,
 id12 t12 Catapult-range geometry) remain out of scope for any pricing
 fix. units_lost is still the loop's one open KPI (target <3, currently
 5 held) -- id28's mechanism is the clearest next lever toward it.
+
+## EXP_ELO_111 — a Steps-only, tiebreaker-scale lethal-entry penalty for the walk-into-a-fresh-kill-zone family, superseding EXP_ELO_110's own "next lever" pointer after the trajectory it named stopped existing
+
+CONTEXT: EXP_ELO_110 shipped expecting its own "next lever" to be id28's
+t15 death (idx266) — but EXP_ELO_110's fix changed turn-9 move ordering,
+which cascaded into a materially different set of subsequent deaths.
+idx266/id28 no longer exists in the current trajectory. A fresh
+`ml-expert` pass (pass-9) re-scanned the regenerated
+`exp110_seed0_watch` game and found the CURRENT loss list is id7 (t6,
+unchanged, forced vacate), id14 (t9, unchanged, accepted per-ply
+sequencing limitation — see EXP_ELO_110's own entry), id16 (t12, NEW),
+id12 (t14, NEW), id13 (t15, NEW). The mechanism behind all three new
+deaths: a p2 Catapult summoned turn 11 on tile 24 (its capital) creates
+a static Chebyshev-3 one-shot kill zone against 8-10hp Warriors; three
+separate Warriors walked into it on three separate turns.
+
+Pass-9 ran `combat::lethal_threat_weight` (EXP_ELO_109's kept primitive)
+via `lethality_gate_probe` across all 119 played p1 Step/Attack moves
+and found exactly 6 gate-fires: 3 on Steps (idx187/230/268 — 3/3 true
+positives, all died) vs 3 on Attacks (idx60/127/238 — 1/3 true positive;
+idx60 is the exact correct kill EXP_ELO_109's broader scoping wrongly
+suppressed, idx238 survived because teammates killed the threat the
+same turn). This directly justified a narrower design than EXP_ELO_109's:
+Steps only (never Attacks — structurally, not by tuning), and
+tiebreaker-scale (not value-scale like EXP_ELO_105/109's `unit_worth`-
+scaled attempts).
+
+Independently ground-truth verified before writing any code
+(`find_ply_idx`, `attack_pricing_probe3`, `lethality_gate_probe`, all
+rebuilt against current HEAD): idx187 (t12, `Step 50->60` vs `50->61`)
+margin **15.584** (55.917 vs 40.333, both `[MATCH]` against the
+recorded score) — id16 was always going to stay lost against a
+tiebreaker this small. idx230 (t14, `Step 68->56` vs `68->67`) margin
+**1.000** (271.000 vs 270.000, both `dphi=+200.000` from an identical
+`unit_goal_approach` jump) — the LETHAL move was WINNING by 1 point.
+idx268 (t15, `Step 71->60` vs `71->61`) margin **1.000** (41.000 vs
+40.000) — same shape. `lethality_gate_probe` confirmed the gate fires
+cleanly on both (PRE safe, POST lethal, weight 1.000) and does not fire
+on idx188 (`Step 48->58`, id12's genuine earlier t12 entrapment —
+PRE lethally_exposed=true, GATE FIRES: false, the pre-exposed exemption
+holding exactly as designed).
+
+Also consulted `advisor()` before implementing (third attempt in this
+mechanism family, after 105/109's failures) — verdict: proceed, with
+three sharpenings folded in below: (1) the 109 failure mode is
+*structurally* unreachable here, not just empirically avoided, since a
+Steps-only gate can never touch an Attack move; (2) tiebreaker scale
+(3.0) means a false positive costs at most a slightly-worse Step, not a
+suppressed kill — the regret asymmetry, not hope, is the safety
+argument; (3) pre-register the gauge as an expected WASH (a 3-point
+Step nudge should not move mirror win rate), not another positive
+signal to chase.
+
+FIX (`src/ai/search/macro_exec.rs`): a new constant
+`STEP_LETHAL_ENTRY_PENALTY: f32 = 3.0` and a small pure helper —
+
+```rust
+fn step_lethal_entry_penalty(
+    pre_lethal: bool,
+    post_state: &GameState,
+    unit: &UnitState,
+    threats: &[(UnitState, f32)],
+) -> f32 {
+    if pre_lethal {
+        return 0.0;
+    }
+    STEP_LETHAL_ENTRY_PENALTY * combat::lethal_threat_weight(post_state, unit, threats)
+}
+```
+
+— extracted (mirroring the file's own `revive_endturn_for_lone_doomed_unit`
+precedent) specifically so it's directly unit-testable without running
+the full `rank_plies` pipeline. `rank_plies` gained a `pre_lethal: Option<FxHashMap<u32, bool>>`
+per-ply cache (same once-per-ply reuse pattern as `threats`/`belief`/
+EXP_ELO_110's `pre_health`, computed once from the already-available
+`threats` snapshot). In the per-candidate closure, a Step move's acting
+unit id is resolved from its PRE-move coords (`m.source_idx()`) *before*
+`simulate_move` relocates it; after simulating, if the unit still
+exists, `step_lethal_entry_penalty` is charged against `s`. The
+`step_unit_id` local is `None` for every non-Step move type by
+construction — an Attack candidate never even computes it, so it is
+structurally impossible for this fix to touch an Attack, independent of
+any runtime gate check. `attack_pricing_probe3.rs` mirrors the same
+formula in the same commit (own `pre_lethal` map + `step_unit_id`
+resolution + `step_penalty` term folded into `total`), keeping
+probe/production parity exactly as EXP_ELO_110 established.
+
+Two small diagnostic counters (`STEP_LETHAL_ENTRY_CANDIDATES`/
+`STEP_LETHAL_ENTRY_FIRES`, mirroring EXP_ELO_085's `ENDTURN_ELIGIBLE_PLIES`/
+`ENDTURN_CHOSEN_WITH_ALTERNATIVES` pair) were added and wired into
+`self_play`'s end-of-run summary, so every future run reports this
+gate's fire rate for free — the advisor specifically asked for this
+before trusting any gauge's aggregate win rate, since a Knights-heavy
+mirror matchup could have a very different fire surface than the
+canonical XinXi-vs-Imperius game.
+
+Four new pinning tests (`macro_exec::tests`): `step_lethal_entry_penalty_fires_on_a_fresh_one_shot`
+and `..._zero_when_post_move_is_safe` (both on the wrapper directly,
+same fixture as combat.rs's own `lethal_threat_weight_detects_a_one_shot...`),
+`..._exempts_an_already_exposed_unit` (the pre-exposed exemption), and
+an end-to-end `rank_plies_prices_a_step_into_a_fresh_kill_zone_below_a_safe_alternative`
+integration test. The integration test's first attempt used a
+Swordsman as the threat and placed the source tile 2 tiles away,
+expecting that to be safe — it wasn't: Swordsman has the Dash skill
+(movement 1 + range 1 = reach 2), so its threat zone extends past plain
+adjacency, and the source itself was already inside it (`was_pre_lethal=true`
+on every candidate, confirmed via a temporary debug trace). Fixed by
+moving the source to Chebyshev distance 3 from the threat, matching the
+same "movement + range" reach `can_attack_tile` actually computes
+rather than assuming naive adjacency — a useful reminder for any future
+fixture in this family. `cargo test --lib`: **350/350** (was 346; 4 new).
+
+VERIFICATION — the 3 originally-flagged plies, reprobed against the
+fix: idx230 now **268.000 vs 270.000** (flipped — the safe Step wins by
+2). idx268 now **38.000 vs 40.000** (flipped — safe wins by 2). idx187
+now **52.917 vs 40.333** (unchanged direction — margin dropped from
+15.584 to 12.584, correctly still not enough to flip a 3-point
+tiebreaker, exactly as pass-9 predicted as an honest non-claim, not an
+oversight).
+
+VERIFICATION — must-not-regress: idx60 (`Attack 39->27`, the exact kill
+EXP_ELO_109 wrongly suppressed) and idx238 (`Attack 64->52`) are
+Attacks — structurally excluded, `step_unit_id` can never resolve to
+`Some` for them regardless of gate status, so no runtime reprobe can
+even be meaningful insurance here beyond confirming the type check
+itself. idx188 (`Step 48->58`, id12's genuine t12 entrapment) reprobed
+via `lethality_gate_probe`: PRE `lethally_exposed=true`, GATE FIRES:
+**false** — the pre-exposed exemption holds exactly as required.
+
+VERIFICATION — regenerated game (`exp111_seed0_watch`, same seed
+1787500020, canonical recipe): turns 0-13 **bit-identical** to the
+`exp110_seed0_watch` baseline (confirmed console-log diff, not just ply
+probes). Turn 14 diverges exactly as predicted — `Step: 68 -> 56`
+(fatal) becomes `Step: 68 -> 67` (safe). Last turn **17** (held), units_killed
+**9** (held), giants by t12 **6** (held), throughput ~50 moves/sec
+(consistent). **units_lost 5 -> 4** — a real, if partial, improvement,
+not the hoped-for <3.
+
+The honest reason it's 4 and not 3: id13 (idx268's unit) now fully
+survives — clean win. id16 (idx187's unit) still dies at t12, exactly
+as predicted (margin too large for a 3-point tiebreaker, by design).
+id12 (idx230's unit) avoids its ORIGINAL t14 trap (confirmed: Step
+68->67 played, not 68->56) but is lost one turn later anyway, via a
+SEPARATE mechanism this fix was never meant to catch. Traced with a new
+tool, `examples/unit_trace_probe.rs` (generalizes the one-off script
+used to find this — `lost_units_probe.rs` says WHICH unit died and
+WHEN, this says WHY, printing every ply that changed one watched unit's
+coords/health with its `target_idx` for direct follow-up probing): at
+t15 (target_idx=258), id12 Steps `67 -> 55`, then p2 immediately Attacks
+`24 -> 55` and kills it. The candidate list at that ply
+(`ply_trace.jsonl`) shows `Step 67->55` scoring **314.0** against the
+next-best safe alternative `67->66` at **49.0** — a 265-point margin,
+three orders of magnitude past what a 3.0-point tiebreaker could or
+should touch. `lethality_gate_probe` confirms the gate DID fire
+correctly here (PRE safe, POST lethal, weight 1.000) and correctly
+lost anyway — this is the fix working exactly as designed, not a bug in
+it. Tile 55 sits inside the same p2 Catapult's kill zone (tile 24,
+Chebyshev distance 3) that caused all three original deaths; the
+265-point pull is presumably a large `unit_goal_approach`-style order
+term (P2's own immediate riposte, `Attack 24->55` the same turn,
+matches an Attack-order push toward that tile). This is a genuinely
+different, out-of-scope problem — an order/goal-approach pricing term
+overwhelming basic survival by two orders of magnitude — and
+deliberately NOT something this fix should be widened to override:
+doing so would just reproduce EXP_ELO_105/109's value-scale mistake
+under a different name.
+
+This SUPERSEDES pass-7's original "id12 = structurally forced
+(Catapult-range geometry)" classification a second time. Pass-9 already
+showed the t14 death wasn't forced (a fixable 1-point preference); this
+entry shows id12's actual fate in the current trajectory is a THIRD,
+separate event (t15, not t12 or t14) via a THIRD distinct mechanism (a
+large goal-pull override, neither a close-margin tiebreak nor genuine
+geometric entrapment). Any future pass citing "id12" must check which
+trajectory and which turn it means — the label has now named three
+different failure modes across three different fix states of this game.
+
+PAIRED GAUGE (n=128 per block, seed 770425 + disjoint 770553, Imperius
+mirror, worktree-isolated at commit `b635cb2` (EXP_ELO_110) for both
+arms, model.safetensors MD5-verified identical across all 4 run dirs,
+binaries MD5-confirmed distinct):
+
+| seed block | baseline anchor_net_wr | treatment anchor_net_wr | Δ |
+|---|---|---|---|
+| 770425 | 0.523438 | 0.539063 | +1.56pp |
+| 770553 | 0.570313 | 0.531250 | −3.91pp |
+
+Mixed sign, both magnitudes well inside the ~7.8pp noise floor — a
+wash, exactly as pre-registered with the advisor ("a 3-point Step nudge
+should not move mirror win rate"; a wash ships, matching the EXP_ELO_102/107
+precedent of shipping on the strength of clean canonical-game evidence
+rather than a gauge signal that was never expected to move). avg_units_lost
+moved slightly favorably on both blocks (19.79->19.70, 19.24->19.06)
+but these deltas are also noise-floor-scale and not read as a
+confirming signal on their own. Step lethal-entry gate fire rate (new
+diagnostic, both treatment arms): **3.99%** (29824/748251, seed 770425)
+and **4.26%** (35922/843886, seed 770553) of checked Step candidates —
+eyeballed as sane, not a runaway majority; higher than the canonical
+single game's near-zero rate, consistent with the advisor's flagged
+possibility that Imperius-mirror Knights are more borderline-one-shot-prone
+than the canonical game's Catapult-vs-Warrior scenario, but not
+alarmingly so. EXP_ELO_085's EndTurn-revival tripwire: 1.519%/1.574% on
+both treatment arms, in the established 1.4-3.0% band.
+
+Disposition: **SHIPPED**. Ground-truth verified on all 3 flagged plies
+(2 flipped exactly as predicted, 1 correctly unchanged as an honest
+non-claim) plus 4 must-not-regress plies (2 structurally excluded, 1
+directly reprobed, both formally and via the type system), 350/350
+tests including 4 new pinning tests, a regenerated game that holds on 3
+KPIs and improves units_lost 5->4 with no throughput cost, and a
+noise-floor paired gauge with a sane fire-rate diagnostic — clears
+every bar this mechanism family has needed to clear since EXP_ELO_109's
+failure defined them.
+
+**No further exposure-mechanism lever is being launched after this
+entry.** The remaining losses are now well-characterized and belong to
+a genuinely different problem class than reward-tweaking within
+`rank_plies` can address: id7 (t6, forced vacate — no legal alternative
+existed), id14 (t9, EXP_ELO_110's own correctly-priced chip still
+played once nothing better remains later the same turn — a per-ply
+greedy-sequencing limitation, not a pricing bug), id12 (t15, a
+265-point goal-approach term overwhelming survival — a different
+pricing family than exposure/retaliation entirely, and not one a
+tiebreaker should be widened to fix). Together these put units_lost at
+a practical floor of **3-4** for this seed under the current search
+architecture (a frozen per-ply `threats` snapshot with no lookahead,
+and greedy per-ply candidate selection with no whole-turn plan).
+Closing this further needs either accepting the current number, or a
+genuinely different lever — a search-architecture change (whole-turn
+lookahead/planning) rather than another reward term in this family.
+That decision belongs to Verdi, not to another autonomous pricing pass;
+see `seed0_loop_status.md` for the KPI status handed back to him.
