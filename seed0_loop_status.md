@@ -374,6 +374,20 @@ EXP_ELO_091's move-gen determinism fix.
   another autonomous `ml-expert` pass**: either accept 3-4 as the floor,
   or the next real lever is a search-architecture change (whole-turn
   planning/lookahead) — materially bigger than another reward term.
+  **RESOLVED 2026-08-31**: Verdi watched the EXP_ELO_111 game via the
+  web replay player and answered with a third path — not "accept the
+  floor" and not "do the search-architecture rewrite," but a fresh set
+  of 7 behavioral-gap observations from actually watching it play,
+  covering different mechanisms entirely (undefended cities, reward
+  pricing, scouting, capital consolidation). See EXP_ELO_112 and
+  "Iteration 13" below. The exposure-pricing loop this section
+  describes stays closed exactly as shipped; nothing here is reopened.
+- **The T2 plan** (macro-ballot dedup bug / `DETACH_MACRO_HEADS`
+  gradient-interference isolation / win-loss-primary label redesign;
+  full plan on disk at `~/.claude/plans/ok-lets-draft-a-gleaming-
+  emerson.md`) **stays parked, untouched, superseded in priority by
+  iteration 13 below** — a separate, unrelated body of work (network
+  prior training), not dropped, just not what Verdi asked for next.
 - **EXP_ELO_109 was attempted and REVERTED** (2026-08-31, see the ledger
   for the full writeup) — pass-6/7's proposed move-level lethality-
   exposure penalty (a flat per-star charge on an Attack that leaves its
@@ -797,3 +811,52 @@ EXP_ELO_091's move-gen determinism fix.
   pass can close. units_lost=3-4 is the practical floor for this seed
   under the current search architecture. Reported to Verdi as a
   decision point rather than auto-launching a 6th `ml-expert` pass.**
+- **2026-08-31, iteration 13 (EXP_ELO_112, ground-truth verification
+  pass, no code shipped yet)**: Verdi watched `exp111_seed0_watch` via
+  the web replay player (`http://localhost:3000`, Replay button ->
+  `exp111_seed0_watch/game_iter100_game0_seed1787500020.replay.json`)
+  and reported 7 behavioral complaints by UI step number. `advisor()`
+  confirmed UI step == `decisions.json` `move_count` == every probe's
+  `target_idx` (three verbatim matches). All 7 were ground-truth
+  verified before any design work, per standing practice — full
+  numbers in the EXP_ELO_112 ledger entry. Verdicts: **#1** city49
+  undefended turn 7 with 2 enemies at distance 1 — CONFIRMED. **#5**
+  city41 undefended turn 11 with an enemy at distance 1 — CONFIRMED,
+  worse than #1, same mechanism (vacate-to-advance with no refill).
+  **#3** BorderGrowth reward at idx141 — CONFIRMED discrete-pricing bug:
+  `scoring.rs` prices it via a flat `city_territory<10` threshold table
+  (never migrated to `goal_potential.rs`'s continuous pricing the way
+  EXP_ELO_097 already did for the sibling Explorer/Workshop slot);
+  city49's territory was exactly 9, one under the threshold, deciding a
+  real choice by 1 point. **#4** fog near tile 79 — CONFIRMED: 9 turns
+  (0-9) of `nearest_own_unit_dist` stuck at 3-4 before finally closing
+  turns 10-13; genuinely could have started sooner. **#7** giant
+  62->72 "not gunning for the capital" at idx190 — CONFIRMED mechanism,
+  NOT a simple miss: P1's total army value (84) is ~5x P2's (17), but
+  only 3 units sit within Chebyshev 3 of the capital (value 14) against
+  11 in enemy local defenders — the `OrderKind::Attack` gate needs 16.5,
+  missed by 2.5, and nothing routes the other idle units toward closing
+  that gap (`prepare=true` fires but does nothing for idle-unit
+  routing). **#6** giant at tile 39, idx178 — RECONCILED, no bug: no
+  Attack candidate existed at that ply; the chosen Step is the
+  Defend(49) order correctly pulling the giant back to garrison (this
+  is what closes window #1 by turn 12). **#2** ~7 Warriors by turn 8-9
+  — DEFERRED: zero observed cost in this game (all 4 deaths trace to
+  one Catapult kill zone, not defender retaliation), matches the
+  already-DEMOTED army-composition finding (AUC 0.536). Built 3 new
+  durable probes (`city_garrison_probe.rs` generalizing `city49_probe`,
+  `army_composition_probe.rs`, `city_territory_probe.rs`,
+  `fog_reveal_probe.rs`, `army_pressure_probe.rs` — 5 total, one more
+  than planned since capital-gate reconstruction needed its own tool).
+  Priority locked with `advisor()`: EXP_ELO_113 (BorderGrowth->Δφ) ships
+  first (smallest, cleanest, direct EXP_ELO_097 template), then
+  undefended-city windows (#1/#5), then the capital-consolidation pull
+  (#7, most design-heavy, gets an `ml-expert` review first), then
+  scouting/belief-map wiring (#4). Each fix re-verifies its own claim's
+  numbers against the THEN-current canonical game before designing,
+  since an earlier fix in the sequence can move or erase a later
+  claim's exact margins (as EXP_ELO_110 already did to EXP_ELO_111's
+  original target). `exp111_seed0_watch/` stays frozen as the audit
+  record of what Verdi actually watched; regenerated games go to new
+  directories. Committed as its own commit (ledger + status + 5 probes,
+  no production code changed yet).

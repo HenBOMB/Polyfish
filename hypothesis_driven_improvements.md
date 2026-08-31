@@ -13556,3 +13556,159 @@ genuinely different lever — a search-architecture change (whole-turn
 lookahead/planning) rather than another reward term in this family.
 That decision belongs to Verdi, not to another autonomous pricing pass;
 see `seed0_loop_status.md` for the KPI status handed back to him.
+
+## EXP_ELO_112 — ground-truth verification pass on 7 behavioral gaps Verdi found by watching `exp111_seed0_watch` (Step 0 of a new iteration; the exposure-pricing loop stays closed per EXP_ELO_111)
+
+CONTEXT: Verdi watched `exp111_seed0_watch` end-to-end via the web
+replay player and reported 7 specific behavioral complaints by UI step
+number (twice left a city undefended while marching out; ~6-7 Warriors
+by turn 10 read as wasteful given giants/Forges are the actual answer
+to defenders; a BorderGrowth reward pick that looked low-value; fog
+near a village not cleared until much later than necessary; two
+combat-sequencing/aggression complaints in the turn-12 giant pushes).
+Per standing practice, none of these were taken at face value — each
+was ground-truth verified against the frozen replay before any design
+work started. `advisor()` was consulted twice: once to structure the
+verification pass and lock a priority order, once after the pass
+completed to sanity-check the findings and confirm no scope-call was
+needed. UI step number is confirmed identical to `decisions.json`'s
+`move_count` and to every existing probe's `target_idx` (three
+independent verbatim matches: idx95="Build Mine at 53", idx141="Choose
+reward BorderGrowth for city at 49", idx190="Step 62->72").
+
+Three new durable probes were built (promoted from scratch scripts,
+`examples/`): `city_garrison_probe.rs` (generalizes the existing
+`city49_probe.rs` to any city tile — per-turn garrison + Chebyshev-3
+enemy proximity), `army_composition_probe.rs` (per-turn unit-type
+counts + stars + city count for one player), `city_territory_probe.rs`
+(per-city territory/level/population at a step), `fog_reveal_probe.rs`
+(per-turn fog-explored status + nearest-own-unit distance to a tile),
+and `army_pressure_probe.rs` (reconstructs `oracle_macro`'s
+`OrderKind::Attack` gate inputs — clustered value within 3, enemy
+defenders within 2, the 1.5x margin — against a target city).
+
+VERDICTS:
+
+**#1 city49 undefended, turn 7 (CONFIRMED, real exposure).**
+`city_garrison_probe 49`: turn 7 `garrison=None` with two enemy units
+at Chebyshev distance 1 (`(2,60,1,15.0)`, `(2,48,1,15.0)`). The window
+opened at idx88 (`Attack: 49->61`, the garrison stepping out to
+attack) and closed at idx103 (`Train Warrior at 49`, next turn) — the
+city sat open for a full turn with enemies adjacent. Not punished in
+this deterministic game, but genuinely exposed.
+
+**#5 city41 undefended, turn 11 (CONFIRMED, worse than #1).**
+`city_garrison_probe 41`: turn 11 `garrison=None` with an enemy unit
+at Chebyshev distance **1** (`(2,30,1,15.0)`). Window opened at idx163
+(`Step: 41->51`) and closed at idx177 (`Step: 51->41`, next turn).
+Same mechanism as #1 — a unit vacates the city tile to advance/attack
+and nothing refills it before the enemy's next turn. Two occurrences
+in one 17-turn game — a real, recurring pattern, not a one-off.
+
+**#3 BorderGrowth at city49, idx141 (CONFIRMED, discrete-pricing bug).**
+`scoring.rs::score_reward` prices `CityRewardType::PopGrowth` as a
+flat `base+8.0` and `CityRewardType::BorderGrowth` as `base+9.0` if
+`city_territory < 10` else `base+5.0` — a hardcoded threshold table,
+never migrated to the continuous `goal_potential.rs` pricing that
+EXP_ELO_097 already applied to the sibling Explorer-vs-Workshop reward
+slot. `city_territory_probe` confirms city49's actual territory at
+idx141 was **9** — one tile under the threshold — so BorderGrowth won
+by exactly 1 point (209 vs 208) regardless of what the extra territory
+actually contained. Textbook instance of the project's own "prefer
+continuous over discrete pricing" standing rule
+([[prefer-continuous-over-discrete-pricing]] memory; EXP_ELO_096 got
++10.9pp from the same class of fix).
+
+**#4 fog near tile 79 (CONFIRMED, real stagnation).**
+`fog_reveal_probe 1 79`: `explored_by_p1` stays `false` through turn 9
+and flips at turn 10 (`first_seen=Some(10)`). `nearest_own_unit_dist`
+sits at 3-4 for turns 0-9 (never closing) before dropping 2/1/1/0
+turns 10-13. Nine turns of no unit making deliberate progress toward
+that tile, then a sudden, unexplained close — consistent with "we
+could've dedicated a unit to that direction turns 7-8" rather than
+turn 10 being some genuine unlock/gate.
+
+**#7 giant 62->72 not "gunning for the capital", idx190 (CONFIRMED
+mechanism, NOT a missed easy fix).** `army_pressure_probe` at idx190,
+target city 24 (P2's capital, confirmed by all P2 Train commands
+targeting it): capital tile is explored; P1's total army value is
+**84** vs P2's total **17** (~5x advantage); but only 3 of P1's units
+sit within Chebyshev 3 of the capital, combined value **14**, against
+P2's local defenders (within 2) valued at **11** — the `OrderKind::Attack`
+gate needs `2*14=28 > 3*11=33`... i.e. local value must clear **16.5**,
+missed by **2.5**. `prepare=true` (our_army > defenders, a unit within
+4) is set, but nothing in the current code routes idle units toward
+closing that specific gap — an idle unit with no order (`unit_goals`
+confirms `goal: None` for both the tile-39 giant at idx178 and the
+tile-62 giant at idx190) just takes whichever Step scores highest
+locally, with no capital-ward pull. `oracle_macro.rs`'s own comment
+explains why the gate is strict: "1.5x margin (v2.1): proximity
+superiority alone kept ATTACK lit on 36-40% of plies; a real edge
+should be decisive, not marginal" — so the fix is NOT loosening the
+gate (that was already tried and reverted in spirit), it's giving idle
+units something to do while `prepare=true` and the gate hasn't fired
+yet. Correctly classified per `advisor()` as goal-assignment work, not
+a search-architecture rewrite — tractable, but the most design-heavy
+item of the four fixes; gets an `ml-expert` design review before code,
+matching the EXP_ELO_110 pass-8 precedent.
+
+**#6 giant at 39, idx178 (RECONCILED — no bug, no fix).** First read
+looked like "chose Step over an available Attack," but `find_ply_idx`
++ the ply_trace candidate list at idx177/178 show **no Attack
+candidate existed at all** for the tile-39 giant at that ply. Tracing
+further back: the actual kill Verdi remembers is idx165
+(`Attack: 49->39`, T11) — melee attacks relocate the attacker onto a
+killed target's tile in this engine, which is how giant id19 ended up
+standing at 39 in the first place. By idx178 (T12) nothing was left in
+attack range; the chosen `Step 39->49` (score 1250.37, far above any
+alternative) is `goal.orders` containing `Defend(49)` pulling the
+giant back to garrison the city — which is exactly the fix that closes
+window #1 by turn 12 (`city_garrison_probe` confirms `garrison=Some
+Giant` at turn 12). This is the defend machinery working correctly,
+not a missed attack. The remaining, real complaint underneath it
+("giants aren't delivering offensive value") is the same root cause as
+#7 (idle units default to no coordinated push) — no separate fix.
+Disposition: documented, no code change.
+
+**#2 warrior count / star timing (DEFERRED, zero observed cost here).**
+`army_composition_probe 1`: Warrior count peaks at 7 turns 8-9, giants
+start appearing turn 10 (3 at once) and reach 8 by turn 16 — so giants
+are not late in this game, and Warrior count is already *declining*
+(7->6) by the time Swordsmen start appearing turn 12. All 4 of this
+game's unit deaths (per the EXP_ELO_111 entry) were traced to one
+static Catapult kill zone, not to defender retaliation from
+overextended Warriors — the specific mechanism Verdi flagged as
+costly ("they do a lot of retaliation damage") has zero observed
+casualties in this game. This also matches a standing, already-DEMOTED
+finding ([[army-composition-gap]] memory: same unit count as Greedy at
+half the $/unit value, but AUC 0.536 on win/loss — decides nothing).
+Documented and deferred rather than probed further; revisit only if a
+future regenerated game shows real cost.
+
+PRIORITY (locked with `advisor()`, re-verify each claim against the
+*current* canonical game before designing its fix — a shipped fix can
+move or erase a later claim's exact numbers, exactly as EXP_ELO_110's
+own fix erased EXP_ELO_111's originally-registered target):
+
+1. **#3 BorderGrowth->Δφ** (EXP_ELO_113) — smallest surface, fully
+   verified, EXP_ELO_097 is a direct template. Ships first.
+2. **#1/#5 undefended-city windows** — recurring, existing
+   `city_risks`/`defend_plan` machinery to extend; sizing-box the
+   penalty first, this sits next to the 105/109 graveyard.
+3. **#7 capital-consolidation pull** — most design-heavy; `ml-expert`
+   review before code; pre-register an order-active fire-rate
+   diagnostic with 36-40% as the known-bad ceiling (don't repeat the
+   mistake the v2.1 gate tightening was fixing).
+4. **#4 scouting/belief-map wiring** — check whether `expand_targets`
+   only targets already-*explored* villages; if the belief map's
+   village prediction isn't wired into the Expand order list, that's
+   likely the whole fix.
+
+`#2` and `#6` need no further action beyond this entry.
+
+Guardrails per shipped fix (unchanged from the closed loop): full lib
+test suite, canonical-game regen with no regression vs the current
+best (win, turn <=17, units_lost <=4, giants >=6 by t12), paired gauge
+on both seed blocks (770425/770553), fire-rate diagnostics in band,
+one mechanism per EXP_ELO entry — the EXP_ELO_067 bundling failure is
+still the reason two changes never ship in the same commit.
