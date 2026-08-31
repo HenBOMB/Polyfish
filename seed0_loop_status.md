@@ -357,7 +357,12 @@ EXP_ELO_091's move-gen determinism fix.
      time. Paired gauge, two seed blocks: mixed sign (+1.56pp, -3.91pp),
      both inside the ~7.8pp noise floor — a pre-registered wash, shipped
      on the canonical game's clean evidence. Committed.
-- Current best game for the next analysis pass: the **EXP_ELO_111** game
+- **SUPERSEDED 2026-08-31 by iteration 13's own final game** (see the
+  closing summary at the end of this log): `replays/iter13_final_seed0_watch/`,
+  turn **16**, **3** lost, 9 killed, 6 giants by t12 — better on every
+  axis below. Kept for historical trail only; do not use as the
+  current-best pointer.
+- Current best game for the next analysis pass (SUPERSEDED, see above): the **EXP_ELO_111** game
   (`replays/exp111_seed0_watch/`, turn **17**, **4** lost, 9 killed, 6
   giants by t12). Units-lost is now 4 (down from a starting-loop value
   of 29, and from EXP_ELO_110's 5) but still misses the <3 target.
@@ -956,3 +961,41 @@ EXP_ELO_091's move-gen determinism fix.
   (turn 17->16, units_lost 4->3, confirmed capital assault) plus a
   clean (wash-shaped) gauge. Both fixes' full writeups in
   `hypothesis_driven_improvements.md`.
+
+## Iteration 13 — CLOSED, 2026-08-31
+
+All 7 behavioral gaps Verdi raised from watching `exp111_seed0_watch`
+have been dispositioned (EXP_ELO_112's verification pass + the four
+fix attempts that followed it). Summary:
+
+| Claim | What it was | Disposition |
+|---|---|---|
+| #1/#5 undefended cities | city49 (t7) / city41 (t11) left open with an enemy 1 tile away | **SHIPPED** (EXP_ELO_114) — standing `city_open_exposed` Φ term, order-independent. Honest limit: doesn't fully close either originally-flagged window (greedy per-ply executor still takes the vacate once its cheaper alternative is spent), but is independently correct and gauge-clean. |
+| #3 BorderGrowth pricing | discrete `city_territory<10` threshold | **SHIPPED** (EXP_ELO_113) — continuous new-tile-count formula. The specific flagged pick turned out defensible once the full Φ was counted; the underlying discrete-cliff bug was real and is fixed regardless. |
+| #7 capital consolidation | overwhelming army advantage, no convergence on the enemy capital | **SHIPPED** (EXP_ELO_116) — `MacroGoal.prepare` + standing pull term. Strongest result of the loop: turn 17->16, units_lost 4->3, confirmed capital assault (`Attack: 36->24`, t15) that never happened in any prior iteration's canonical game. |
+| #4 scouting delay | belief system predicted a village 3 turns before it was found | **ATTEMPTED, REVERTED** (EXP_ELO_115) — removing the `COMMIT_CITY_TARGET` gate regressed the canonical game (turn 19, 6 lost, giants dropped to 4). `COMMIT_CITY_TARGET` turned out to be a genuine multi-site consolidation signal; a naive gate removal wasn't the right shape. Probes kept for a future, better-scoped attempt. |
+| #2 warrior overproduction | ~7 Warriors by turn 8-9 | **NO FIX** (documented in EXP_ELO_112) — zero observed cost in this game (all deaths trace to one Catapult ambush, not defender retaliation); matches a prior DEMOTED finding. |
+| #6 giant sequencing | expected an attack that didn't fire | **RECONCILED, no bug** (documented in EXP_ELO_112) — the flagged move was the Defend order correctly pulling that unit home; no Attack candidate existed at that ply. |
+
+### Final KPI audit (`replays/iter13_final_seed0_watch/`, regenerated
+### from the clean, fully-committed HEAD after EXP_ELO_113+114+116)
+
+| Target (Verdi, mid-loop) | Result | Status |
+|---|---|---|
+| Game ends by turn 15 or sooner | Turn 16 | **Miss — 1 turn over** |
+| Fewer than 3 units lost in combat | 3 lost | **Miss — at the boundary, not strictly under** |
+| At least 3 giants before turn 12 | 6 giants | **Met, comfortably** |
+| Wins decisively | Win, Decisive: true, reproduced byte-identically across 2 runs | **Met (this seed; N=1, not a broader win-rate claim)** |
+
+Both remaining misses are now within a single unit of the target —
+turn count over by exactly 1, units_lost sitting exactly at the
+boundary rather than under it. This is a genuinely different place
+than where this loop started (turn 32, 29 units lost, at iteration 1).
+
+**This is the natural stopping point for iteration 13, not a mid-flight
+pause.** The 7-claim scope Verdi gave is fully worked through. Per the
+same pattern as the EXP_ELO_111 close-out: the remaining gap to a clean
+sweep on both numeric targets is a decision point for Verdi, not a
+lever for another unprompted `ml-expert` pass — no new claim-hunting
+pass (re-watching the replay for an 8th issue) is launched from here
+without his input.
