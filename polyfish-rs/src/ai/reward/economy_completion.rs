@@ -357,8 +357,8 @@ mod tests {
         state.tribes.insert(1, t1);
         // Explored up front so later phases don't shift the scout term.
         state.tiles.entry(61).or_insert_with(TileState::default).explorers.insert(1);
-        let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
-        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+        let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None, prepare: None };
+        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None, prepare: None };
 
         // No resources anywhere: progress 1 is structurally stranded.
         let stranded = goal_potential(&state, 1, &grow, None);

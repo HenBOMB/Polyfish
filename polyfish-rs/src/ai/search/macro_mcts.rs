@@ -1878,12 +1878,12 @@ mod tests {
         let matching = MacroGoal {
             orders: vec![(OrderKind::Attack, 4)],
             stance: Stance::Arm,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         let mismatched = MacroGoal {
             orders: vec![(OrderKind::Defend, 0)],
             stance: Stance::Grow,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         let candidates = vec![matching, mismatched];
 

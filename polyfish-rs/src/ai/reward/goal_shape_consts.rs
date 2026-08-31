@@ -196,6 +196,17 @@ pub const SHAPE_GOAL_DEFEND_HOLD: f32 = 400.0;
 /// that band with room on both sides.
 pub const SHAPE_GOAL_CITY_OPEN_EXPOSED: f32 = 25.0;
 
+/// EXP_ELO_116: per-tile rate pulling idle, uncommitted units toward
+/// `MacroGoal.prepare`'s target city -- the Attack gate almost fired but
+/// missed on assembled local value, and nothing previously priced closing
+/// that gap. Ground-truth verified: EXP_ELO_112 claim #7's flagged ply had
+/// 84-vs-17 total army value but only 3 units clustered, missing the gate
+/// by 2.5 (of 16.5 needed). Sized well under EXP_ELO_114's 44.4 kill-margin
+/// ceiling (a kill that moves the attacker away from the prepare city eats
+/// this rate once) and above the low single digits a generic idle Step
+/// scores by, so a genuinely idle unit's march is worth redirecting.
+pub const SHAPE_GOAL_PREPARE_PER_TILE: f32 = 20.0;
+
 /// Rewards keeping units focused on attacking a targeted enemy city instead
 /// of wandering off — pays up to 4 attackers per target.
 pub const SHAPE_GOAL_ATTACK_PRESS: f32 = 500.0;

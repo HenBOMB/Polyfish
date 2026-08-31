@@ -47,6 +47,17 @@ pub enum Stance {
 /// `MacroGoal.save_target` below needs it in scope.
 pub use crate::ai::economy::SaveTarget;
 
+/// EXP_ELO_116: the enemy city `prepare` (below) is massing toward, and how
+/// much clustered local value is still missing to clear the `OrderKind::
+/// Attack` gate's 1.5x margin (in `unit_worth` units) -- the SAME numbers
+/// the gate itself computes, not a re-derived estimate, so the pull this
+/// feeds can never disagree with the gate it's assembling toward.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrepareTarget {
+    pub city: i32,
+    pub deficit: i32,
+}
+
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct MacroGoal {
     pub orders: Vec<(OrderKind, i32)>,
@@ -56,6 +67,12 @@ pub struct MacroGoal {
     /// the categorical); `reward::goal_potential` reads it to pay the savings
     /// ramp and `advances_save_plan` reads it to boost the plan's own moves.
     pub save_target: Option<SaveTarget>,
+    /// EXP_ELO_116: set whenever the Attack gate almost fires (`prepare`)
+    /// and the tribe has already committed past `COMMIT_CITY_TARGET` cities.
+    /// Not encoded into the feature planes (same treatment as `save_target`);
+    /// `reward::goal_potential` reads it to pull idle, uncommitted units
+    /// toward closing the gap.
+    pub prepare: Option<PrepareTarget>,
 }
 
 /// Turn-scoped memo for `compute_macro_goal`'s two expensive sub-computations
@@ -164,6 +181,8 @@ pub fn compute_macro_goal_cached(
     // sets `prepare` instead (post-expansion ARM below). Defender count is
     // ground truth, not FOW-filtered — acceptable script approximation.
     let mut prepare = false;
+    let commit_committed = tribe.cities.len() >= COMMIT_CITY_TARGET;
+    let mut prepare_target: Option<PrepareTarget> = None;
     for (id, t) in &state.tribes {
         if *id == player {
             continue;
@@ -181,6 +200,7 @@ pub fn compute_macro_goal_cached(
                 .filter(|(u, _)| cheb(*u, c.idx) <= 3)
                 .map(|(_, cost)| *cost)
                 .collect();
+            let local_sum: i32 = local.iter().sum();
             let defenders: i32 = t
                 .units
                 .iter()
@@ -189,12 +209,28 @@ pub fn compute_macro_goal_cached(
                 .sum();
             // 1.5x margin (v2.1): proximity superiority alone kept ATTACK lit
             // on 36-40% of plies; a real edge should be decisive, not marginal.
-            if local.len() >= 2 && 2 * local.iter().sum::<i32>() > 3 * defenders {
+            if local.len() >= 2 && 2 * local_sum > 3 * defenders {
                 orders.push((OrderKind::Attack, c.idx));
             } else if our_army > defenders
                 && own_units.iter().any(|(u, _)| cheb(*u, c.idx) <= 4)
             {
                 prepare = true;
+                // EXP_ELO_116: same arithmetic as the gate just above, not a
+                // re-derived estimate — `local.len() >= 2` is a count leg the
+                // value-only deficit can't see, so a single (however heavy)
+                // local unit's deficit is floored at 1 rather than reading
+                // non-positive and stalling the pull that's meant to recruit
+                // a second unit in.
+                if commit_committed {
+                    let needed = (3 * defenders + 2) / 2;
+                    let deficit = (needed - local_sum).max(1);
+                    let better = prepare_target.map_or(true, |p: PrepareTarget| {
+                        deficit < p.deficit || (deficit == p.deficit && c.idx < p.city)
+                    });
+                    if better {
+                        prepare_target = Some(PrepareTarget { city: c.idx, deficit });
+                    }
+                }
             }
         }
     }
@@ -235,7 +271,7 @@ pub fn compute_macro_goal_cached(
     } else {
         Stance::Grow
     };
-    MacroGoal { orders, stance, save_target }
+    MacroGoal { orders, stance, save_target, prepare: prepare_target }
 }
 
 /// Why ARM is elevated. Threat and momentum both want giants, so the planner

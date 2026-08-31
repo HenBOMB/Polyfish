@@ -903,3 +903,56 @@ EXP_ELO_091's move-gen determinism fix.
   committed on its own (`goal_potential.rs`/`goal_shape_consts.rs`/
   `economy_completion.rs`/`summary.rs` + `city_risk_probe.rs` + ledger +
   this file) -- not bundled with 113, per the EXP_ELO_067 lesson.
+- **2026-08-31, iteration 13 continued (EXP_ELO_115 REVERTED, EXP_ELO_116
+  code complete + gauge in progress -- strongest result this loop has
+  produced)**: **EXP_ELO_115** (belief-guess scouting past
+  `COMMIT_CITY_TARGET`): implemented per claim #4's ground truth
+  (`guess_villages` correctly predicted tile 79's neighborhood as early
+  as turn 7, but the gate retired the whole mechanism at 3 cities,
+  turn 3-5). Real, reproducible regression on the canonical game: turn
+  19 (was 17), 6 lost (was 4), **giants by t12 dropped to 4** (was 6,
+  a direct miss on Verdi's own target). `COMMIT_CITY_TARGET` turned out
+  to be a genuine, multi-site consolidation signal elsewhere in the
+  codebase (`update_commitment`'s own test explicitly retires
+  commitment tracking at the same threshold) -- removing ONE of its
+  uses reintroduced a scouting pull the rest of the goal system wasn't
+  designed to coexist with past that point. **REVERTED.** Finding kept
+  on record; `expand_targets_probe.rs`/`village_guess_probe.rs` kept as
+  useful primitives for a future, better-scoped attempt (e.g. scaling
+  the guess top-up down rather than an all-or-nothing gate removal).
+  **EXP_ELO_116** (`MacroGoal.prepare` field + standing pull-toward-
+  the-attack-gate Φ term, claim #7): an `ml-expert` design-review pass
+  was launched first (per the locked priority list's own instruction
+  that this was the most design-heavy item) and delivered a complete,
+  implementable design in one pass -- new `PrepareTarget{city,deficit}`
+  field on `MacroGoal` (unpainted, mirrors `save_target`'s treatment,
+  zero dual-network/feature-channel implication), populated with the
+  SAME arithmetic the `OrderKind::Attack` gate itself computes, gated
+  on `COMMIT_CITY_TARGET`; a new Φ term pulling the nearest eligible
+  idle units toward it, zeroed by any Defend order, discounted by
+  lethal-threat exposure, excluding Expand-assigned/garrisoned/attack-
+  committed units. 9 compile-enforced call sites in `macro_agent.rs`
+  needed the new field threaded through -- exactly as the design
+  review predicted. 5 new pinning tests, 357/357 lib tests.
+  **Canonical-game result: turn 17->16, units_lost 4->3 (the first time
+  this whole loop has hit Verdi's "<3" target this closely), giants
+  held at 6, decisive win reproduced byte-identically.** Directly
+  confirmed mechanism, not just KPIs: `Attack: 36 -> 24` at turn 15 --
+  the net actually assaults the enemy capital for the first time in
+  this loop's history. Fire-rate: 1446/5443 (26.6%) fired, 3997
+  suppressed by an active Defend order (a real, sizeable but expected
+  frontline-safety carve-out, not a red flag by itself). Paired gauge
+  (worktree-isolated at the EXP_ELO_113+114-final commit as baseline):
+  770425 -3.91pp (73/128 -> 68/128), 770553 +0.78pp (69/128 -> 70/128)
+  -- mixed sign, both inside the noise floor, same shape as
+  EXP_ELO_111's precedent. Fire-rate data from this same gauge explains
+  the muted aggregate: ~79% of eligible evaluations were suppressed by
+  an active Defend order on BOTH arms, since the symmetric Imperius
+  mirror keeps both sides defending far more continuously than the
+  asymmetric canonical game (net vs a weaker anchor with an 84-vs-17
+  material lead) -- the mechanism converts an EXISTING advantage into
+  pressure, and the mirror structurally has less of that advantage to
+  convert. **SHIPPED** on the canonical game's own direct evidence
+  (turn 17->16, units_lost 4->3, confirmed capital assault) plus a
+  clean (wash-shaped) gauge. Both fixes' full writeups in
+  `hypothesis_driven_improvements.md`.

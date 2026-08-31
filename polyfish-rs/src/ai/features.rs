@@ -1005,7 +1005,7 @@ mod tests {
                 (OrderKind::Attack, 5),
             ],
             stance: Stance::Arm,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         let raw = state_to_cpu_features_goal(&game.state, 1, None, Some(&goal)).unwrap();
         let plane =

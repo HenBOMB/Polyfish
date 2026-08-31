@@ -742,13 +742,13 @@ fn guessed_sites_spread_across_quadrants() {
 fn goal_star_gate_is_stance_aware() {
     let mut state = state_with_villages(0, &[3]);
     // ARM gates regardless of expansion state.
-    let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+    let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None, prepare: None };
     assert!(tech_discipline_active(&state, 1, &arm));
     // GROW gates only inside the expansion window.
     let grow = MacroGoal {
         orders: vec![(OrderKind::Expand, 3)],
         stance: Stance::Grow,
-        save_target: None,
+        save_target: None, prepare: None,
     };
     assert!(tech_discipline_active(&state, 1, &grow));
     let t1 = state.tribes.get_mut(&1).unwrap();

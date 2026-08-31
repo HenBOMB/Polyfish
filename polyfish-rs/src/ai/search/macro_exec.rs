@@ -834,7 +834,7 @@ mod tests {
         let goal = MacroGoal {
             orders: vec![(OrderKind::Defend, 60)],
             stance: Stance::Arm,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         let aux = compute_goal_aux(&game.state, 1, &goal, 0, 0, None);
         let ranked = rank_plies(&mut game, 1, &goal, &aux, true, 1.0, None, None);
@@ -1123,7 +1123,7 @@ mod tests {
         game.state = state;
         game.post_load();
 
-        let goal = MacroGoal { orders: vec![], stance: Stance::Save, save_target: None };
+        let goal = MacroGoal { orders: vec![], stance: Stance::Save, save_target: None, prepare: None };
         let aux = compute_goal_aux(&game.state, 1, &goal, 0, 0, None);
         let ranked = rank_plies(&mut game, 1, &goal, &aux, true, 1.0, None, None);
 

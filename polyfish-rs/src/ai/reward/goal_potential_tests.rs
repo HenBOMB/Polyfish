@@ -58,7 +58,7 @@ use crate::types::UnitType;
 
         // ARM pays the army's star cost (+ the lighthouse term: the explored
         // village tile 0 is a map corner).
-        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None, prepare: None };
         let cost = get_unit_setting(UnitType::Warrior).cost as f32;
         let corner = SHAPE_GOAL_LIGHTHOUSE;
         assert!(
@@ -70,13 +70,13 @@ use crate::types::UnitType;
         // GROW pays SPT plus the scout term (no EXPAND target known, <3
         // cities, one explored tile in this state) plus the v6 body term
         // (1 unit within the cities+1 cap, map unexplored).
-        let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+        let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None, prepare: None };
         let spt = crate::functions::get_tribe_spt(&state, state.tribes.get(&1).unwrap()) as f32;
         let expected = SHAPE_GOAL_SPT * spt + SHAPE_GOAL_SCOUT + corner + SHAPE_GOAL_BODY;
         assert!((goal_potential(&state, 1, &grow, None) - expected).abs() < 1e-4);
 
         // EXPAND order: a one-tile close banks one step of the gradient.
-        let ex = |orders| MacroGoal { orders, stance: Stance::Arm, save_target: None };
+        let ex = |orders| MacroGoal { orders, stance: Stance::Arm, save_target: None, prepare: None };
         let base = goal_potential(&state, 1, &ex(vec![(OrderKind::Expand, 0)]), None);
         state.tribes.get_mut(&1).unwrap().units[0] = unit_at(1, UnitType::Warrior);
         let closer = goal_potential(&state, 1, &ex(vec![(OrderKind::Expand, 0)]), None);
@@ -108,7 +108,7 @@ use crate::types::UnitType;
         let mut t1 = TribeState::default();
         t1.units.push(unit_at(60, UnitType::Warrior));
         state.tribes.insert(1, t1);
-        let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+        let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None, prepare: None };
 
         // Each newly explored tile banks SHAPE_GOAL_SCOUT.
         let base = goal_potential(&state, 1, &grow, None);
@@ -123,7 +123,7 @@ use crate::types::UnitType;
         let with_target = MacroGoal {
             orders: vec![(OrderKind::Expand, 50)],
             stance: Stance::Grow,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         let anchored = goal_potential(&state, 1, &with_target, None);
         let spt0 = crate::functions::get_tribe_spt(&state, state.tribes.get(&1).unwrap()) as f32;
@@ -135,7 +135,7 @@ use crate::types::UnitType;
                 < 1e-3
         );
         // ARM never scouts; neither does a 3-city tribe.
-        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None, prepare: None };
         let arm_phi = goal_potential(&state, 1, &arm, None);
         let cost = get_unit_setting(UnitType::Warrior).cost as f32;
         assert!((arm_phi - SHAPE_GOAL_ARM_PER_COST * cost).abs() < 1e-4);
@@ -158,7 +158,7 @@ use crate::types::UnitType;
         let mut t1 = TribeState::default();
         t1.units.push(unit_at(60, UnitType::Rider));
         state.tribes.insert(1, t1);
-        let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+        let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None, prepare: None };
         let aux = GoalAux {
             recommended_techs: vec![TechnologyType::Mining],
             rider_push: true,
@@ -193,7 +193,7 @@ use crate::types::UnitType;
             ..Default::default()
         });
         state.tribes.insert(1, t1);
-        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None, prepare: None };
 
         // Income is visible under ARM: raising city production raises Phi by
         // exactly the new per-SPT rate.
@@ -244,7 +244,7 @@ use crate::types::UnitType;
         });
         t1.units.push(unit_at(60, UnitType::Warrior));
         state.tribes.insert(1, t1);
-        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None, prepare: None };
 
         let full = GoalAux { arm_strength: 1.0, ..Default::default() };
         let zero = GoalAux { arm_strength: 0.0, ..Default::default() };
@@ -285,7 +285,7 @@ use crate::types::UnitType;
         let mut t1 = TribeState::default();
         t1.units.push(unit_at(60, UnitType::Warrior));
         state.tribes.insert(1, t1);
-        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None, prepare: None };
         let low = GoalAux { arm_strength: 0.1, ..Default::default() };
         let high = GoalAux { arm_strength: 0.9, ..Default::default() };
 
@@ -311,14 +311,20 @@ use crate::types::UnitType;
         t1.stars = 10;
         state.tribes.insert(1, t1);
         let lane = build_test_lane(20, 16, 4);
-        let bare_arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+        let bare_arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None, prepare: None };
         let arming = MacroGoal {
             orders: vec![],
             stance: Stance::Arm,
             save_target: Some(lane.clone()),
+            prepare: None,
         };
-        let saving = MacroGoal { orders: vec![], stance: Stance::Save, save_target: Some(lane) };
-        let bare_grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+        let saving = MacroGoal {
+            orders: vec![],
+            stance: Stance::Save,
+            save_target: Some(lane),
+            prepare: None,
+        };
+        let bare_grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None, prepare: None };
 
         let ramp_at_save =
             goal_potential(&state, 1, &saving, None) - goal_potential(&state, 1, &bare_grow, None);
@@ -353,7 +359,7 @@ use crate::types::UnitType;
         t1.cities.push(crate::states::CityState { idx: 108, ..Default::default() });
         state.tribes.insert(1, t1);
         // Unlock stance isolates the explorer term (no SPT/scout/ARM terms).
-        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None };
+        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None, prepare: None };
         let before = goal_potential(&state, 1, &goal, None);
         state.tribes.get_mut(&1).unwrap().cities[0].rewards.push(CityRewardType::Explorer);
         // Fully hidden map, city 24 within EXPLORER_WALK_RANGE of corner 0:
@@ -391,7 +397,7 @@ use crate::types::UnitType;
         t1.units.push(unit_at(61, UnitType::Warrior));
         state.tribes.insert(1, t1);
         // Unlock stance zeroes the stance term; only the unit bonus differs.
-        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None };
+        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None, prepare: None };
         let aux = GoalAux {
             preferred_units: vec![UnitType::Archer],
             ..Default::default()
@@ -409,7 +415,7 @@ use crate::types::UnitType;
         let mut t1 = TribeState::default();
         t1.units.push(unit_at(60, UnitType::Knight));
         state.tribes.insert(1, t1);
-        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None };
+        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None, prepare: None };
         let aux = GoalAux {
             preferred_units: vec![UnitType::Knight, UnitType::Defender],
             ..Default::default()
@@ -450,7 +456,7 @@ use crate::types::UnitType;
             }));
         };
         // Unlock stance isolates the term.
-        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None };
+        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None, prepare: None };
         state.structures.insert(59, Some(StructureState {
             structure_type: StructureType::Windmill,
             ..Default::default()
@@ -499,6 +505,7 @@ use crate::types::UnitType;
             orders: vec![],
             stance: Stance::Save,
             save_target: Some(build_test_lane(21, 16, 5)),
+            prepare: None,
         };
         let before = goal_potential(&state, 1, &goal, None);
 
@@ -533,6 +540,7 @@ use crate::types::UnitType;
             orders: vec![],
             stance,
             save_target: save,
+            prepare: None,
         };
         let base_state = || {
             let mut s = GameState::default();
@@ -610,11 +618,12 @@ use crate::types::UnitType;
         t1.id = 1;
         t1.stars = 0;
         state.tribes.insert(1, t1);
-        let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+        let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None, prepare: None };
         let saving = MacroGoal {
             orders: vec![],
             stance: Stance::Save,
             save_target: Some(build_test_lane(20, 16, 4)),
+            prepare: None,
         };
 
         // Empty bank: SAVE must equal GROW — the stance itself costs nothing.
@@ -653,7 +662,7 @@ use crate::types::UnitType;
         let ex = MacroGoal {
             orders: vec![(OrderKind::Expand, 5)],
             stance: Stance::Arm,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         let uncontested = goal_potential(&state, 1, &ex, None);
 
@@ -680,7 +689,7 @@ use crate::types::UnitType;
         let mut t1 = TribeState::default();
         t1.units.push(unit_at(60, UnitType::Warrior));
         state.tribes.insert(1, t1);
-        let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+        let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None, prepare: None };
 
         // 0 cities → cap 1: the second unit adds nothing.
         let one = goal_potential(&state, 1, &grow, None);
@@ -728,7 +737,7 @@ use crate::types::UnitType;
                 ..Default::default()
             }));
         };
-        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None };
+        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None, prepare: None };
         put(&mut state, 59, StructureType::Market);
         put(&mut state, 58, StructureType::Windmill);
         // One hub partner: no bonus (the market pays for itself).
@@ -746,7 +755,7 @@ use crate::types::UnitType;
         let mut state = GameState::default();
         state.settings.size = 11;
         state.tribes.insert(1, TribeState::default());
-        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None };
+        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None, prepare: None };
         let tile = state.tiles.entry(60).or_insert_with(TileState::default);
         tile.owner = 1;
         tile.terrain_type = TerrainType::Forest;
@@ -771,7 +780,7 @@ use crate::types::UnitType;
         let goal = MacroGoal {
             orders: vec![(OrderKind::Defend, 60)],
             stance: Stance::Arm,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         let phi_hold = goal_potential(&state, 1, &goal, None);
         // Step off to an adjacent tile: still full cover, hold term lost.
@@ -800,7 +809,7 @@ use crate::types::UnitType;
         let goal = MacroGoal {
             orders: vec![(OrderKind::Defend, 60)],
             stance: Stance::Arm,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         // Same purchase, two landing spots: covering (cheb 2, rider reach)
         // vs remote corner. Army/stance terms cancel; coverage does not.
@@ -831,7 +840,7 @@ use crate::types::UnitType;
         let goal = MacroGoal {
             orders: vec![],
             stance: Stance::Grow,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         let phi_on = goal_potential(&state, 1, &goal, None);
         state.tribes.get_mut(&1).unwrap().units[0].coords = Coords::from_index(80, 11);
@@ -859,7 +868,7 @@ use crate::types::UnitType;
         let goal = MacroGoal {
             orders: vec![(OrderKind::Attack, 79)],
             stance: Stance::Grow,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         let (_, bd_before) = goal_potential_breakdown(&state, 1, &goal, None, None, None, None, None);
         let siege_before: f32 = bd_before
@@ -905,7 +914,7 @@ use crate::types::UnitType;
         let goal = MacroGoal {
             orders: vec![(OrderKind::Defend, 29), (OrderKind::Attack, 79)],
             stance: Stance::Arm,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         // Helper warrior, cheb 5 from B both times; H-side (35: cheb H=4,
         // committed) vs far side (87: cheb H=8, free). Neither position
@@ -939,7 +948,7 @@ use crate::types::UnitType;
         let goal = MacroGoal {
             orders: vec![],
             stance: Stance::Arm,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         let aux = |s: &crate::states::GameState| {
             crate::ai::oracle_macro::compute_goal_aux(s, 1, &goal, 0, 0, None)
@@ -963,7 +972,7 @@ use crate::types::UnitType;
     fn city_open_exposed_charges_an_undefended_reachable_city() {
         use crate::ai::oracle_macro::{MacroGoal, Stance};
         let mut state = defense_board(60);
-        let goal = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+        let goal = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None, prepare: None };
         let far = goal_potential(&state, 1, &goal, None);
         state.tribes.get_mut(&2).unwrap().units.push(combat_unit(59, UnitType::Swordsman, 2));
         let reachable = goal_potential(&state, 1, &goal, None);
@@ -982,7 +991,7 @@ use crate::types::UnitType;
         use crate::ai::oracle_macro::{MacroGoal, Stance};
         let mut state = defense_board(60);
         state.tribes.get_mut(&2).unwrap().units.push(combat_unit(59, UnitType::Swordsman, 2));
-        let goal = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+        let goal = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None, prepare: None };
         let (_, bd_open) = goal_potential_breakdown(&state, 1, &goal, None, None, None, None, None);
         assert!(bd_open.iter().any(|(l, _)| *l == "city_open_exposed"));
         state.tribes.get_mut(&1).unwrap().units.push(combat_unit(60, UnitType::Rider, 1));
@@ -1000,11 +1009,11 @@ use crate::types::UnitType;
         use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
         let mut state = defense_board(60);
         state.tribes.get_mut(&2).unwrap().units.push(combat_unit(59, UnitType::Swordsman, 2));
-        let no_order = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+        let no_order = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None, prepare: None };
         let defended = MacroGoal {
             orders: vec![(OrderKind::Defend, 60)],
             stance: Stance::Arm,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         let (_, bd_no_order) =
             goal_potential_breakdown(&state, 1, &no_order, None, None, None, None, None);
@@ -1012,6 +1021,125 @@ use crate::types::UnitType;
         let (_, bd_defended) =
             goal_potential_breakdown(&state, 1, &defended, None, None, None, None, None);
         assert!(!bd_defended.iter().any(|(l, _)| *l == "city_open_exposed"));
+    }
+
+    /// EXP_ELO_116: an idle, uncommitted unit gets pulled toward
+    /// `goal.prepare`'s target once one exists -- ground-truth motivated by
+    /// EXP_ELO_112 claim #7 (84-vs-17 total army value, only 3 units
+    /// clustered near the enemy capital, missing the Attack gate by 2.5).
+    #[test]
+    fn prepare_pull_fires_for_an_idle_far_unit() {
+        use crate::ai::oracle_macro::{MacroGoal, PrepareTarget, Stance};
+        use crate::ai::search::unit_goals::UnitGoalStore;
+        let mut state = defense_board(60);
+        state.tribes.get_mut(&1).unwrap().units.push(combat_unit(0, UnitType::Giant, 1));
+        let store = UnitGoalStore::default();
+        let no_prepare = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None, prepare: None };
+        let with_prepare = MacroGoal {
+            orders: vec![],
+            stance: Stance::Arm,
+            save_target: None,
+            prepare: Some(PrepareTarget { city: 24, deficit: 30 }),
+        };
+        let (_, bd_no) =
+            goal_potential_breakdown(&state, 1, &no_prepare, None, None, Some(&store), None, None);
+        assert!(!bd_no.iter().any(|(l, _)| *l == "prepare_pull"));
+        let (_, bd_yes) =
+            goal_potential_breakdown(&state, 1, &with_prepare, None, None, Some(&store), None, None);
+        assert!(bd_yes.iter().any(|(l, _)| *l == "prepare_pull"));
+    }
+
+    /// The same frontline-safety carve-out `unit_train_opportunity_cost`
+    /// uses: ANY live Defend order zeroes the pull entirely, so it can never
+    /// starve `defend_cover`'s own budget or strip a city EXP_ELO_114 is
+    /// actively protecting.
+    #[test]
+    fn prepare_pull_zero_under_an_active_defend_order() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, PrepareTarget, Stance};
+        use crate::ai::search::unit_goals::UnitGoalStore;
+        let mut state = defense_board(60);
+        state.tribes.get_mut(&1).unwrap().units.push(combat_unit(0, UnitType::Giant, 1));
+        let store = UnitGoalStore::default();
+        let defended = MacroGoal {
+            orders: vec![(OrderKind::Defend, 60)],
+            stance: Stance::Arm,
+            save_target: None,
+            prepare: Some(PrepareTarget { city: 24, deficit: 30 }),
+        };
+        let (_, bd) = goal_potential_breakdown(&state, 1, &defended, None, None, Some(&store), None, None);
+        assert!(!bd.iter().any(|(l, _)| *l == "prepare_pull"));
+    }
+
+    /// A unit already pursuing an Expand goal must not also be conscripted
+    /// into the prepare push -- expansion pursuit stays protected exactly
+    /// like `unit_train_opportunity_cost`'s own Expand-target accounting.
+    #[test]
+    fn prepare_pull_zero_for_an_expand_assigned_unit() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, PrepareTarget, Stance};
+        use crate::ai::search::unit_goals::{UnitGoal, UnitGoalStore};
+        let mut state = defense_board(60);
+        state.tribes.get_mut(&1).unwrap().units.push(combat_unit(0, UnitType::Giant, 1));
+        let goal = MacroGoal {
+            orders: vec![],
+            stance: Stance::Arm,
+            save_target: None,
+            prepare: Some(PrepareTarget { city: 24, deficit: 30 }),
+        };
+        let idle_store = UnitGoalStore::default();
+        let (_, bd_idle) =
+            goal_potential_breakdown(&state, 1, &goal, None, None, Some(&idle_store), None, None);
+        assert!(bd_idle.iter().any(|(l, _)| *l == "prepare_pull"));
+
+        let mut assigned_store = UnitGoalStore::default();
+        assigned_store.assign(0, UnitGoal { kind: OrderKind::Expand, target: 5 });
+        let (_, bd_assigned) =
+            goal_potential_breakdown(&state, 1, &goal, None, None, Some(&assigned_store), None, None);
+        assert!(!bd_assigned.iter().any(|(l, _)| *l == "prepare_pull"));
+    }
+
+    /// A unit standing on one of the player's own cities is a garrison, not
+    /// idle -- excluded so this term never strips a city (EXP_ELO_114's own
+    /// exposure pricing is what should govern whether it's safe to leave).
+    #[test]
+    fn prepare_pull_zero_for_a_garrison() {
+        use crate::ai::oracle_macro::{MacroGoal, PrepareTarget, Stance};
+        use crate::ai::search::unit_goals::UnitGoalStore;
+        let mut state = defense_board(60);
+        state.tribes.get_mut(&1).unwrap().units.push(combat_unit(60, UnitType::Giant, 1));
+        let store = UnitGoalStore::default();
+        let goal = MacroGoal {
+            orders: vec![],
+            stance: Stance::Arm,
+            save_target: None,
+            prepare: Some(PrepareTarget { city: 24, deficit: 30 }),
+        };
+        let (_, bd) = goal_potential_breakdown(&state, 1, &goal, None, None, Some(&store), None, None);
+        assert!(!bd.iter().any(|(l, _)| *l == "prepare_pull"));
+    }
+
+    /// Count leg: once the nearest unit's own worth already covers the
+    /// deficit, a second, farther eligible unit must NOT also be pulled --
+    /// the pull recruits only what the gate still needs, not every idle
+    /// unit on the board.
+    #[test]
+    fn prepare_pull_stops_once_the_deficit_is_covered() {
+        use crate::ai::oracle_macro::{MacroGoal, PrepareTarget, Stance};
+        use crate::ai::search::unit_goals::UnitGoalStore;
+        let mut state = defense_board(60);
+        // Giant (worth 10) at cheb 1 from the target covers a small deficit
+        // on its own; a second Giant far away must not also be charged.
+        state.tribes.get_mut(&1).unwrap().units.push(combat_unit(25, UnitType::Giant, 1));
+        state.tribes.get_mut(&1).unwrap().units.push(combat_unit(0, UnitType::Giant, 1));
+        let store = UnitGoalStore::default();
+        let goal = MacroGoal {
+            orders: vec![],
+            stance: Stance::Arm,
+            save_target: None,
+            prepare: Some(PrepareTarget { city: 24, deficit: 5 }),
+        };
+        let (_, bd) = goal_potential_breakdown(&state, 1, &goal, None, None, Some(&store), None, None);
+        let fires = bd.iter().filter(|(l, _)| *l == "prepare_pull").count();
+        assert_eq!(fires, 1, "only the nearest unit needed to cover the deficit should be pulled");
     }
 
     /// Per-unit-goal design (Aug 2026), Step 3 verification: the legacy
@@ -1054,7 +1182,7 @@ use crate::types::UnitType;
         let goal = MacroGoal {
             orders: vec![(OrderKind::Expand, V1), (OrderKind::Expand, V2)],
             stance: Stance::Grow,
-            save_target: None,
+            save_target: None, prepare: None,
         };
 
         // Legacy (None): fresh greedy match every call -- B's implied
@@ -1142,7 +1270,7 @@ use crate::types::UnitType;
         let goal = MacroGoal {
             orders: vec![(OrderKind::Expand, OWN), (OrderKind::Expand, OTHER)],
             stance: Stance::Grow,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         let mut store = UnitGoalStore::default();
         store.assign(A_ID, UnitGoal { kind: OrderKind::Expand, target: OWN });
@@ -1190,7 +1318,7 @@ use crate::types::UnitType;
         let goal = MacroGoal {
             orders: vec![(OrderKind::Expand, TARGET)],
             stance: Stance::Grow,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         let mut store = UnitGoalStore::default();
         store.assign(PURSUER_ID, UnitGoal { kind: OrderKind::Expand, target: TARGET });
@@ -1216,7 +1344,7 @@ use crate::types::UnitType;
     fn parking_on_a_city_with_train_capacity_costs_potential_when_a_store_is_threaded() {
         use crate::ai::oracle_macro::{MacroGoal, Stance};
         use crate::ai::search::unit_goals::UnitGoalStore;
-        let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+        let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None, prepare: None };
         let store = UnitGoalStore::default();
 
         let mut occupied = defense_board(60);
@@ -1243,7 +1371,7 @@ use crate::types::UnitType;
     #[test]
     fn city_train_block_is_invisible_without_a_unit_goal_store() {
         use crate::ai::oracle_macro::{MacroGoal, Stance};
-        let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+        let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None, prepare: None };
 
         let mut occupied = defense_board(60);
         occupied.tribes.get_mut(&1).unwrap().units.push(combat_unit(60, UnitType::Warrior, 1));
@@ -1265,7 +1393,7 @@ use crate::types::UnitType;
     fn city_train_block_skips_a_city_already_at_unit_cap() {
         use crate::ai::oracle_macro::{MacroGoal, Stance};
         use crate::ai::search::unit_goals::UnitGoalStore;
-        let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+        let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None, prepare: None };
         let store = UnitGoalStore::default();
 
         let mut state = defense_board(60);
@@ -1316,7 +1444,7 @@ use crate::types::UnitType;
             }
         }
         let orders = expand_targets.iter().map(|&t| (OrderKind::Expand, t)).collect();
-        let goal = MacroGoal { orders, stance: Stance::Unlock, save_target: None };
+        let goal = MacroGoal { orders, stance: Stance::Unlock, save_target: None, prepare: None };
         (state, goal, store)
     }
     fn with_tech_goal() -> crate::ai::oracle_macro::GoalAux {
@@ -1419,7 +1547,7 @@ use crate::types::UnitType;
         let mut store = UnitGoalStore::default();
         store.assign(CAPTURER_ID, UnitGoal { kind: OrderKind::Expand, target: RUIN_IDX });
 
-        let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+        let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None, prepare: None };
         let (_, bd) = goal_potential_breakdown(&state, 1, &goal, None, None, Some(&store), None, None);
         let complete: f32 =
             bd.iter().filter(|(l, _)| *l == "unit_goal_complete").map(|(_, v)| v).sum();
@@ -1456,7 +1584,7 @@ use crate::types::UnitType;
         state.tribes.insert(1, t1);
 
         let goal =
-            MacroGoal { orders: vec![(OrderKind::Expand, RUIN_IDX)], stance: Stance::Grow, save_target: None };
+            MacroGoal { orders: vec![(OrderKind::Expand, RUIN_IDX)], stance: Stance::Grow, save_target: None, prepare: None };
         let approach = |s: &GameState| -> f32 {
             let (_, bd) = goal_potential_breakdown(s, 1, &goal, None, None, None, None, None);
             bd.iter().filter(|(l, _)| *l == "expand_approach").map(|(_, v)| v).sum()
@@ -1616,7 +1744,7 @@ use crate::types::UnitType;
         let goal = crate::ai::oracle_macro::MacroGoal {
             orders: vec![],
             stance: crate::ai::oracle_macro::Stance::Grow,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         let explorer_term = |s: &GameState| -> f32 {
             let belief = MapBelief::observe(s, 1);
@@ -1714,7 +1842,7 @@ use crate::types::UnitType;
         let goal = crate::ai::oracle_macro::MacroGoal {
             orders: vec![],
             stance: crate::ai::oracle_macro::Stance::Grow,
-            save_target: None,
+            save_target: None, prepare: None,
         };
         let (_, bd) = goal_potential_breakdown(&state, 1, &goal, None, None, None, None, None);
         let explorer: f32 = bd.iter().filter(|(l, _)| *l == "explorer").map(|(_, v)| v).sum();

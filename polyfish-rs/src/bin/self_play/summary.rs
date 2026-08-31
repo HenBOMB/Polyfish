@@ -107,6 +107,16 @@ pub(crate) fn print_run_summary(
         );
     }
     {
+        let evals = polyfish::ai::reward::PREPARE_PULL_EVALS.load(std::sync::atomic::Ordering::Relaxed);
+        let fires = polyfish::ai::reward::PREPARE_PULL_FIRES.load(std::sync::atomic::Ordering::Relaxed);
+        let suppressed = polyfish::ai::reward::PREPARE_SUPPRESSED_BY_DEFEND
+            .load(std::sync::atomic::Ordering::Relaxed);
+        println!(
+            "  - EXP_ELO_116 prepare_pull gate (diagnostic, temporary): {fires}/{evals} ({:.3}%), {suppressed} suppressed by an active Defend order",
+            100.0 * fires as f64 / (evals as f64).max(1.0)
+        );
+    }
+    {
         let cover_total =
             polyfish::ai::combat::DEFEND_CREDIT_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
         let cover_partial =

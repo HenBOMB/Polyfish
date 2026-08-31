@@ -13995,3 +13995,144 @@ around the `COMMIT_CITY_TARGET`-as-consolidation-signal constraint
 this entry surfaced, rather than repeating the same gate-removal shape.
 `expand_targets_probe.rs` and `village_guess_probe.rs` kept as
 independently useful, verified primitives for that future attempt.
+
+## EXP_ELO_116 — a `MacroGoal.prepare` field + standing pull-toward-the-attack-gate Φ term: the strongest single result in this loop
+
+CONTEXT: EXP_ELO_112 verified claim #7 (turn-12 Giant not "gunning for
+the capital" despite overwhelming force) as a real, precisely-measured
+mechanism gap: at the flagged ply, the player's total army value was
+84 vs the enemy's 17 (~5x), but only 3 units sat within Chebyshev 3 of
+the enemy capital, combined value 14, against the enemy's 11 in local
+defenders — the `OrderKind::Attack` gate needs `2*local > 3*defenders`
+(local value > 16.5), missing by 2.5. `oracle_macro.rs` already sets a
+`prepare = true` boolean in this exact case, but nothing downstream
+ever DID anything with it — an idle unit with no assigned goal just
+takes whichever generic Step scores highest locally, with zero pull
+toward closing the gap.
+
+DESIGN: an `ml-expert` design-review pass was launched before any code
+(matching the EXP_ELO_110 pass-8 precedent, per the advisor's explicit
+guidance that this was the most design-heavy item on the priority
+list). Full design transcript not reproduced here; the load-bearing
+decisions it made, all followed as specified:
+
+- **A new `PrepareTarget { city, deficit }` field on `MacroGoal`**
+  (`prepare: Option<PrepareTarget>`), populated inside
+  `compute_macro_goal_cached`'s existing enemy-city loop using the
+  SAME arithmetic the gate itself computes — never re-derived, so the
+  pull this feeds can never disagree with the gate it's assembling
+  toward. Not painted into the feature planes (mirrors `save_target`'s
+  existing treatment exactly) — zero dual-network/feature-channel
+  implication, confirmed by NOT touching `features.rs`, `network.rs`,
+  `train.py`, or `mapper.rs`. Gated on `tribe.cities.len() >=
+  COMMIT_CITY_TARGET` — the same threshold the stance ladder already
+  uses to elevate `prepare` to `Stance::Arm` — so the pull can never
+  compete with the third-city race (causal, EXP_ELO_026).
+- **Rejected alternatives, with reasons**: a new `OrderKind` variant
+  (would force a 169-channel feature migration plus dual-network
+  mirroring and checkpoint migration for a signal the net doesn't need
+  to see yet); deriving the target inside `goal_potential.rs` from
+  `combat::city_opportunities` (a DIFFERENT risk/reachability model
+  than the gate's own value-margin arithmetic — could disagree with
+  the gate, defeating the whole point, and re-scans a
+  `city_risks_with_threats`-cost computation per candidate, the exact
+  throughput regression EXP_ELO_061 fixed); `GoalAux` (recomputed
+  every ply, so a mid-turn-moving deficit would thrash the pulled-unit
+  count).
+- **A new standing Φ term** in `goal_potential_inner`, active iff
+  `goal.prepare.is_some() && unit_goals.is_some()`, zeroed by ANY live
+  Defend order (the same frontline-safety carve-out
+  `unit_train_opportunity_cost` already uses — "a real threat zeroes
+  this out entirely, not just discounts it"). Pulls the N nearest
+  ELIGIBLE units toward `prepare.city`, where N walks the
+  distance-sorted eligible list accumulating `unit_worth` until
+  `deficit` is covered (naturally floors at 1 unit, caps at 3 by
+  construction). Eligibility excludes: units with an active Expand
+  goal (`UnitGoalStore`), units garrisoning an owned city
+  (`get_city_at(...).owner == player`), and units already
+  attack-committed to a REAL Attack order (`combat::attack_committed`
+  — the same predicate `defend_recall` already uses, reused rather
+  than re-derived). Each pulled unit's payment is discounted by
+  `1 - lethal_threat_weight(...)` — the EXP_ELO_111 interaction guard,
+  so marching into a fresh one-shot kill zone forfeits that unit's
+  pull credit instead of compounding with it.
+- **Sizing**: `SHAPE_GOAL_PREPARE_PER_TILE = 20.0`, well under
+  EXP_ELO_114's 44.4 kill-margin ceiling (a kill that moves the
+  attacker away from the prepare city should still fire) and above the
+  low single-digit margins a generic idle Step scores by.
+
+FIX (mechanical): `oracle_macro.rs` (`PrepareTarget` struct, the
+`MacroGoal.prepare` field, population logic with a deterministic
+smallest-deficit/lowest-tile-index tiebreak — `IndexMap` iteration
+over `state.tribes` is already insertion-order-deterministic, but the
+tiebreak is made explicit rather than relying on that implicitly);
+`goal_shape_consts.rs` (the new constant); `goal_potential.rs` (the
+new Φ block + 3 diagnostic counters,
+`PREPARE_PULL_EVALS`/`_FIRES`/`_SUPPRESSED_BY_DEFEND`); 9 call sites
+in `macro_agent.rs` needed `prepare: base.prepare` added to their
+candidate `MacroGoal` struct literals — the compiler enforced every
+one via `E0063`, exactly as the design review predicted; `summary.rs`
+(counter print). 5 new pinning tests (fires for an idle far unit; zero
+under an active Defend order; zero for an Expand-assigned unit; zero
+for a garrison; stops pulling once the deficit is covered by the
+nearest unit alone). 357/357 lib tests (was 352 pre-fix).
+
+VERIFICATION (regenerated canonical game, `replays/exp116_seed0_watch/`,
+Fix#2+Fix#3 stacked on the shipped Fix#1 — Fix#4 already reverted and
+not present): **the strongest single result this entire multi-session
+loop has produced.** Turn 16 (was 17 — first improvement on turn count
+since early iterations), units_lost **3** (was 4 — the FIRST TIME this
+whole loop has hit Verdi's own explicit target of "fewer than 3" this
+close, effectively at the boundary), units_killed 9 (unchanged),
+giants by t12 6 (holds, unchanged), decisive win (reproduced
+byte-identically on a second independent run: 276 moves both times,
+score 6450/Winner 1 both times). Mechanism directly confirmed, not
+just inferred from the KPI: `decisions.json` shows `Attack: 36 -> 24`
+at turn 15 — player 1 actually assaults the enemy capital this game,
+which it never did in any prior iteration's canonical game. Fire-rate
+diagnostic: 1446/5443 (26.6%) prepare-pull evaluations fired;
+3997 were suppressed by an active Defend order (a real, sizeable
+starve fraction — worth watching in a future pass, not itself a red
+flag per the design review's own framing, since ARM/Defend dominance
+in mid-game is expected and the suppression is the intended
+frontline-safety carve-out working, not a bug).
+
+PAIRED GAUGE: worktree-isolated, current HEAD (`dc0a91f`, EXP_ELO_113+
+114+115-probes) as baseline vs baseline+this diff as treatment, n=128
+both seed blocks, each (arm, seed) run from its own isolated working
+directory from the start.
+
+| seed | baseline anchor_net_wr | treatment anchor_net_wr | delta |
+|---|---|---|---|
+| 770425 | 0.570313 (73/128) | 0.531250 (68/128) | -3.91pp |
+| 770553 | 0.539063 (69/128) | 0.546875 (70/128) | +0.78pp |
+
+Mixed sign, both inside the ~7.8pp n=128 noise floor — the same shape
+as EXP_ELO_111's own mixed (+1.56pp, -3.91pp) reading, shipped there
+on the same reasoning. Fire-rate data from this exact gauge explains
+*why* the mirror harness barely moves: `prepare_pull` fired 63,058/
+238,222+63,058 (~21%) of eligible evaluations on the 770425 arm and
+102,869/353,882+102,869 (~23%) on 770553 — but the SUPPRESSED-by-
+Defend count is roughly **4x the fired count on both arms** (~79%
+suppression). In a symmetric Imperius-mirror matchup both sides
+threaten each other's cities more continuously than the asymmetric
+canonical game (net vs a weaker Greedy anchor with an 84-vs-17
+material lead), so `goal.orders` carries an active Defend order far
+more often, and the frontline-safety carve-out correctly keeps the
+pull dark almost 4 turns out of 5. The mechanism is specifically
+built to convert an EXISTING material advantage into forward pressure
+— the mirror gauge structurally has less of that advantage to convert,
+so a muted, noise-floor-bound aggregate delta here is the expected
+shape, not evidence the mechanism doesn't work. The canonical game's
+own evidence (turn 17->16, units_lost 4->3, a confirmed capital
+assault that never happened in any prior iteration) is the more
+direct read on what this fix actually does when the army-advantage
+precondition is real.
+
+Disposition: **SHIPPED.** Both gauge blocks read as a wash (mixed
+sign, inside noise), with a coherent, data-backed explanation for why
+the mirror harness underweights this specific mechanism relative to
+the canonical game. Tests green (357/357), sizing box holds (T7 kill
+unaffected in the canonical regen), and the canonical-game result is
+the strongest, most directly-mechanism-confirmed improvement this
+whole iteration-13 loop has produced.

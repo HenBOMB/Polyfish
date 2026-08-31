@@ -1124,7 +1124,7 @@ mod risk_tests {
         let mut state = board(49);
         state.tribes.get_mut(&1).unwrap().units.push(unit_at(49, UnitType::Warrior, 1));
         state.tribes.get_mut(&2).unwrap().units.push(unit_at(37, UnitType::Warrior, 2));
-        let goal = MacroGoal { orders: vec![(OrderKind::Defend, 49)], stance: Stance::Arm, save_target: None };
+        let goal = MacroGoal { orders: vec![(OrderKind::Defend, 49)], stance: Stance::Arm, save_target: None, prepare: None };
         let aux = crate::ai::oracle_macro::compute_goal_aux(&state, 1, &goal, 0, 0, None);
         let threats = threat_units(&state, 1);
 

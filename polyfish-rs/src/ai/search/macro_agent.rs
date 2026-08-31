@@ -266,12 +266,22 @@ pub fn enumerate_candidates_with_belief(
     };
 
     push(
-        MacroGoal { orders: base.orders.clone(), stance: Stance::Grow, save_target: None },
+        MacroGoal {
+            orders: base.orders.clone(),
+            stance: Stance::Grow,
+            save_target: None,
+            prepare: base.prepare,
+        },
         CandidateClass::Stance,
         &mut out,
     );
     push(
-        MacroGoal { orders: base.orders.clone(), stance: Stance::Arm, save_target: None },
+        MacroGoal {
+            orders: base.orders.clone(),
+            stance: Stance::Arm,
+            save_target: None,
+            prepare: base.prepare,
+        },
         CandidateClass::Stance,
         &mut out,
     );
@@ -281,6 +291,7 @@ pub fn enumerate_candidates_with_belief(
                 orders: base.orders.clone(),
                 stance: Stance::Save,
                 save_target: Some(lane),
+                prepare: base.prepare,
             },
             CandidateClass::Stance,
             &mut out,
@@ -338,6 +349,7 @@ pub fn enumerate_candidates_with_belief(
                         orders,
                         stance: base.stance,
                         save_target: base.save_target.clone(),
+                        prepare: base.prepare,
                     },
                     CandidateClass::ClaimSafe,
                     &mut out,
@@ -351,6 +363,7 @@ pub fn enumerate_candidates_with_belief(
                         orders,
                         stance: base.stance,
                         save_target: base.save_target.clone(),
+                        prepare: base.prepare,
                     },
                     CandidateClass::Contest,
                     &mut out,
@@ -381,7 +394,12 @@ pub fn enumerate_candidates_with_belief(
         .collect();
     if real != base.orders {
         push(
-            MacroGoal { orders: real, stance: base.stance, save_target: base.save_target.clone() },
+            MacroGoal {
+                orders: real,
+                stance: base.stance,
+                save_target: base.save_target.clone(),
+                prepare: base.prepare,
+            },
             CandidateClass::RealFilter,
             &mut out,
         );
@@ -391,7 +409,12 @@ pub fn enumerate_candidates_with_belief(
             let mut orders = base.orders.clone();
             orders.push((OrderKind::Attack, cap));
             push(
-                MacroGoal { orders, stance: base.stance, save_target: base.save_target.clone() },
+                MacroGoal {
+                    orders,
+                    stance: base.stance,
+                    save_target: base.save_target.clone(),
+                    prepare: base.prepare,
+                },
                 CandidateClass::AttackCapital,
                 &mut out,
             );
@@ -411,7 +434,12 @@ pub fn enumerate_candidates_with_belief(
             let mut orders = base.orders.clone();
             orders.push((OrderKind::Attack, city));
             push(
-                MacroGoal { orders, stance: base.stance, save_target: base.save_target.clone() },
+                MacroGoal {
+                    orders,
+                    stance: base.stance,
+                    save_target: base.save_target.clone(),
+                    prepare: base.prepare,
+                },
                 CandidateClass::AttackWeakest,
                 &mut out,
             );
@@ -426,7 +454,12 @@ pub fn enumerate_candidates_with_belief(
             let mut orders = base.orders.clone();
             orders.push((OrderKind::Defend, city_risk.city));
             push(
-                MacroGoal { orders, stance: base.stance, save_target: base.save_target.clone() },
+                MacroGoal {
+                    orders,
+                    stance: base.stance,
+                    save_target: base.save_target.clone(),
+                    prepare: base.prepare,
+                },
                 CandidateClass::DefendUrgent,
                 &mut out,
             );

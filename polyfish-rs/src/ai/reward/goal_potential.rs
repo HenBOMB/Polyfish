@@ -18,6 +18,17 @@ use crate::states::GameState;
 pub static CITY_OPEN_EXPOSED_EVALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static CITY_OPEN_EXPOSED_FIRES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// EXP_ELO_116 diagnostic (temporary): how often the prepare-pull term is
+/// eligible to fire (`goal.prepare` set, `unit_goals` threaded), how many of
+/// those evaluations actually pull a unit, and how many were suppressed
+/// entirely by a live Defend order (the starve case the design review
+/// flagged: if this is high while ARM dominates mid-game, the pull is dark
+/// exactly when the army is largest).
+pub static PREPARE_PULL_EVALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static PREPARE_PULL_FIRES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static PREPARE_SUPPRESSED_BY_DEFEND: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 /// Goal potential Φ_goal for `player` under `goal` (score-equivalent units).
 pub fn goal_potential(
     state: &GameState,
@@ -851,6 +862,77 @@ fn goal_potential_inner(
             cands.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.2.cmp(&b.2)).then(a.0.cmp(&b.0)));
             for &(_, sat, _) in cands.iter().take(4) {
                 acc.add("attack_press", SHAPE_GOAL_ATTACK_PRESS * sat);
+            }
+        }
+    }
+    // EXP_ELO_116: idle force pull toward `goal.prepare`'s target -- the
+    // Attack gate almost fired but missed on assembled local value (ground
+    // truth: EXP_ELO_112 claim #7, 84-vs-17 total army value, only 3 units
+    // clustered, missing the gate by 2.5 of 16.5 needed). Reuses the SAME
+    // deficit the gate itself computed (`oracle_macro::compute_macro_goal_
+    // cached`), never re-derived, so this can never disagree with the gate
+    // it's assembling toward. Zeroed by ANY live Defend order -- the same
+    // frontline-safety carve-out `unit_train_opportunity_cost` uses above
+    // ("a real threat zeroes this out entirely, not just discounts it").
+    if width > 0 {
+        if let (Some(pt), Some(store)) = (goal.prepare, unit_goals) {
+            PREPARE_PULL_EVALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let has_defend = goal.orders.iter().any(|(k, _)| *k == OrderKind::Defend);
+            if has_defend {
+                PREPARE_SUPPRESSED_BY_DEFEND.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            } else {
+                let mut eligible: Vec<(i32, i32, i32)> = tribe // (dist, tile, worth)
+                    .units
+                    .iter()
+                    .filter(|u| {
+                        !store.active(u.id).is_some_and(|g| g.kind == OrderKind::Expand)
+                            && !crate::functions::get_city_at(state, u.coords.idx)
+                                .is_some_and(|c| c.owner == player)
+                            && !crate::ai::combat::attack_committed(
+                                state,
+                                player,
+                                u,
+                                pt.city,
+                                &attack_targets,
+                            )
+                    })
+                    .map(|u| {
+                        (
+                            cheb(u.coords.idx, pt.city, width),
+                            u.coords.idx,
+                            crate::rules::combat::unit_worth(u),
+                        )
+                    })
+                    .collect();
+                eligible.sort();
+                // Count leg: the gate also requires `local.len() >= 2`, so a
+                // single (however heavy) local unit's value-deficit can read
+                // <= 0 while the gate still needs a second unit recruited in
+                // -- the pulled count is floored at 1 regardless of the
+                // worth math, capped at 3 so this can never outbid a Defend
+                // or Expand commitment on sheer unit count.
+                let mut covered = 0;
+                let mut fired = false;
+                for &(d, tile, worth) in eligible.iter().take(3) {
+                    if covered >= pt.deficit && covered > 0 {
+                        break;
+                    }
+                    covered += worth;
+                    fired = true;
+                    let Some(u) = tribe.units.iter().find(|u| u.coords.idx == tile) else {
+                        continue;
+                    };
+                    let discount = threats.map_or(1.0, |th| {
+                        1.0 - crate::ai::combat::lethal_threat_weight(state, u, th)
+                    });
+                    acc.add(
+                        "prepare_pull",
+                        SHAPE_GOAL_PREPARE_PER_TILE * (SHAPE_PROX_CAP - d).max(0) as f32 * discount,
+                    );
+                }
+                if fired {
+                    PREPARE_PULL_FIRES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
             }
         }
     }
