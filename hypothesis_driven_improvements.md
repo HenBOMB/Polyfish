@@ -12973,3 +12973,168 @@ snapshot rather than EXP_ELO_105's broad per-unit-per-candidate
 `hypo_damage` rescan -- aimed at the remaining retaliation/exposure
 losses (id14's gratuitous chip, id9's unpriced exposure Step) that this
 fix does not touch.
+
+## EXP_ELO_109 — a move-level post-move lethality-exposure penalty: ground-truth verified on all 3 flagged plies, measured net-negative on the canonical game in two independent scopings, reverted
+
+CONTEXT: pass-7 `ml-expert` analysis of the EXP_ELO_108 game
+(`exp108_seed0_watch`, turn 17, 5 lost/9 killed, 5 giants by t12)
+classified all 5 remaining unit losses: 3 as the still-open
+retaliation/exposure pattern (id14 t9, id16 t12, id28 t15) and 2 as
+structurally unavoidable (id7 t6 forced-vacate-enabled-a-good-Summon,
+id12 t12 Catapult-range geometry). It also found a new mechanism
+amplifying the 3 exposure losses: `defend_plan_impl`'s covering unit's
+OWN post-retaliation health is read LIVE (`hypo_damage(state, &probe(u),
+frozen_attacker, ...)`), so a chip that wounds the ACTOR itself shrinks
+that actor's own waterfall contribution, raises `hold_margin`, and frees
+budget that re-credits OTHER covering units at higher `credit_frac` --
+making self-wounding chips near a Defend order Φ-PROFITABLE, not merely
+zero-priced (a stronger version of EXP_ELO_105's original diagnosis).
+It recommended NOT fixing the live read directly (would break the
+heal/reinforce gradients EXP_ELO_104/106 restored) and instead
+implementing pass-6's previously-sketched Fix B: a move-level (not
+Φ-potential) penalty for the ACTING unit stepping from "safe" into
+"a single frozen threat could kill me next turn," reusing the
+already-frozen `threat_units` snapshot.
+
+Before writing any code, all 3 flagged plies were independently
+reproduced bit-exact via `attack_pricing_probe3` against the shipped
+HEAD (`88d7f3b`):
+- t9 idx122, `Attack 51->50` (id14's fatal chip): total **125.000**
+  `[MATCH]`, entirely from `defend_hold` (+80, own-side live read).
+- t12 idx180, `Attack 50->38` (id16's fatal chip): total **623.570**
+  `[MATCH]`, entirely from `defend_cover` (+578.571); the safe `Step
+  80->69` alternative scored **527.638** `[MATCH]`, also boosted by
+  `defend_cover` (+471.428) but by materially less -- confirming the
+  chip's own self-wounding disproportionately inflates the shared
+  waterfall credit.
+- t15 idx266, `Attack 48->37` (id28's fatal chip): total **45.000**
+  `[MATCH]`, `dphi=0.000` -- genuinely UNPRICED (no Φ term engages at
+  all here; distinct from idx122/180's profitable-subsidy pattern).
+  Recorded alternative `Recover` (src 64): **40.000** `[MATCH]`.
+
+DESIGN REVIEW (advisor, before implementation): computed the sizing
+box a flat per-star penalty `m` would need to clear. Lower bound from
+idx180: a Warrior's penalty must exceed the 95.93 raw margin, so
+`m > 48`. Feared upper bound: EXP_ELO_106's own shipped reference plies
+(idx291 kill-and-advance, idx358 chip) might ALSO gate-fire, capping
+`m < 57.4`. Recommended sequence: check those gate booleans empirically
+before implementing, factor the gate as one `pub fn` shared by
+`rank_plies` and `attack_pricing_probe3` (parity), cache PRE-move
+lethality once per ply per unit (not per-candidate, the throughput
+mistake that sank EXP_ELO_105), exempt Summon/Train, use all-stances
+(pass-6's id9 loss was Grow-stance), and register two non-goals (no
+escape gradient for already-exposed units; single-threat lethality
+only, no focus-fire aggregation).
+
+GATE CHECK (before implementing): added `combat::lethal_threat_weight
+(state, unit, threats) -> f32` (0.0 = safe, else the responsible
+threat's weight) and `examples/lethality_gate_probe.rs` to check it
+directly against real plies. Both feared reference plies turned out
+NOT to gate: idx291's actor was already lethal PRE-move (health 3,
+exempt by the "no escape gradient" design point); idx358's actor took
+zero retaliation from chipping the Catapult (health stays 15, no
+gate transition). The other 3 established must-not-regress plies
+(idx149 EXP_ELO_108, idx369 EXP_ELO_107, idx447 EXP_ELO_101) also
+don't gate. The feared upper bound never actually bound.
+
+FIX (`combat.rs` + `search/macro_exec.rs` + `attack_pricing_probe3.rs`,
+first cut): `lethal_threat_weight` computed once per ply per own unit
+(PRE-move cache, `HashMap<tile, (unit_id, weight)>`); per-candidate,
+for any move type with a pre-existing acting unit (`source_idx()`
+resolves -- excludes Summon/Harvest/Build/Research/Reward by
+construction), if PRE was safe and POST is lethal, subtract
+`SHAPE_GOAL_ARM_PER_COST * unit_worth(actor) * threat_weight`.
+`attack_pricing_probe3` updated in the same commit to apply the
+identical penalty, keeping `[MATCH]` authoritative for it.
+
+VERIFICATION -- all 3 flagged plies flip correctly: idx122 chip
+125.000 -> **25.000** (penalty 100, Warrior) vs Research's unaffected
+160.000 (margin +135). idx180 chip 623.570 -> **523.570** (penalty
+100) vs Step's unaffected 527.638 (margin +4.068 -- thin but real,
+exactly as the advisor's sizing-box math predicted). idx266 chip
+45.000 -> **-205.000** (penalty 250, Swordsman) vs Recover's
+unaffected 40.000 (margin +245). All 5 must-not-regress plies
+(idx291, idx358, idx149, idx369, idx447) reprobed bit-exact unchanged
+(penalty 0.000 on all five, confirming the gate stays silent on every
+previously-established reference). `cargo test --lib`: 340/340 passed
+(2 new pinning tests for `lethal_threat_weight`: detects a one-shot
+but not a safe hit; ignores a threat that died to this candidate's own
+move, off the frozen snapshot).
+
+REGRESSION -- the regenerated canonical game got WORSE, not better.
+First cut (all move types gated): units_lost **5 -> 9**, last turn
+**17 -> 20**, giants by t12 **5 -> 4** (units_killed 9 -> 13 -- MORE
+total combat, not less). EXP_ELO_085's EndTurn-revival tripwire stayed
+in-band (1.342%, established band 1.4-3.0%), ruling out that specific
+failure mode. A `POLYFISH_DEBUG_LETHALITY=1` diagnostic showed the
+penalty firing 163x, the large majority on plain `Step` moves, not
+`Attack` -- e.g. turn 5-6, a pressured Warrior got the same 100-point
+penalty on EVERY viable Step destination (28, 39, 40), since each one
+newly entered some threat's range. Narrowed the gate to `Attack` only
+(matching what the 3 flagged plies actually are) -- fire count dropped
+4x to 39, but the regenerated game got WORSE AGAIN: units_lost **5 ->
+11**, turn stayed at **20**, giants **4**. Confirmed concretely (not
+inferred): the EXP_ELO_108 baseline actually played `Attack 39->27` at
+turn 5 (base score 110, kill-territory) which the narrowed fix
+penalized to net 10 -- a suppressed correct kill at turn 5 that
+cascades through the rest of the fully-deterministic game.
+
+ROOT CAUSE OF THE REGRESSION (advisor, second review): the flagged-ply
+margins and ordinary early-game attack values occupy the SAME numeric
+range, so no flat per-star multiplier can separate them. Margins the
+fix needs to clear: idx122 **6.2** (125.0 vs Research 118.83), idx266
+**5.0** (45.0 vs Recover 40.0), idx180 **95.9** (623.57 vs Step
+527.64). Ordinary early-game attack base scores run **45-110** --
+overlapping the first two margins entirely and comparable to the
+third. A penalty large enough to clear idx180 (>=100) is the same size
+as an entire good attack, so it can't help suppressing the 39 Attack
+moves. And idx180's outsized margin is itself suspect: its
+`defend_cover` asymmetry is 578.57 - 471.43 = **107** -- almost
+exactly pass-7's category-(b) subsidy (the live own-side `hypo_damage`
+read), not a genuine tactical margin; base score alone already favors
+the safe Step by 11. Pass-7's Fix B targeted the two genuinely-thin
+(5-6 point) chips while the largest, hardest-to-clear margin is an
+artifact of the SAME unfixed subsidy Fix B was proposed as an
+alternative to fixing.
+
+This also closes EXP_ELO_105's own open "why do the single game and
+the gauge disagree" hypothesis (that entry's registered lead: the
+ASYMMETRIC seed0 game tolerates exposure-pricing caution because the
+net is usually already ahead, while the SYMMETRIC mirror gauge
+punishes it because caution costs real tempo in an evenly-matched
+fight). EXP_ELO_109 never reached the gauge -- both regressions were
+measured on the asymmetric canonical game ITSELF. The asymmetric game
+does not tolerate this mechanism either. Hypothesis refuted.
+
+Disposition: **REVERTED**. Third empirical failure of the
+exposure/retaliation-pricing family on this loop (EXP_ELO_105's
+Φ-term: -8.59pp gauge; EXP_ELO_109 broad move-level penalty: canonical
+game units_lost 5->9; EXP_ELO_109 narrowed to Attack-only: canonical
+game units_lost 5->11) -- ply-verified-correct three times, net-negative
+three times. No fourth flat-penalty implementation without addressing
+the category-(b) subsidy first; the regenerated-game regression alone
+was decisive enough that the paired gauge was not run (this loop's own
+criterion has always been canonical-game-improves-or-holds AND
+gauge-not-negative -- a negative canonical-game result already fails
+that bar regardless of what the gauge would show). Reverted the
+`rank_plies` wiring and `attack_pricing_probe3`'s penalty block
+together in one commit (probe/production parity). KEPT:
+`combat::lethal_threat_weight` and its two pinning tests (a sound,
+independently useful primitive -- correctly distinguishes "already in
+danger" from "just entered it," verified against 8 real plies with
+zero false positives on any of them), and
+`examples/lethality_gate_probe.rs` (reusable gate-boolean checking
+tool). `replays/exp109_seed0_watch/` kept on disk as the regression
+record (Attack-only scoping, the second/final variant tested).
+
+NEXT CANDIDATE LEVER (registered for the next iteration): fix category
+(b) directly -- `defend_plan_impl`'s live own-side `hypo_damage` read.
+One concrete shape worth pre-registering: an asymmetric floor on the
+ACTING unit's own contribution to the defend waterfall,
+`max(pre-ply value, live value)` -- healing/reinforcement still raises
+it (preserving the EXP_ELO_104/106 gradients; their existing pinning
+tests will catch a regression here), but self-wounding can no longer
+shrink it and free budget for other units mid-comparison. After that
+lands, re-probe idx122/180/266 before deciding whether any residual
+move-level penalty is needed at all -- at 5-6 point margins on two of
+the three, the answer may be none.

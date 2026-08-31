@@ -370,6 +370,32 @@ pub fn threat_units(state: &GameState, player: PlayerId) -> Vec<(UnitState, f32)
     out
 }
 
+/// EXP_ELO_109: would any single still-alive frozen `threat` alone kill
+/// `unit` at its current coords/health? Single-threat only -- no
+/// focus-fire aggregation -- matching the move-level lethality-exposure
+/// gate this feeds (`rank_plies`'s post-move safety penalty), not a full
+/// Φ-potential term. Returns the MAX weight among qualifying threats (0.0
+/// if none), so a penalty sized off this scales down for a low-trust ghost
+/// the same way every other threat-weighted term in this file already
+/// does, rather than treating every lethal threat as equally certain.
+/// "Still alive" is checked live against `state` (a candidate's own move
+/// can kill the very threat being asked about, e.g. a Capture or a
+/// kill-and-advance), but each surviving threat's damage output is read
+/// off its FROZEN snapshot -- unit type/stats never change with the
+/// threat's own HP, so this needs no live re-derivation and carries none
+/// of `CityRisk.attackers`'s pre-EXP_ELO_106 collapse risk.
+pub fn lethal_threat_weight(state: &GameState, unit: &UnitState, threats: &[(UnitState, f32)]) -> f32 {
+    threats
+        .iter()
+        .filter(|(t, _)| {
+            get_true_unit_at(state, t.coords.idx).is_some_and(|live| live.owner == t.owner)
+                && can_attack_tile(state, &probe(t), unit.coords.idx)
+                && hypo_damage(state, &probe(t), unit, unit.coords.idx) >= unit.health
+        })
+        .map(|(_, w)| *w)
+        .fold(0.0f32, f32::max)
+}
+
 /// My opportunity to take ENEMY cities: `city_risks_with_threats` computed
 /// from the ENEMY's own perspective, with MY units standing in as their
 /// threats. Their risk of losing a city to me IS my opportunity of gaining
@@ -1357,6 +1383,55 @@ mod risk_tests {
         let risks = city_risks(&state, 1);
         assert_eq!(risks.len(), 1, "the city stays on the books for pricing");
         assert!(!risks[0].needs_order(), "risk {}", risks[0].risk);
+    }
+
+    /// EXP_ELO_109's gate: a full-health Warrior survives one adjacent
+    /// Swordsman's hit; the same Warrior at 1hp does not. `lethal_threat_weight`
+    /// must track that transition, since it's the whole basis for the
+    /// move-level penalty distinguishing "already in danger" from "just
+    /// stepped into it."
+    #[test]
+    fn lethal_threat_weight_detects_a_one_shot_but_not_a_safe_hit() {
+        let mut state = board(60);
+        state.tribes.get_mut(&1).unwrap().units.push(unit_at(70, UnitType::Warrior, 1));
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(69, UnitType::Swordsman, 2));
+        let threats = threat_units(&state, 1);
+
+        let healthy = state.tribes[&1].units[0].clone();
+        assert_eq!(
+            lethal_threat_weight(&state, &healthy, &threats),
+            0.0,
+            "a full-health Warrior must not read as lethally exposed"
+        );
+
+        let mut wounded = healthy;
+        wounded.health = 1.0;
+        assert!(
+            lethal_threat_weight(&state, &wounded, &threats) > 0.0,
+            "a 1hp Warrior next to an adjacent Swordsman must read as lethally exposed"
+        );
+    }
+
+    /// The "still alive" half of the gate: `threats` is frozen for the
+    /// whole ply, but a threat THIS candidate's own move killed must not
+    /// keep counting -- otherwise a kill-then-expose candidate would be
+    /// charged for a threat that no longer exists.
+    #[test]
+    fn lethal_threat_weight_ignores_a_threat_that_died_this_move() {
+        let mut state = board(60);
+        state.tribes.get_mut(&1).unwrap().units.push(unit_at(70, UnitType::Warrior, 1));
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(69, UnitType::Swordsman, 2));
+        let threats = threat_units(&state, 1);
+        let mut wounded = state.tribes[&1].units[0].clone();
+        wounded.health = 1.0;
+        assert!(lethal_threat_weight(&state, &wounded, &threats) > 0.0);
+
+        state.tribes.get_mut(&2).unwrap().units.clear();
+        assert_eq!(
+            lethal_threat_weight(&state, &wounded, &threats),
+            0.0,
+            "a threat this candidate's own move killed must not count, even off the frozen snapshot"
+        );
     }
 }
 
