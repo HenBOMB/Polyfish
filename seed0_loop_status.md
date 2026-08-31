@@ -300,11 +300,46 @@ EXP_ELO_091's move-gen determinism fix.
      IDENTICAL small delta (-0.78pp, exactly one game/128 in each),
      smaller than EXP_ELO_104's own shipped -1.56pp wash. Committed
      (`2beabb0`).
-- Current best game for the next analysis pass: still the **EXP_ELO_108**
-  game (`replays/exp108_seed0_watch/`, turn **17**, 5 lost, 9 killed, 5
-  giants by t12) — EXP_ELO_109 (below) was reverted, so this pointer is
-  unchanged. Units-lost is down to 5 (from a starting-loop value of 29)
-  but still misses the <3 target — the clearest remaining gap.
+  8. **EXP_ELO_110** (`defend_plan_impl`'s live own-roster health floored
+     against a per-ply `pre_health` snapshot, SHIPPED). Fixed exactly
+     the "category (b)" subsidy EXP_ELO_109's ledger entry registered
+     as the next lever: a covering unit's own health is read LIVE, so
+     a self-wounding chip shrinks its own waterfall contribution and
+     frees budget that re-credits OTHER covering units — `defend_cover`
+     pays a FRACTION while the waterfall consumes ABSOLUTE damage, so
+     the actor's own pay stays unchanged while it eats far less of the
+     shared budget. Fixed with `max(pre-ply health, live health)` — a
+     floor, not a clamp, so healing/reinforcement still raises the
+     contribution unchanged (EXP_ELO_104/106's gradients provably
+     untouched: the flagship t6 heal ply stays Δφ=0.000 exactly) while
+     a same-ply self-wound can't shrink it. Ground truth: all 3
+     EXP_ELO_109-flagged plies behave exactly as a pass-8 `ml-expert`
+     design review predicted — idx122 125→45 (Research now wins by
+     115), idx180 623.570→45.000 (the safe Step now wins by 482.638,
+     a full reversal), idx266 genuinely unchanged (no Defend order
+     active at t15, correctly out of this fix's scope). Two NEW
+     reference plies found and confirmed (idx241, idx242). 5 standard
+     must-not-regress plies held bit-exact. Added 2 pinning tests
+     (342/342 total). Regenerated game: turn 17 held, units_lost 5
+     held, units_killed 9 held, giants **5→6** improved, throughput
+     UP (52.19 vs 38.56 moves/sec — an O(1) lookup, not a rescan, so
+     none of EXP_ELO_105's cost problem). units_lost holding rather
+     than dropping was checked, not assumed: id14/id16 still die, but
+     traced concretely to whole-turn ply-by-ply sequencing (the chip's
+     turn-priority correctly moved after Research, but still gets
+     played once nothing better remains) — a separate, known search
+     limitation, not a flaw in this fix. Paired gauge, two independent
+     seed blocks: BOTH positive (+2.34pp, +3.13pp), same direction and
+     similar magnitude. Committed.
+- Current best game for the next analysis pass: the **EXP_ELO_110** game
+  (`replays/exp110_seed0_watch/`, turn **17**, 5 lost, 9 killed, 6
+  giants by t12). Units-lost is still 5 (down from a starting-loop
+  value of 29) but still misses the <3 target — the clearest remaining
+  gap. id28's t15 death (idx266) is confirmed genuinely unpriced by
+  every fix shipped so far (no Defend order active at that ply) and is
+  the next concrete lever; 2 of the 5 losses (id7 t6, id12 t12) are
+  pass-7-classified as structurally forced and out of scope for a
+  pricing fix.
 - **EXP_ELO_109 was attempted and REVERTED** (2026-08-31, see the ledger
   for the full writeup) — pass-6/7's proposed move-level lethality-
   exposure penalty (a flat per-star charge on an Attack that leaves its
@@ -648,3 +683,44 @@ EXP_ELO_091's move-gen determinism fix.
   (the live own-side read in `defend_plan_impl`) instead of a fourth
   flat-penalty variant. `replays/exp109_seed0_watch/` kept on disk as
   the regression record.
+- **2026-08-31, iteration 11 (pass-8 design review + EXP_ELO_110,
+  SHIPPED)**: pass-8 `ml-expert` was launched specifically to verify
+  and design EXP_ELO_109's registered next lever (the live own-side
+  `hypo_damage` read in `defend_plan_impl`) BEFORE any code was
+  written — confirmed the mechanism against actual source (not just
+  the description), ground-truth-verified it against real plies, and
+  delivered a precise fix design plus predictions for all 3 previously
+  -flagged plies. Independently re-verified the two load-bearing claims
+  (the live-health read itself; the fraction-pay-vs-absolute-consumption
+  asymmetry in `defend_cover`) against source before implementing.
+  Fixed with `max(pre-ply health, live health)` — a floor, not a
+  clamp — threaded as a new `pre_health` map through
+  `defend_plan_impl`/`goal_potential_inner`/`rank_plies`, built once
+  per ply (O(1) lookup per candidate, not a rescan). All 3 flagged
+  plies behaved EXACTLY as predicted: idx122 and idx180 both flip
+  cleanly (Research/Step now win by 115/482.638 respectively — idx180
+  going from losing by 95.9 to winning by 482.638, since most of that
+  margin turned out to be this exact subsidy), idx266 correctly stays
+  unchanged (no Defend order active, out of scope by design). 2 new
+  reference plies found (idx241, idx242), both confirmed. 5 standard
+  must-not-regress plies + EXP_ELO_104's flagship heal ply all held
+  bit-exact. Added 2 pinning tests (342/342 total). Regenerated game:
+  held on turn/units_lost/units_killed, improved on giants (5→6),
+  throughput UP not down (O(1) fix, unlike EXP_ELO_105's O(units×
+  threats) rescan). units_lost holding rather than dropping was
+  investigated, not just accepted: id14/id16 still die, traced
+  concretely to a real but separate limitation (ply-by-ply greedy
+  turn sequencing — the chip's priority correctly demotes below
+  Research, but still plays once nothing better remains later in the
+  same turn). Paired gauge, two independent seed blocks: BOTH
+  positive (+2.34pp, +3.13pp) — a real signal, not the usual
+  wash/tie shape most of this loop's fixes have shown. Also closes
+  EXP_ELO_105's asymmetric-vs-symmetric hypothesis from the other
+  direction: the correct fix improves both the asymmetric canonical
+  game and the symmetric gauge, confirming the tension was in
+  EXP_ELO_109's specific (abandoned) implementation, not the
+  underlying diagnosis. Committed. Next: id28's t15 death (idx266) is
+  now the clearest remaining units-lost lever — genuinely unpriced,
+  needs a different mechanism than the Defend-waterfall family; the
+  other 2 losses (id7, id12) are structurally forced per pass-7 and
+  out of scope for any pricing fix.
