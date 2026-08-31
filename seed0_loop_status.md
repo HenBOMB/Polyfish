@@ -999,3 +999,39 @@ sweep on both numeric targets is a decision point for Verdi, not a
 lever for another unprompted `ml-expert` pass — no new claim-hunting
 pass (re-watching the replay for an 8th issue) is launched from here
 without his input.
+
+## Iteration 14 — EXP_ELO_117 attempted and reverted, 2026-08-31
+
+Verdi explicitly asked to keep pushing specifically on the #1/#5
+undefended-city claim (not a new claim — the SAME one EXP_ELO_114
+shipped but flagged as not fully closed). Ground-truth work
+(`POLYFISH_DPHI_PROBE` decomposition on the real canonical ply) found
+the exact opposing force for the first time: an Expand-committed
+unit's own `unit_goal_approach` pull (200/tile) outweighs
+`city_open_exposed`'s ~11-25 point charge by an order of magnitude —
+confirmed the giant self-heals back onto city41 by turn 12 anyway, one
+commit late.
+
+The fix built on that finding (generalize the existing Defend-order
+cover/recall machinery to also fire same-turn for open+reachable
+cities with no order yet) was implemented, tested green, then measured
+on the canonical regen: turn 16->23, units_lost 3->8, giants-by-t12
+6->2 — a severe regression, not an improvement. Root cause (confirmed
+with a number, not guessed): the fix gated the machinery's EXISTENCE on
+`open` (a per-state fact), so `rank_plies`' phi_post-phi_pre comparison
+inverted the incentive — vacating a city GAINS the block's cover credit
+fresh, refilling LOSES it. **Reverted** (`git checkout --` on the three
+touched files, confirmed byte-clean). Full root-cause writeup,
+including the registered shape for a future correct attempt (the
+"needs defending" fact has to be a per-TURN snapshot, not a per-state
+one — same precedent as `pre_health`), is EXP_ELO_117 in
+`hypothesis_driven_improvements.md`. Kept/committed separately: the
+`city_refill_pricing_probe.rs` diagnostic tool and an incidental fix to
+`reward_lab.rs` (a pre-existing gap from EXP_ELO_116's own `MacroGoal.
+prepare` field rollout, unrelated to this entry's mechanism).
+
+KPIs are unchanged from iteration 13's close-out (turn 16 / 3 lost / 6
+giants / decisive win) since the fix that would have moved them was
+reverted. Iteration 14 closes the same way iteration 13 did: this was
+one bounded attempt at the specific gap Verdi named, it's fully
+written up, and no further unprompted attempt is launched from here.

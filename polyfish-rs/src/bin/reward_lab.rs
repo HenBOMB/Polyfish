@@ -201,6 +201,7 @@ fn main() -> anyhow::Result<()> {
         stance: parse_stance(&row.goal.stance),
         orders: row.goal.orders.iter().map(|(k, t)| (parse_order_kind(k), *t)).collect(),
         save_target: None, // not trace-captured -- see module doc
+        prepare: None,     // not trace-captured -- see module doc
     };
 
     let mut store = UnitGoalStore::default();

@@ -14136,3 +14136,125 @@ the canonical game. Tests green (357/357), sizing box holds (T7 kill
 unaffected in the canonical regen), and the canonical-game result is
 the strongest, most directly-mechanism-confirmed improvement this
 whole iteration-13 loop has produced.
+
+## EXP_ELO_117 — same-turn recall for an undefended, reachable city: root cause measured, first mechanism built, structurally inverted the incentive, reverted
+
+CONTEXT: Verdi, after iteration 13's close-out, asked to keep pushing
+specifically on the "left a city wide open" claims (#1/#5 from
+EXP_ELO_112) — EXP_ELO_114 priced the exposure but its own VERIFICATION
+section already logged the honest limit: the flat `city_open_exposed`
+charge (~11-25 points) demotes the vacating candidate at the ply it's
+compared against, but the unit still leaves once cheaper alternatives
+are exhausted a few plies later, and registered the next step as "an
+explicit same-turn recall/reassignment, closer to `defend_cover`'s own
+richer machinery."
+
+ROOT CAUSE (ground-truth measured, not assumed): reconstructed the
+exact canonical-game ply where city41's garrison steps away
+(`find_ply_idx`, `POLYFISH_DPHI_PROBE` with sampling forced to every
+call). Three real substitute units (tiles 31/40/52) DO have a legal
+Step-onto-41 refill candidate the following ply — ruling out "no
+alternative exists." But each refill candidate scored deeply negative
+(-68.7 to -81.7) despite a positive `city_open_exposed` credit
+(dphi_no_aux=+11.25): the REAL aux/unit_goals context added -125 to
+-129 more, traced to `unit_goal_approach`
+(`SHAPE_UNIT_GOAL_PER_TILE=200`/tile) — each candidate unit is sticky-
+assigned (real `UnitGoalStore`) to an Expand target, and stepping
+toward city41 moves it a tile further from that target. `defend_cover`'s
+own constants (`SHAPE_GOAL_DEFEND_COVER=600`) are already proven
+sufficient against this exact class of opposing pull once a real
+Defend order exists — confirmed directly: the giant walks itself back
+onto city41 by turn 12 in the canonical game, one commit late (orders
+freeze at turn start; city41 was still garrisoned then, so no Defend
+order got emitted that turn).
+
+FIX (attempted): generalized the existing Defend-order cover/
+garrison_hold/kill_advance/hold/recall block (`goal_potential.rs`) to
+also process any city where `city_risks_with_threats` reads
+`open && arrives_next_turn` with no live Defend order — a purely
+local, `goal_potential`-internal set (`synthetic_defend`), not written
+back into `goal.orders`/`MacroGoal` (no feature-channel or `gate_ok`
+implication, same unpainted-field precedent as `MacroGoal.prepare`/
+`save_target`). New `SYNTHETIC_DEFEND_EVALS`/`_FIRES` diagnostic
+counters, 2 new pinning tests (state-level: synthetic cover on an open
+city matches real-Defend-order cover exactly; zero once garrisoned).
+355/355 lib tests green, `cargo check --tests` clean.
+
+REGRESSION (canonical game regen, same seed/config as every other
+entry this iteration): turn 16->23, units_lost 3->8, giants-by-t12
+6->2, still a decisive win. `EXP_ELO_117 synthetic mid-turn defend
+gate` fired on 18.7% of evals game-wide (`EXP_ELO_114`'s own ambient
+rate rose 24%->39% alongside it) — a severe, broad regression, not a
+sizing miss.
+
+ROOT CAUSE OF THE REGRESSION (advisor-guided, then confirmed with a
+number before reverting): the synthetic entry is gated on `open` — a
+FACT ABOUT THE STATE being evaluated, not a fact about the turn. Trace
+what `rank_plies` actually prices (phi_post - phi_pre) for the two
+candidates that matter:
+- **Vacate**: phi_pre (garrisoned, entry absent) -> phi_post (open,
+  entry NOW EXISTS) -> `defend_cover` fires fresh for every nearby
+  unit. The vacate's Δφ GAINS hundreds of points — the AI is paid to
+  open its own city.
+- **Refill**: phi_pre (open, entry live, cover credits flowing) ->
+  phi_post (garrisoned, entry VANISHES) -> cover credit disappears,
+  and `defend_garrison_hold` never gets the chance to fire because the
+  entry it would pay through died with the fix. The repair move is
+  CHARGED, not rewarded.
+
+This is EXP_ELO_103's collapse-on-success bug one level up: 103 fixed
+it by making the block's terms garrison-independent, which only works
+because a REAL Defend order persists across both pre- and post-move
+states in the comparison. This fix made the block's very EXISTENCE
+collapse on success instead. Confirmed with a number
+(`temp_117_inversion_check`, not kept): same fixture as the pinning
+tests (city 60, enemy at 59, one ally at tile 38) — `goal_potential`
+with the ally covering from 38 while the city sits open scored 1205;
+the SAME ally standing on tile 60 (actually garrisoned) scored only
+630. The AI's own Φ preferred leaving the city open with a "covering"
+unit 575 points more than actually walking that unit home. Both
+pinning tests this entry added were state-level equivalences (correct
+assertions) that never priced a TRANSITION — exactly the layer the bug
+lived in, so they passed while the mechanism was broken.
+
+FIX REVERTED: `git checkout --` on `goal_potential.rs`,
+`goal_potential_tests.rs`, `self_play/summary.rs` — confirmed byte-
+identical to HEAD (`git status --short -- polyfish-rs/src/`) before
+re-verifying the full suite. `macro_exec.rs`'s temporary
+`DPHI_PROBE_SAMPLE_EVERY` diagnostic edit (20->1, for the root-cause
+measurement) was independently rounded back to 20 and confirmed byte-
+clean the same way.
+
+KEPT, COMMITTED SEPARATELY (unrelated to the reverted mechanism):
+`polyfish-rs/examples/city_refill_pricing_probe.rs` (the term-
+breakdown probe that found `unit_goal_approach` as the opposing
+force — kept per the EXP_ELO_115 probe-keeping precedent) and a fix to
+`polyfish-rs/src/bin/reward_lab.rs`'s `MacroGoal` literal, which was
+missing the `prepare` field EXP_ELO_116 added — a genuine pre-existing
+gap (that bin isn't covered by `cargo check --tests`) discovered only
+because this entry's verification pass ran the fuller `cargo test
+--bin self_play`, unrelated to this entry's own mechanism.
+
+REGISTERED FOR A FUTURE ATTEMPT (not built this entry): the fix that
+survives this post-mortem needs the "city needs defending" fact to be
+a PER-TURN fact, not a per-state fact — computed once at ply-start and
+threaded into `goal_potential` the same way `pre_health` already is
+(the exact precedent for freezing a ply-start snapshot against a mid-
+comparison shift). Then the machinery prices a TRANSITION the way a
+real Defend order does: vacating loses `defend_garrison_hold`, refilling
+earns it back, and coverers keep credit through the refill instead of
+losing it. Needs an `ml-expert` design review before implementation
+(new plumbing, not a local change) and should gate tight (lone
+garrison + `arrives_next_turn` only) since this is second-guessing the
+oracle's own Defend judgment — this exact regression is what over-wide
+garrison-pinning looks like. Acceptance bar for that future attempt is
+explicitly near-zero KPI movement on the canonical regen, not
+improvement: the flat-charge path stays capped around 44 (the T7 kill
+margin) vs. the ~125-200 point Expand pull measured here, and in the
+FINAL canonical game (all of 113/114/116 applied) the open window at
+city41 was never actually punished — it's insurance against a loss
+class not visible on this specific seed, not a fix for a visible loss.
+
+Disposition: **REVERTED.** Root cause of both the original claim and
+the regression are both measured and on record, not guessed. Probe and
+the incidental `reward_lab.rs` fix kept/committed separately.
