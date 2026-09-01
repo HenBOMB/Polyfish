@@ -15141,3 +15141,171 @@ all four stages' data-side code has landed) and an ablation training
 matrix per the plan's own Week 4-6 schedule. Tier B (pressure only,
 inference-time consumption) remains conditional on this training
 run's held-out AUC, per the plan.
+
+FIRST TRAINING PASS (2026-09-02, same overnight session). Generated a
+real (small) dataset and ran the ablation matrix in an isolated
+scratch directory (`/private/tmp/.../exp120_train/`, NOT the main
+`polyfish-rs/` tree -- that tree had 130+ un-consumed legacy
+`games_*.safetensors` files sitting loose in it, predating this
+session; training there would have silently diluted the new-head
+signal into near-nothing by volume, and consumed data that belongs to
+Verdi's own accumulated campaign, not this experiment).
+
+**Infrastructure note, not a finding, but worth recording**: this
+machine was under severe memory pressure tonight (~1.2GB free out of
+~35GB total, heavy swap/compression already active from other
+processes) and both self_play and train.py background runs were
+intermittently killed with no error message -- 2/2 kills on a 64-game
+self-play attempt, 2/3 kills on one training config. Not sleep
+(caffeinate assertions were active throughout) and not a code bug
+(retries of the identical command succeeded). Mitigation: self-play
+generation split into small batches (8 games each, ~7 min, 4/4
+succeeded first try) rather than one large run whose shard only
+flushes at the very end (a kill mid-run loses 100% of progress, not
+partial credit) -- accumulated 32 games / 11,340 decision rows this
+way. Also caught and fixed before any of this: the self_play binary
+had silently fallen back to the slow CPU/candle eval path despite
+every build using `--features apple` -- `--eval-backend metal`
+errored with "requires building with --features metal-eval" even
+though the feature was requested; a forced fingerprint-clear rebuild
+(`rm target/release/self_play`, no matching fingerprint dir existed
+either, cause not fully diagnosed) fixed it. Would have made the
+whole night's self-play ~19x slower if unnoticed (candle-Metal vs.
+tch/MPS, per this project's own prior finding).
+
+METHOD: baseline (all four new `AUX_*_W=0.0`, i.e. current shipped
+default) vs. each head individually at `W=0.1` (matching this
+project's existing `AUX_SPT_W`/`AUX_PURSUIT_W` default scale) vs. all
+four combined at `W=0.1` each. Each run restored the identical frozen
+starting checkpoint + fresh optimizer state first (no cross-config
+contamination), `TRAIN_EPOCHS=2`, 6 configs total, run sequentially
+against the same 32-game/11,340-row dataset.
+
+ACTUAL:
+
+| config | loss | policy | value | value_r2 | new-head loss(es) |
+|---|---|---|---|---|---|
+| baseline | 4.1905 | 3.3728 | 0.6970 | 0.7284 | -- |
+| territory | 4.3077 | 3.3635 | 0.7314 | 0.7135 | terr5 0.9271 (MSE) |
+| eco_ceiling | 4.2212 | 3.3560 | 0.7291 | 0.7143 | eco 0.1483 (MSE, n=1182/11340 rows) |
+| pressure | 4.2389 | 3.3458 | 0.7055 | 0.7202 | pressure 0.6733 (BCE) |
+| army5 | 4.2142 | 3.3547 | 0.7158 | 0.7202 | army5 0.2279 (MSE) |
+| combined | 4.3748 | 3.3599 | 0.7097 | 0.7226 | terr5 0.9169, eco 0.1027, pressure 0.6711, army5 0.1632 |
+
+Every `aux_supervised` count matched design exactly in every run:
+eco_ceiling consistently 1182/11340 (~10.4%, row-masked -- confirms
+the per-row mask override actually reads the real per-row tensor at
+training time, not just in the labels.rs unit test); every other new
+head consistently 11340/11340 (file-level, unmasked, as designed). No
+NaNs, no degenerate (frozen-at-init) losses anywhere.
+
+DIAGNOSIS -- honest reading, not overclaimed:
+- This validates the FULL pipeline end-to-end on real games: data
+  generation, row-masking, loss computation, all four heads training
+  with real non-degenerate gradients. That was the main risk going
+  into tonight and it's now retired.
+- value_r2 is slightly lower in every single-head config (0.713-0.720)
+  than baseline (0.728) or combined (0.723) -- small, on a tiny
+  dataset/2-epoch budget, likely just gradient-competition noise, NOT
+  a claim that these heads hurt the value head. Needs a real
+  train/held-out split and more data to mean anything.
+- combined's per-head losses are comparable to or slightly BETTER than
+  each head's own individually-trained loss (terr5 0.9169 vs 0.9271,
+  eco 0.1027 vs 0.1483, pressure 0.6711 vs 0.6733, army5 0.1632 vs
+  0.2279) -- no sign of destructive interference between the four
+  heads when trained jointly at this scale. Also not a strong claim at
+  n=11,340/2 epochs, just the honest direction of the number.
+- pressure's BCE (0.6733) is close to, arguably slightly worse than, a
+  naive base-rate predictor's BCE on the observed 34.8% positive rate
+  (~0.646) -- flagged, not brushed past. Plausibly just under-trained
+  (11K rows, 2 epochs, rare-ish positive class) rather than a real
+  ceiling; needs more data/epochs and a held-out check before reading
+  anything into it either way.
+
+NOT YET DONE, and explicitly not claimed as done: held-out (as opposed
+to training-set) loss for any head; any arena/behavior-curve check of
+whether these weights change actual play; Tier B for pressure (still
+correctly gated on both this data existing and a real AUC bar, neither
+established yet). Checkpoints (`model_baseline.safetensors` through
+`model_combined.safetensors`) and metrics live in the scratch training
+dir, not committed -- they're a first-pass smoke result on a small
+dataset, not a result meant to ship.
+
+Disposition: **Tier A infrastructure validated end-to-end on real
+data.** Not yet a behavioral or held-out-statistical result. Next
+steps, in order: (1) a real held-out split, (2) enough additional
+self-play volume to make loss numbers trustworthy (11K rows is a
+smoke test, not a training run), (3) an arena behavior-curve check
+before touching Tier B.
+
+SECOND PASS, MORE DATA (2026-09-02, same night). Pushed self-play
+generation further -- same 8-games/32-actors/64-mcts-iters recipe,
+run as individual sequential launches (a wrapper loop script that
+chained batches in one process was tried and was noticeably MORE
+fragile than launching each batch as its own top-level process, killed
+partway through its first batch; reverted to one-batch-per-launch).
+System memory pressure visibly worsened over the course of the night
+(1.2GB free -> 196MB free), consistent with kills becoming more
+frequent later on -- roughly half of individual launches needed one
+retry by the end. Net result: 56 games / 19,939 rows (up from 32
+games / 11,340), all 6 configs (baseline_v2 through combined_v2)
+retrained the same way (fresh start checkpoint, fresh optimizer,
+TRAIN_EPOCHS=2).
+
+ACTUAL (v2, 56 games / 19,939 rows):
+
+| config | loss | policy | value | value_r2 | new-head loss(es) |
+|---|---|---|---|---|---|
+| baseline_v2 | 4.1451 | 3.2903 | 0.7278 | 0.7211 | -- |
+| territory_v2 | 4.2807 | 3.2923 | 0.8050 | 0.6903 | terr5 0.5581 (MSE) |
+| eco_ceiling_v2 | 4.1843 | 3.3006 | 0.7468 | 0.7126 | eco 0.1043 (MSE, n=2129/19939) |
+| pressure_v2 | 4.2342 | 3.2793 | 0.7604 | 0.7060 | pressure 0.6753 (BCE) |
+| army5_v2 | 4.1755 | 3.2850 | 0.7490 | 0.7123 | army5 0.1550 (MSE) |
+| combined_v2 | 4.3060 | 3.2916 | 0.7519 | 0.7108 | terr5 0.5010, eco 0.0681, pressure 0.6736, army5 0.1068 |
+
+DIAGNOSIS -- comparing v1 (11,340 rows) to v2 (19,939 rows), same
+recipe otherwise:
+- **Three of the four new heads improved meaningfully with more data**
+  -- territory5 0.9271->0.5581 (individually), 0.9169->0.5010
+  (combined); eco_ceiling 0.1483->0.1043, 0.1027->0.0681; army5
+  0.2279->0.1550, 0.1632->0.1068. A loss that drops when you add more
+  training rows, at a fixed epoch count, is the ordinary signature of
+  real learnable signal rather than noise the model is memorizing --
+  the honest, if modest, positive finding from tonight.
+- **Pressure did not improve** (0.6733->0.6753 individually,
+  0.6711->0.6736 combined) -- flat, not degrading, still sitting close
+  to a naive base-rate BCE. Doesn't resolve the earlier flag; if
+  anything sharpens it. Candidate explanations, untested tonight: the
+  positive class is genuinely harder to predict from the input than
+  the other three targets, or it needs more data/epochs than the
+  other three do before it starts moving, or (per the momentum
+  finding this head exists to test) the signal is real but weaker
+  per-row than a scalar regression target's.
+- `aux_supervised.aux_eco_ceiling` row-mask rate held stable (2129/
+  19939 = 10.7% vs. v1's 1182/11340 = 10.4%) across a completely
+  different batch of games -- further confirms the row-mask mechanism
+  is measuring a real, consistent structural property (once-per-turn
+  density) rather than an artifact of one specific dataset.
+- value_r2 moved in less interpretable ways across configs (0.69-0.72
+  range, no clean ordering) -- different underlying games each config
+  variant, 2 epochs, small scale; not read as meaningful either
+  direction.
+
+Still not done, same list as v1's disposition (held-out split, real
+data volume, arena behavior check) -- v2 is a stronger smoke test, not
+a resolution of any of those. One additional, unplanned finding worth
+recording separately from this experiment: this machine showed a
+system process (`AppStoreDaemon`) with ~190 hours of accumulated CPU
+time still actively consuming ~97% CPU during tonight's session --
+plausibly a contributor to the memory/CPU pressure that caused
+tonight's kills, flagged for Verdi to look at, not touched here (out
+of scope, and killing an unrelated system process without explicit
+authorization is exactly the kind of action this project's own
+standing instructions rule out).
+
+Disposition: **v2 confirms v1's infrastructure validation and adds a
+real (if small-scale) positive signal**: 3/4 heads show the
+loss-drops-with-more-data pattern consistent with genuine learnable
+signal; pressure is flagged, not resolved. Checkpoints
+(`model_*_v2.safetensors`) and metrics remain in the scratch training
+dir, not committed.
