@@ -28,6 +28,11 @@ pub(crate) fn flush_shard(
     collected_aux_own: Vec<Vec<f32>>,
     collected_aux_fog: Vec<Vec<f32>>,
     collected_aux_spt: Vec<f32>,
+    collected_aux_territory5: Vec<f32>,
+    collected_aux_eco_ceiling: Vec<Vec<f32>>,
+    collected_eco_ceiling_mask: Vec<f32>,
+    collected_aux_pressure: Vec<f32>,
+    collected_aux_army5: Vec<f32>,
     collected_aux_pursuit: Vec<f32>,
     collected_aux_city_spt: Vec<Vec<f32>>,
     collected_aux_tech: Vec<Vec<f32>>,
@@ -85,6 +90,18 @@ pub(crate) fn flush_shard(
         device,
     )?;
     let aux_spt_tensor = Tensor::from_vec(collected_aux_spt, (total_steps, 2), device)?;
+    let aux_territory5_tensor =
+        Tensor::from_vec(collected_aux_territory5, (total_steps, 2), device)?;
+    let aux_eco_ceiling_tensor = Tensor::from_vec(
+        flatten_vec(collected_aux_eco_ceiling),
+        (total_steps, 4),
+        device,
+    )?;
+    let eco_ceiling_mask_tensor =
+        Tensor::from_vec(collected_eco_ceiling_mask, (total_steps, 1), device)?;
+    let aux_pressure_tensor =
+        Tensor::from_vec(collected_aux_pressure, (total_steps, 1), device)?;
+    let aux_army5_tensor = Tensor::from_vec(collected_aux_army5, (total_steps, 2), device)?;
     let aux_pursuit_tensor =
         Tensor::from_vec(collected_aux_pursuit, (total_steps, 1), device)?;
     let aux_city_spt_tensor = Tensor::from_vec(
@@ -124,6 +141,11 @@ pub(crate) fn flush_shard(
     tensors.insert("aux_ownership".to_string(), aux_own_tensor);
     tensors.insert("aux_fog_units".to_string(), aux_fog_tensor);
     tensors.insert("aux_spt".to_string(), aux_spt_tensor);
+    tensors.insert("aux_territory5".to_string(), aux_territory5_tensor);
+    tensors.insert("aux_eco_ceiling".to_string(), aux_eco_ceiling_tensor);
+    tensors.insert("aux_eco_ceiling_mask".to_string(), eco_ceiling_mask_tensor);
+    tensors.insert("aux_pressure".to_string(), aux_pressure_tensor);
+    tensors.insert("aux_army5".to_string(), aux_army5_tensor);
     tensors.insert("aux_opp_tech".to_string(), aux_tech_tensor);
     tensors.insert("aux_pursuit".to_string(), aux_pursuit_tensor);
     tensors.insert("aux_city_spt".to_string(), aux_city_spt_tensor);

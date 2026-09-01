@@ -21,10 +21,12 @@
 //! [`tech`] prices tech chains, [`city`] plans one city's build, [`empire`]
 //! allocates territory and enumerates the joint Pareto frontier across cities.
 
+pub mod ceiling;
 pub mod city;
 pub mod empire;
 pub mod tech;
 
+pub use ceiling::*;
 pub use city::*;
 pub use empire::*;
 pub use tech::*;

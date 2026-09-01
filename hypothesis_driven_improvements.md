@@ -14850,8 +14850,294 @@ head) has NOT been run and would be the next escalation if stronger
 proof is wanted before this flows into a real training campaign --
 flagged to Verdi, not run here.
 
-Disposition: SHIPPED. `micro_mcts.rs`'s `softmax_priors` fix and the
-`MICRO_MCTS_DEFAULT_SIMS=8` on-by-default flip are both live in the
-working tree (uncommitted, alongside the still-unresolved EXP_ELO_118
-diff from earlier in this session). Scratch gauge logs/dirs
-(`replays/exp119_gauge/`) to be cleaned up after this is committed.
+COMMITTED (3e23aba): `micro_mcts.rs`'s `softmax_priors` fix and the
+`MICRO_MCTS_DEFAULT_SIMS=8` on-by-default flip, isolated from the
+still-open EXP_ELO_118 diff (partial-file staging -- `combat.rs`
+carried both an EXP_ELO_118 test and this entry's diagnostic wrapper
+in the same file; split by constructing a base+119-only version,
+staging that, then restoring the full working tree on top, so the
+commit contains only EXP_ELO_119 material). `git diff --stat` on the
+commit before pushing: 7 files, 1219 insertions, 12 deletions, exactly
+the files this entry describes.
+
+COMPETITIVE WIN-RATE CHECK (Verdi, after the commit: "run a quick
+gauge against eval_seed to see what with vs. without does to win
+rate"). The n=128 mirror gauge above cannot produce a real win-rate
+delta (both seats always share one mechanism setting in a single
+self-play process); this is the actual head-to-head escalation
+flagged as missing.
+
+`arena --seed-file eval_seeds.json` (100 diverse-tribe seeds), two
+harnesses tried:
+1. First smoke test: config1=macro-mcts+net-asym vs config2=Greedy
+(a fixed baseline chosen to isolate micro-mcts's effect, since the
+env var is process-global and both `backend1`/`backend2=macro-mcts`
+would otherwise share it). n=2 seeds (4 games): config1 already wins
+4/4 (100%) even at `SIMS=0` -- a hard ceiling, no room to show any
+improvement from turning micro-mcts on. Abandoned this harness.
+2. Switched to the project's own established informative harness
+(EXP_ELO_047/069's: `--macro-leaf1 net-asym`, config2 left on
+macro-mcts's default HEURISTIC leaf -- historically reads 38-44%,
+not saturated), n=8 seeds (16 games/arm), same seed_file, run twice
+(`SIMS=0` vs the new default). Note this harness does NOT isolate
+micro-mcts to one side -- both configs use `backend=macro-mcts`, so
+the treatment run applies it to BOTH; the comparison is "neither
+side has it" vs "both sides have it," not "net-asym only."
+
+RESULT: config1 (net-asym) win rate 56.2% (9/16, `SIMS=0`) ->
+43.8% (7/16, new default) -- a 12.4pp drop. Same direction across
+every correlated metric: avg score 5139.1->3923.8, siege-defense
+"unsieged" rate 36%->16%, cities lost per game 1.38->2.12.
+
+READ: NOT statistically distinguishable from noise at this sample
+size -- a back-of-envelope binomial check on two independent n=16
+arms at p~0.5 gives a difference std of ~17.7pp, so the observed
+12.4pp swing is under 1 std of a pure-noise null (this project's own
+established noise floor is ~7.8pp at n=128 and ~12pp at n=64; n=16 is
+smaller than either historical gauge, so noise here is larger, not
+smaller). The correlated-metric consistency (score/siege/losses all
+moving together) is real but not independent confirmation -- it's the
+same win/loss pattern expressed multiple ways, not 3 separate signals.
+Genuinely ambiguous, not "probably fine": this arena harness is
+structurally different from the clean n=128 mirror gauge (asymmetric
+opponent, small n, and -- unlike the mirror gauge -- both PLYS-level
+mechanisms AND the outer macro-goal search interact with a heuristic-
+leaf opponent that the mirror gauge never tested against at all).
+
+NOT YET RESOLVED: whether this is noise or a real interaction between
+micro-mcts and net-asym-leaf/heuristic-leaf specifically. Flagged to
+Verdi rather than silently accepted or silently reverted -- the
+n=128 mirror gauge (clean) and this n=16 arena read (concerning but
+not conclusive) are the two pieces of evidence on the table; neither
+alone settles it. A same-scale (n=64+) confirmatory arena run on this
+harness is the natural next step if a real answer is wanted before
+this default flows into a training campaign.
+
+Disposition: SHIPPED AND COMMITTED, with an open, flagged question
+about net-asym-leaf interaction still outstanding. Scratch arena logs
+(`/tmp/exp119_arena_*.log`) not part of the repo, left for reference.
+
+DECISIVE FOLLOW-UP (2026-09-01, n=100 seeds vs a fixed Greedy baseline
+-- the "hail-mary" verification Verdi asked for after a broader
+strategic pivot conversation, not a continuation of the ambiguous n=16
+read above). Rebuilt `arena` first -- the checked-in `.run_bin/arena`
+predated this commit and would have silently measured pre-fix
+behavior.
+
+`arena --model1 model.safetensors --model2 model.safetensors
+--backend1 macro-mcts --macro-leaf1 net-asym --backend2 greedy
+--games 100 --seed-file eval_seeds.json` (all 100 seeds, both sides
+swapped = 200 games).
+
+RESULT: config1 (net-asym, shipped defaults incl. micro-mcts sims=8)
+121/200 (60.5%) vs Greedy. Avg score 4844.1 vs 3856.3. Siege defense:
+config1 unsieged 49% / cities lost 0.87 per game vs Greedy's unsieged
+25% / cities lost 1.37 per game -- config1 defends meaningfully better
+than Greedy defends, consistent with the win-rate gap. 0 draws.
+
+This supersedes the earlier n=2-seed "100%" smoke test above (4 games
+is not a measurement) and sits alongside, not in place of, the
+unresolved n=16 heuristic-leaf-opponent read: this run used Greedy as
+the fixed opponent (isolates "is the shipped system decisively better
+than a naive baseline" -- answer: yes, 60.5% is a real, non-noise win
+at n=200) while the n=16 run used macro-mcts's own heuristic leaf as
+the opponent (a much harder, more macro-savvy opponent, and the one
+where the net-asym-vs-heuristic-leaf tension actually shows up). The
+two questions are different and this run does not resolve the n=16
+one.
+
+Also recorded, directly relevant to the "why distill into a model
+instead of just running the heuristic search" question live in
+research_outcome.md: avg ms/move config1 (MacroMcts+net-asym) 843.71ms
+vs Greedy 0.37ms -- 2258x slower per move. This is NOT yet the
+compression comparison that question needs (that requires config2 =
+script+macro / heuristic-leaf macro-mcts, at ITS OWN latency and
+strength vs Greedy, not vs Greedy directly) -- flagged as the next
+natural measurement, not run here.
+
+Disposition update: the shipped default (micro-mcts on, sims=8) beats
+Greedy decisively (60.5%, n=200, not noise) but is far short of the
+90% hail-mary bar or human-competitive play, and remains unverified
+against its own heuristic-leaf sibling at matching sample size. The
+net-asym-leaf interaction question from the section above is still
+open.
+
+DECISIVE FOLLOW-UP #2 (2026-09-01, same session): the actual
+comparison the "why distill into a model" question needs -- net-asym
+macro-mcts vs. macro-mcts's own heuristic leaf (script+macro), matched
+sample size, neither side an easy/cheap baseline.
+
+`arena --model1 model.safetensors --model2 model.safetensors
+--backend1 macro-mcts --macro-leaf1 net-asym --backend2 macro-mcts
+--macro-leaf2 heuristic --games 100 --seed-file eval_seeds.json`
+(100 seeds, both sides swapped = 200 games).
+
+RESULT: config1 (net-asym) 92/200 (46.0%) vs config2 (heuristic-leaf)
+108/200 (54.0%). Avg score 4004.1 vs 4179.3 -- net-asym loses on both
+win rate and score. Siege defense close (31% vs 30% unsieged, 1.57 vs
+1.45 cities lost/game) -- not the differentiator here. 0 draws.
+Consistent in direction with this project's own historical read on
+this exact harness ("38-44%," per EXP_ELO_047/069) -- today's 46.0% is
+milder but the same sign: the trained value head at the leaf makes the
+turn-level search WORSE than the hand-written heuristic leaf it's
+supposed to be improving on.
+
+Speed: 665.82ms/move (net-asym) vs 560.68ms/move (heuristic) -- only
+1.19x slower, NOT the >1000x gap seen vs. Greedy in follow-up #1.
+Both configs pay for the same macro-mcts tree search; the leaf
+evaluator (network forward pass vs. a closed-form heuristic formula)
+is a small fraction of total per-move cost once the tree itself is
+the expense. This directly kills the "compression" answer floated for
+research_outcome.md's central open question ("why distill into a
+model and not just let the script play") as drafted -- net-asym is
+neither cheaper NOR stronger than script+macro on this measurement.
+If a compression argument exists at all, it has to compare against a
+CHEAPER heuristic stage (MacroScript/MacroLookahead, which skip the
+full adversarial tree), not against script+macro at matched tree
+depth -- untested here.
+
+Disposition: net-asym-leaf underperforms heuristic-leaf, confirmed at
+n=200 (not a one-off small-sample read) and consistent with prior
+smaller-sample history. Not yet diagnosed WHY (value-head calibration
+is the leading suspect per existing project findings on value-head
+overconfidence, but unconfirmed for this specific comparison). This
+is now the load-bearing open question for the "does the net earn its
+place" thesis section, not a side note.
+
+---
+
+## EXP_ELO_120 (Gate 0.1 of the horizon-compression program) -- momentum vs.
+possession: does forcing early expansion win via holding the extra city's
+economy, or via the initiative/pressure the push buys, independent of
+whether the city is later held?
+
+CONTEXT: EXP_ELO_026 (Jul 28) showed forcing third-city reach flips wins
+28%->81%, but that only establishes forcing expansion CAUSES wins, not
+WHICH downstream mechanism carries the effect. Verdi's objection this
+session, with a concrete counter-example (net takes a 3rd city, loses it
+to recapture, wins anyway off the resulting pressure): possession
+(holding the extra city's economy compounds) and momentum (early
+map-control converts into pressure regardless of later loss) are both
+consistent with 026's own result and were never discriminated.
+
+METHOD: re-ran 026's exact forced-expansion arm (`--macro-commit
+--macro-star-gate`, gumbel backend, mcts=64/k=16, GUMBEL_SCALE=0,
+`checkpoints/exp026_model.safetensors`, base_seed=20260728, 125 seeds x 2
+orientations = 250 games vs Greedy) with `--dump-turn-states` AND
+`--dump-stats-dir` both enabled for the first time (026's original run,
+and every arena run earlier this session, had neither). Caveat recorded
+before running, not after: `STAR_GATE_RESERVE` was deleted since 026 ran
+-- `--macro-star-gate` is now a hard tech block, not the affordability
+test 026 measured, so this is NOT a magnitude replication. Used only for
+the within-run mechanism read (a relative comparison of wins vs. losses
+within this one arm), which doesn't depend on matching 026's old number.
+Analysis script: `polyfish-rs/replays/exp026_v2/analyze.py` (026's own
+`analyze.py`/`causal_read.py` no longer exist in the tree -- rewritten
+fresh against the dump-stats-dir schema, which already carries
+`cities_lost_config1`, `siege_episodes` with `owner`/`outcome`/
+`turn_open`/`turn_close`, and `winner_config` per game).
+
+ACTUAL: config1 (model+oracle-macro) won 69/250 (27.6%) -- much lower
+than 026's own 58-60% win%, consistent with the hard-block caveat above
+(a real behavior change, not just noise, but orthogonal to the mechanism
+question this gate exists to answer).
+
+Among the 69 wins:
+- **27.5% (19/69) also lost at least one city during the game** --
+  clearly non-trivial. Possession predicts this fraction should be
+  ~0%; it isn't.
+- **91.3% of all wins had at least one siege initiated ON Greedy's
+  cities** (mean 1.68 such sieges/game in wins vs. 0.41 in losses) --
+  pressure-on-opponent is a near-universal feature of winning, not rare.
+- **Restricting to exactly the games that best test the two theories**
+  (the 19 wins that also lost a city): 89.5% still show >=1 siege
+  initiated on Greedy (mean 1.95/game, if anything higher than the
+  all-wins mean of 1.68). These are not "won on economy despite losing
+  tempo" games -- they carry the same pressure signature as every other
+  win.
+- Score delta in this lost-a-city-but-won subset (+1793 avg) is lower
+  than the all-wins average (+2294, expected -- losing a city costs
+  something) but still strongly positive; the possession/economic-
+  snowball signature (clean, uninterrupted score/city lead) is not what
+  distinguishes these wins from other wins.
+
+DIAGNOSIS: this refutes the strong-form possession-only story (fraction
+should be ~0; it's over a quarter) and is consistent with pressure/
+momentum being the dominant carrier -- wins correlate with sieges
+initiated on the opponent far more than with an unbroken city-count
+lead, and that holds even in the subset most likely to falsify it.
+Caveat: this is a within-arm correlational read (wins vs. losses inside
+one condition), not a controlled ablation isolating pressure from
+possession as independent levers -- it discriminates the two theories'
+predictions but doesn't yet measure pressure's OWN causal weight in
+isolation.
+
+Disposition: **momentum/pressure favored over pure possession.** Per
+the horizon-compression plan's Gate 0.1 branch: this promotes the
+pressure-pair aux head (Stage 2, "will a siege be initiated on the
+opponent within the next K turns") as the head most worth a Tier B
+(search-time-consumed) promotion, conditional on Stage 2's own Tier A
+held-out AUC clearing its bar. Stage 1's territory+5 head is unaffected
+-- it was already designed as a monotone "reached" potential, not a
+"held" one, specifically to stay consistent with this outcome rather
+than assume possession. Dumps in `polyfish-rs/replays/exp026_v2/`
+(`stats/`, `turn_states/`, `analyze.py`) -- kept in the repo as a
+reusable instrument, not scratch.
+
+PHASE 1 BUILD (2026-09-02, overnight, autonomous per Verdi's explicit
+"figure this out overnight" instruction). All four Tier-A heads from
+the horizon-compression plan shipped, each following the SPT+5
+template already established in this codebase:
+
+- **Stage 1b (territory+5)**: `my_territory`/`opp_territory` on
+  `HistoryStep` (game.rs, summed via `rules::economy::territory_tiles`
+  over `tribe.cities`), `TerritoryStep`/checkpoints/target in
+  labels.rs (monotone "reached", not "held" -- deliberately consistent
+  with the Gate 0.1 finding above), `aux_territory5` (dim 2) in
+  train.py. Capture-boundary safety (a captured city's territory
+  reassigns atomically via `claim_territory(force=true)`) verified by
+  a dedicated unit test, not just asserted.
+- **Stage 1a (eco_plan ceiling)**: new `src/rules/eco_plan/ceiling.rs`
+  (`ceiling_for_goal`) -- the CLI's uniform-sweep-only path
+  (EXP_ELO_086), reading REAL owned techs from `pov`'s `tech_vanilla`
+  rather than the CLI's manual `--techs` default. Gated to once per
+  (turn, pov) via a new `eco_ceiling_for_history_step` (mirrors
+  `macro_ballot_for_history_step`'s exact shape). Row-masked
+  (`aux_eco_ceiling` + `aux_eco_ceiling_mask`), NOT the file-level
+  AUX_DIMS convention -- confirmed train.py's existing `aux_mask[k]`
+  loss plumbing is already generic per-row, so this needed a
+  loading-side special case only, no `compute_loss` changes.
+- **Stage 2 (pressure)**: new `src/ai/siege.rs`
+  (`scan_siege_transitions`) -- extracted arena's `SiegeTracker`
+  open/close definition into a shared, unit-tested core. Arena's own
+  `scan()` left byte-for-byte unchanged (real risk/reward call: a
+  cross-check test in `arena/siege.rs` proves the two definitions
+  agree, rather than refactoring arena's already-battle-tested code
+  the same night dozens of this session's gauges depended on it).
+  `siege_pressure_target` in labels.rs is a windowed-max ("siege
+  opens on the opponent within (turn, turn+5]"), not a single-point
+  lookup -- sparse events, direct scan, no checkpoint structure
+  needed. `aux_pressure` (dim 1, BCE not MSE) in train.py.
+- **Stage 3 (army5)**: third copy of the SPT+5 template using the
+  existing `evaluate_army` heuristic. Simplest of the four -- already
+  `[0,1]`-clamped, no new normalization decision.
+
+VALIDATION: `cargo test --lib --tests --bin self_play --bin arena`
+green throughout (369+23 tests, 0 failures) after every stage, not
+just at the end. Each stage additionally verified with a REAL
+self-play smoke run (not just unit tests) -- shard contents inspected
+directly (safetensors) after each: territory5 range 0-1.15 (sane at
+/40 normalization), eco_ceiling mask density ~14% of rows (matches
+"~8 plies/turn" -- roughly 1-in-7 rows is a turn's first decision),
+eco_ceiling decoded values plausible (e.g. spt~14, pop~29, giants~3),
+pressure positive rate 34.8% (non-degenerate, confirms real siege
+detection, not a silent always-0 bug), army5 in [0,1] as expected.
+
+Disposition: **Phase 1 Tier A SHIPPED**, all four heads inert by
+default (`AUX_*_W=0.0`), zero effect on current training until
+explicitly turned on. Not yet trained or gauged -- next step is one
+combined self-play regeneration (avoids 4x redundant regen now that
+all four stages' data-side code has landed) and an ablation training
+matrix per the plan's own Week 4-6 schedule. Tier B (pressure only,
+inference-time consumption) remains conditional on this training
+run's held-out AUC, per the plan.

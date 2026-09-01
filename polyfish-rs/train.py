@@ -69,7 +69,8 @@ USE_TEACHERS_DS = os.environ.get("USE_TEACHERS_DS", "1") == "1"
 # reads these. Targets ship in games files from Jul 2026; files without them
 # (old archives, teachers) are masked out per sample, never zero-filled.
 AUX_DIMS = {'aux_ownership': 121, 'aux_fog_units': 121, 'aux_spt': 2, 'aux_opp_tech': 42, 'aux_pursuit': 1,
-            'aux_city_spt': 121}
+            'aux_city_spt': 121, 'aux_territory5': 2, 'aux_eco_ceiling': 4, 'aux_pressure': 1,
+            'aux_army5': 2}
 # EXP_ELO_061 (Stage 3b): macro policy head. NOT in AUX_DIMS/AUX_WEIGHTS --
 # unlike the aux_* heads this one IS mirrored into Rust (network.rs) and
 # consumed at inference, and its targets are masked per-ROW (macro_mask),
@@ -100,6 +101,30 @@ AUX_WEIGHTS = {
     # -- which nothing in the input says. Level and progress tell the net which
     # city is near a threshold; this asks it to learn what crossing one buys.
     'aux_city_spt': float(os.environ.get("AUX_CITY_SPT_W", "0.1")),
+    # Horizon-compression Stage 1b (EXP_ELO_120): territory tile count now vs.
+    # turn+5, monotone "reached" not "held" -- a captured-then-recaptured
+    # city just stops contributing, it isn't penalized. Default 0.0: inert
+    # until explicitly turned on, same convention as every other AUX_*_W.
+    'aux_territory5': float(os.environ.get("AUX_TERR5_W", "0.0")),
+    # Horizon-compression Stage 1a (EXP_ELO_120): eco_plan's Balanced-goal
+    # ceiling from this state -- [spt, pop, giants, monuments_used]. Unlike
+    # every other aux head, its per-sample mask is NOT the per-file AUX_DIMS
+    # convention -- see the loading-side comment ("aux_eco_ceiling row mask
+    # override") -- because presence varies per-row within a file (once per
+    # (turn, pov), same shape as macro_ballot).
+    'aux_eco_ceiling': float(os.environ.get("AUX_ECO_CEIL_W", "0.0")),
+    # Horizon-compression Stage 2 (EXP_ELO_120): "does a siege open on the
+    # opponent within the next 5 turns" -- binary, plain per-file AUX_DIMS
+    # convention (unlike aux_eco_ceiling, always computable post-game).
+    # This is the head EXP_ELO_120's momentum-vs-possession diagnostic
+    # promoted: 91.3% of forced-expansion wins involved sieging the
+    # opponent, including in the lost-a-city-but-won subset.
+    'aux_pressure': float(os.environ.get("AUX_PRESSURE_W", "0.0")),
+    # Horizon-compression Stage 3 (EXP_ELO_120): army value differential.
+    # Weakest a-priori case of the three heads (closest to what the value
+    # head should already partially capture) -- Tier A only by default, see
+    # the plan's own scoping.
+    'aux_army5': float(os.environ.get("AUX_ARMY5_W", "0.0")),
 }
 # EXP_ELO_013: persistent KL-anchor to a frozen reference policy (AlphaStar-
 # style — pulls the live policy toward a known-good checkpoint throughout RL,
@@ -230,6 +255,19 @@ class PolyZeroNet(nn.Module):
         self.aux_opp_tech = nn.Linear(self.filters, 42)
         self.aux_pursuit = nn.Linear(self.filters, 1)
         self.aux_city_spt = nn.Conv2d(self.filters, 1, 1)
+        # Horizon-compression Stage 1b (EXP_ELO_120): territory tile count
+        # now vs. turn+5, scalar pair off the same global-average-pool input
+        # as aux_spt (not v_latent -- see the comment above).
+        self.aux_territory5 = nn.Linear(self.filters, 2)
+        # Horizon-compression Stage 1a (EXP_ELO_120): eco_plan ceiling,
+        # [spt, pop, giants, monuments_used], same gap-pooled input.
+        self.aux_eco_ceiling = nn.Linear(self.filters, 4)
+        # Horizon-compression Stage 2 (EXP_ELO_120): siege-on-opponent
+        # pressure, binary, same gap-pooled input as the other scalar heads.
+        self.aux_pressure_head = nn.Linear(self.filters, 1)
+        # Horizon-compression Stage 3 (EXP_ELO_120): army value
+        # differential, same gap-pooled input, already [0,1]-clamped.
+        self.aux_army5 = nn.Linear(self.filters, 2)
 
         # --- Macro policy head (EXP_ELO_061, Stage 3b) ---
         # Unlike the aux_* heads above, this one IS mirrored into Rust
@@ -287,6 +325,10 @@ class PolyZeroNet(nn.Module):
         aux['aux_opp_tech'] = self.aux_opp_tech(gap)
         aux['aux_pursuit'] = self.aux_pursuit(gap)
         aux['aux_city_spt'] = self.aux_city_spt(x).flatten(1)
+        aux['aux_territory5'] = self.aux_territory5(gap)
+        aux['aux_eco_ceiling'] = self.aux_eco_ceiling(gap)
+        aux['aux_pressure'] = self.aux_pressure_head(gap)  # logits, BCE loss
+        aux['aux_army5'] = self.aux_army5(gap)
 
         # --- Value Heads ---
         v_input = x.detach() if DETACH_VALUE_TRUNK else x
@@ -409,6 +451,10 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target,
             'aux_opp_tech': lambda p, t: bce(p, t, reduction='none').mean(dim=1),
             'aux_pursuit': lambda p, t: ((p - t) ** 2).mean(dim=1),
             'aux_city_spt': city_masked_mse,
+            'aux_territory5': lambda p, t: ((p - t) ** 2).mean(dim=1),
+            'aux_eco_ceiling': lambda p, t: ((p - t) ** 2).mean(dim=1),
+            'aux_pressure': lambda p, t: bce(p, t, reduction='none').mean(dim=1),
+            'aux_army5': lambda p, t: ((p - t) ** 2).mean(dim=1),
         }
         for k, fn in per_sample.items():
             if AUX_WEIGHTS[k] == 0.0 or k not in aux_targets:
@@ -656,7 +702,18 @@ def train():
                 for k, d in AUX_DIMS.items():
                     if k in data:
                         c_aux[k].append(data[k].float())
-                        c_aux_mask[k].append(torch.ones(n))
+                        # EXP_ELO_120 (horizon-compression Stage 1a): row
+                        # mask override -- aux_eco_ceiling's presence varies
+                        # per-ROW within a file (captured once per
+                        # (turn, pov), same shape as macro_ballot), unlike
+                        # every other aux head here, which is all-or-nothing
+                        # per FILE. Falls back to the blanket per-file mask
+                        # only if an old shard somehow carries the target
+                        # without its companion mask.
+                        if k == 'aux_eco_ceiling' and 'aux_eco_ceiling_mask' in data:
+                            c_aux_mask[k].append(data['aux_eco_ceiling_mask'].float().squeeze(-1))
+                        else:
+                            c_aux_mask[k].append(torch.ones(n))
                     else:
                         c_aux[k].append(torch.zeros(n, d))
                         c_aux_mask[k].append(torch.zeros(n))
@@ -1081,6 +1138,10 @@ def train():
                 "aux_tech_loss": round(final_aux['aux_opp_tech'], 4),
                 "aux_pursuit_loss": round(final_aux['aux_pursuit'], 4),
                 "aux_city_spt_loss": round(final_aux['aux_city_spt'], 4),
+                "aux_territory5_loss": round(final_aux['aux_territory5'], 4),
+                "aux_eco_ceiling_loss": round(final_aux['aux_eco_ceiling'], 4),
+                "aux_pressure_loss": round(final_aux['aux_pressure'], 4),
+                "aux_army5_loss": round(final_aux['aux_army5'], 4),
                 # Per-head supervised-sample counts. A head added later reads
                 # lower than the rest until legacy archives age out; a head
                 # reading 0 that used to read high means the mask broke.

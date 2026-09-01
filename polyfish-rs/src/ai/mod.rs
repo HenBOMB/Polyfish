@@ -18,6 +18,7 @@ pub mod tch_network;
 pub mod metal_network;
 pub mod scoring;
 pub mod reward;
+pub mod siege;
 // Flat re-exports so every existing `crate::ai::gumbel_mcts::X`-style path
 // (self_play, arena, replayer, defense, reward, ...) keeps resolving after
 // these moved into the search/ bucket — see ok-lets-draft-a-gleaming-emerson.

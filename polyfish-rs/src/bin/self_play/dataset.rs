@@ -13,10 +13,12 @@ use std::io::Write;
 use strum::IntoEnumIterator;
 
 use crate::cli::Args;
-use crate::labels::{CitySptStep, FINAL_OUTCOME_REL_W, GOOD_BOT_FINAL_SCORE, LabelStep,
-                    SptStep, city_spt_checkpoints, city_spt_target, macro_policy_targets,
-                    ownership_from_pov, spt_checkpoints_by_player, spt_target,
-                    td_lambda_labels};
+use crate::labels::{ArmyStep, CitySptStep, FINAL_OUTCOME_REL_W, GOOD_BOT_FINAL_SCORE,
+                    LabelStep, SptStep, TerritoryStep, army_checkpoints_by_player,
+                    army_target, city_spt_checkpoints, city_spt_target, macro_policy_targets,
+                    ownership_from_pov, siege_pressure_target, spt_checkpoints_by_player,
+                    spt_target, td_lambda_labels, territory_checkpoints_by_player,
+                    territory_target};
 use crate::result::{GameResult, HistoryStep};
 use crate::shard::{SHARD_GAMES, flush_shard};
 use crate::stats::is_net_seat;
@@ -40,6 +42,26 @@ pub(crate) struct ShardBuffers {
     collected_aux_own: Vec<Vec<f32>>,
     collected_aux_fog: Vec<Vec<f32>>,
     collected_aux_spt: Vec<f32>, // flat, 2 per step
+    // Horizon-compression Stage 1b (EXP_ELO_120): territory tile count now
+    // vs. turn+5, same flat-2-per-step shape as aux_spt. Monotone "reached",
+    // not "held" — see labels.rs's TerritoryStep doc.
+    collected_aux_territory5: Vec<f32>,
+    // Horizon-compression Stage 1a (EXP_ELO_120): row-masked like
+    // macro_ballot/macro_mask, not the file-level AUX_DIMS convention --
+    // presence varies per-row (once per (turn, pov), same shape as
+    // macro_ballot), not per-file. The mask rides train.py's existing
+    // generic aux_mask[k] plumbing (already a per-sample tensor), so no
+    // compute_loss changes are needed -- only the shard-loading side reads
+    // this mask instead of the blanket per-file one.
+    collected_aux_eco_ceiling: Vec<Vec<f32>>,
+    collected_eco_ceiling_mask: Vec<f32>,
+    // Horizon-compression Stage 2 (EXP_ELO_120): plain per-file AUX_DIMS
+    // convention, no row mask needed -- unlike eco_ceiling, siege_opens is
+    // always computable post-game, for every row.
+    collected_aux_pressure: Vec<f32>,
+    // Horizon-compression Stage 3 (EXP_ELO_120): army value differential,
+    // third copy of the SPT+5 flat-2-per-step shape.
+    collected_aux_army5: Vec<f32>,
     collected_aux_tech: Vec<Vec<f32>>,
     collected_aux_pursuit: Vec<f32>, // scalar per step
     collected_aux_city_spt: Vec<Vec<f32>>, // board-sized per step
@@ -76,6 +98,11 @@ impl ShardBuffers {
             collected_aux_own: Vec::new(),
             collected_aux_fog: Vec::new(),
             collected_aux_spt: Vec::new(),
+            collected_aux_territory5: Vec::new(),
+            collected_aux_eco_ceiling: Vec::new(),
+            collected_eco_ceiling_mask: Vec::new(),
+            collected_aux_pressure: Vec::new(),
+            collected_aux_army5: Vec::new(),
             collected_aux_tech: Vec::new(),
             collected_aux_pursuit: Vec::new(),
             collected_aux_city_spt: Vec::new(),
@@ -109,6 +136,11 @@ impl ShardBuffers {
             collected_aux_own,
             collected_aux_fog,
             collected_aux_spt,
+            collected_aux_territory5,
+            collected_aux_eco_ceiling,
+            collected_eco_ceiling_mask,
+            collected_aux_pressure,
+            collected_aux_army5,
             collected_aux_tech,
             collected_aux_pursuit,
             collected_aux_city_spt,
@@ -152,6 +184,28 @@ impl ShardBuffers {
             })
             .collect();
         let spt_cp = spt_checkpoints_by_player(&spt_steps);
+        let territory_steps: Vec<TerritoryStep> = result
+            .history
+            .iter()
+            .map(|s| TerritoryStep {
+                player_id: s.player_id,
+                turn: s.turn,
+                my_territory: s.my_territory,
+                opp_territory: s.opp_territory,
+            })
+            .collect();
+        let territory_cp = territory_checkpoints_by_player(&territory_steps);
+        let army_steps: Vec<ArmyStep> = result
+            .history
+            .iter()
+            .map(|s| ArmyStep {
+                player_id: s.player_id,
+                turn: s.turn,
+                my_army: s.my_army,
+                opp_army: s.opp_army,
+            })
+            .collect();
+        let army_cp = army_checkpoints_by_player(&army_steps);
         let city_spt_steps: Vec<CitySptStep> = result
             .history
             .iter()
@@ -178,6 +232,7 @@ impl ShardBuffers {
                 root_value: step_root_value,
                 root_own_value: step_root_own_value,
                 macro_ballot,
+                eco_ceiling,
                 ..
             } = step;
             let flat_map = features
@@ -294,6 +349,18 @@ impl ShardBuffers {
             );
             collected_aux_spt.push(spt_my as f32 / 20.0);
             collected_aux_spt.push(spt_opp as f32 / 20.0);
+            // EXP_ELO_120: territory tile counts run higher than SPT (a
+            // multi-city empire can hold 60+ tiles on an 11x11 map) --
+            // deliberately a different normalization constant, not a reuse
+            // of SPT's /20.0.
+            let (terr_my, terr_opp) = territory_target(
+                territory_cp.get(&p_id),
+                turn,
+                result.final_territory.get(&p_id).copied().unwrap_or(0),
+                result.final_territory.get(&opp_id).copied().unwrap_or(0),
+            );
+            collected_aux_territory5.push(terr_my as f32 / 40.0);
+            collected_aux_territory5.push(terr_opp as f32 / 40.0);
             collected_aux_pursuit.push(pursuit);
             if let Some((candidates, visits)) = &macro_ballot {
                 let (stance, order) = macro_policy_targets(candidates, visits);
@@ -305,6 +372,22 @@ impl ShardBuffers {
                 collected_macro_order.push(vec![0.0; 3 * features::MAP_SIZE * features::MAP_SIZE]);
                 collected_macro_mask.push(0.0);
             }
+            if let Some(ceiling) = eco_ceiling {
+                collected_aux_eco_ceiling.push(ceiling.to_vec());
+                collected_eco_ceiling_mask.push(1.0);
+            } else {
+                collected_aux_eco_ceiling.push(vec![0.0; 4]);
+                collected_eco_ceiling_mask.push(0.0);
+            }
+            collected_aux_pressure.push(siege_pressure_target(&result.siege_opens, turn, opp_id));
+            let (army_my, army_opp) = army_target(
+                army_cp.get(&p_id),
+                turn,
+                result.final_army.get(&p_id).copied().unwrap_or(0.0),
+                result.final_army.get(&opp_id).copied().unwrap_or(0.0),
+            );
+            collected_aux_army5.push(army_my);
+            collected_aux_army5.push(army_opp);
             collected_aux_city_spt.push(city_spt_target(
                 city_spt_cp.get(&p_id),
                 turn,
@@ -341,6 +424,11 @@ impl ShardBuffers {
             std::mem::take(&mut self.collected_aux_own),
             std::mem::take(&mut self.collected_aux_fog),
             std::mem::take(&mut self.collected_aux_spt),
+            std::mem::take(&mut self.collected_aux_territory5),
+            std::mem::take(&mut self.collected_aux_eco_ceiling),
+            std::mem::take(&mut self.collected_eco_ceiling_mask),
+            std::mem::take(&mut self.collected_aux_pressure),
+            std::mem::take(&mut self.collected_aux_army5),
             std::mem::take(&mut self.collected_aux_pursuit),
             std::mem::take(&mut self.collected_aux_city_spt),
             std::mem::take(&mut self.collected_aux_tech),
@@ -378,6 +466,11 @@ impl ShardBuffers {
             std::mem::take(&mut self.collected_aux_own),
             std::mem::take(&mut self.collected_aux_fog),
             std::mem::take(&mut self.collected_aux_spt),
+            std::mem::take(&mut self.collected_aux_territory5),
+            std::mem::take(&mut self.collected_aux_eco_ceiling),
+            std::mem::take(&mut self.collected_eco_ceiling_mask),
+            std::mem::take(&mut self.collected_aux_pressure),
+            std::mem::take(&mut self.collected_aux_army5),
             std::mem::take(&mut self.collected_aux_pursuit),
             std::mem::take(&mut self.collected_aux_city_spt),
             std::mem::take(&mut self.collected_aux_tech),

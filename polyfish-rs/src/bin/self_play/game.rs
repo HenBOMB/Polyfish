@@ -25,7 +25,7 @@ use std::sync::atomic::AtomicUsize;
 use crate::crutches::{HEURISTIC_PRIOR_DECAY, HEURISTIC_PRIOR_W0, decay_crutch};
 use crate::dumps::{PlanTracker, open_game_jsonl, write_choice_dumps, write_spend_dumps, dump_macro_policy_row, dump_turn_state, update_plans};
 use crate::labels::{POLICY_TARGET_Q_RAMP_ITERS, final_ground_truth,
-                    macro_ballot_for_history_step, enemy_unit_grid};
+                    macro_ballot_for_history_step, eco_ceiling_for_history_step, enemy_unit_grid};
 use crate::result::{DecomposedPolicyData, GameResult, HistoryStep, decompose_visits,
                     group_recap};
 use crate::stats::{Adjudication, adjudicate, is_net_seat, score_hubs, record_spt_at_turn_start, t2c_turn, turn_milestones};
@@ -138,6 +138,14 @@ pub(crate) fn play_single_game(
     let initial_ruins = open_ruins.len();
     let mut village_capture_turns: Vec<i32> = Vec::new();
     let mut ruin_capture_turns: Vec<i32> = Vec::new();
+    // Horizon-compression Stage 2 (EXP_ELO_120): siege-open events for the
+    // aux_pressure target, using the arena's own siege definition
+    // (polyfish::ai::siege — cross-checked against arena's SiegeTracker).
+    // Sparse by construction (siege events are rare), so a global event
+    // list scanned per-row in dataset.rs is cheap -- no checkpoint
+    // structure needed the way SPT+5/territory+5 need one.
+    let mut siege_active: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
+    let mut siege_opens: Vec<(i32, PlayerId)> = Vec::new();
     // Turn of each net seat's OWN first village capture. The pooled
     // `village_capture_turns` above cannot answer this: a mirror game puts two
     // net seats in one list, an anchor game one, so any rate built from it is a
@@ -165,6 +173,9 @@ pub(crate) fn play_single_game(
     // real training runs -- reusing it here would silently disable this
     // dedup whenever the diagnostic dump isn't also requested.
     let mut last_macro_ballot_key: Option<(i32, PlayerId)> = None;
+    // Horizon-compression Stage 1a (EXP_ELO_120): same shape, gates
+    // ceiling_for_goal to once per (turn, pov).
+    let mut last_eco_ceiling_key: Option<(i32, PlayerId)> = None;
 
     // --dump-city-rewards: one JSONL file per game, one record per city
     // level-up reward choice — (turn, player, city level pre-choice, tribe
@@ -682,6 +693,58 @@ pub(crate) fn play_single_game(
                     .map(|t| polyfish::functions::get_tribe_spt(&game.state, t))
                     .unwrap_or(0)
             };
+            // EXP_ELO_120 / horizon-compression Stage 1b: territory tile
+            // count, summed over cities currently held. Monotone "reached"
+            // by construction — a captured-then-lost city just stops
+            // contributing, it isn't penalized.
+            let territory_of = |id: PlayerId| {
+                game.state
+                    .tribes
+                    .get(&id)
+                    .map(|t| {
+                        t.cities
+                            .iter()
+                            .map(|c| {
+                                polyfish::rules::economy::territory_tiles(&game.state, c).count()
+                                    as i32
+                            })
+                            .sum()
+                    })
+                    .unwrap_or(0)
+            };
+            // EXP_ELO_120 / horizon-compression Stage 3: army value
+            // differential, already [0,1]-clamped -- simplest of the three
+            // heads, no new normalization decision needed.
+            let army_of = |id: PlayerId| {
+                polyfish::ai::evaluator::army::evaluate_army(&game.state, id)
+            };
+            // EXP_ELO_120 / horizon-compression Stage 1a: eco_plan's
+            // Balanced-goal ceiling from this state, gated to once per
+            // (turn, pov) since it's stable all turn and each call costs
+            // ~9-10ms (EXP_ELO_086). Own normalization per field -- spt,
+            // pop, giants, and monuments_used are on different scales, none
+            // of them SPT's own /20.0.
+            let eco_ceiling = eco_ceiling_for_history_step(
+                (game.state.settings.turn, pov),
+                &mut last_eco_ceiling_key,
+                game.state.tribes.get(&pov).map(|t| {
+                    t.cities.iter().map(|c| c.idx).collect::<Vec<i32>>()
+                }).filter(|cities| !cities.is_empty()).and_then(|cities| {
+                    polyfish::rules::eco_plan::ceiling_for_goal(
+                        &game.state,
+                        pov,
+                        &cities,
+                        polyfish::rules::eco_plan::Goal::Balanced,
+                    )
+                }).map(|plan| {
+                    [
+                        plan.spt as f32 / 20.0,
+                        plan.pop as f32 / 100.0,
+                        plan.giants as f32 / 10.0,
+                        plan.monuments_used() as f32 / 5.0,
+                    ]
+                }),
+            );
             game_history.push(HistoryStep {
                 features: state_t,
                 policy: policy_data,
@@ -696,9 +759,14 @@ pub(crate) fn play_single_game(
                     &mut last_macro_ballot_key,
                     current_agent.macro_root_ballot(),
                 ),
+                eco_ceiling,
                 enemy_units: enemy_unit_grid(&game.state, pov, features::MAP_SIZE * features::MAP_SIZE),
                 my_spt: spt_of(pov),
                 opp_spt: spt_of(opp_id),
+                my_territory: territory_of(pov),
+                opp_territory: territory_of(opp_id),
+                my_army: army_of(pov),
+                opp_army: army_of(opp_id),
                 city_spt: game
                     .state
                     .tribes
@@ -790,6 +858,10 @@ pub(crate) fn play_single_game(
                 }
             }
             let _ = game.play_move(m.as_ref());
+            let siege_t = polyfish::ai::siege::scan_siege_transitions(&game.state, &mut siege_active);
+            for (owner, _city) in siege_t.opened {
+                siege_opens.push((game.state.settings.turn, owner));
+            }
             if m_type == polyfish::types::MoveType::Build && is_net_seat(seat_roles, pov) {
                 if let (Ok(target), Ok(s_type)) = (m.target_idx(), m.structure_type()) {
                     let st = polyfish::settings::structures::get_structure_setting(s_type);
@@ -917,7 +989,7 @@ pub(crate) fn play_single_game(
         total_cities += t.cities.len() as i32;
     }
 
-    let (final_owner, final_spt, final_tech) = final_ground_truth(&game.state);
+    let (final_owner, final_spt, final_tech, final_territory, final_army) = final_ground_truth(&game.state);
 
     let recap = ModReplay {
         game_state: initial_state,
@@ -975,6 +1047,9 @@ pub(crate) fn play_single_game(
         final_owner,
         final_spt,
         final_tech,
+        final_territory,
+        final_army,
+        siege_opens,
         tempo,
         roles: seat_roles,
         winner_score,

@@ -216,6 +216,105 @@ pub(crate) fn spt_target(cps: Option<&Vec<SptStep>>, turn: i32, final_my: i32, f
     .unwrap_or((final_my, final_opp))
 }
 
+/// Per-decision territory snapshot for the aux_territory5 target. Same shape
+/// as `SptStep`, deliberately a monotone "reached" quantity — tile count is
+/// summed over cities currently held, so a captured-then-lost city simply
+/// stops contributing rather than being penalized. This is the design choice
+/// that keeps the head testing expansion TEMPO rather than assuming
+/// possession (EXP_ELO_120: momentum/pressure, not possession, carries the
+/// third-city win-rate effect).
+#[derive(Clone, Copy)]
+pub(crate) struct TerritoryStep {
+    pub(crate) player_id: PlayerId,
+    pub(crate) turn: i32,
+    pub(crate) my_territory: i32,
+    pub(crate) opp_territory: i32,
+}
+
+/// First decision per (player, turn) — territory at the start of that
+/// player's turn. Mirrors `spt_checkpoints_by_player`.
+pub(crate) fn territory_checkpoints_by_player(
+    steps: &[TerritoryStep],
+) -> HashMap<PlayerId, Vec<TerritoryStep>> {
+    let mut out: HashMap<PlayerId, Vec<TerritoryStep>> = HashMap::new();
+    for s in steps {
+        let list = out.entry(s.player_id).or_default();
+        if list.last().map_or(true, |c| c.turn != s.turn) {
+            list.push(*s);
+        }
+    }
+    out
+}
+
+/// `[my, opp]` territory tile count at the first same-player turn >= turn+5,
+/// else the final values (game ended inside the horizon). Mirrors
+/// `spt_target` exactly.
+pub(crate) fn territory_target(
+    cps: Option<&Vec<TerritoryStep>>,
+    turn: i32,
+    final_my: i32,
+    final_opp: i32,
+) -> (i32, i32) {
+    cps.and_then(|c| {
+        let i = c.partition_point(|s| s.turn < turn + 5);
+        c.get(i).map(|s| (s.my_territory, s.opp_territory))
+    })
+    .unwrap_or((final_my, final_opp))
+}
+
+/// Per-decision army-value snapshot for the aux_army5 target (horizon-
+/// compression Stage 3, EXP_ELO_120). Third copy of the SPT+5 template —
+/// `evaluate_army` is already `[0,1]`-clamped, so unlike territory/eco
+/// ceiling this needs no new normalization decision.
+#[derive(Clone, Copy)]
+pub(crate) struct ArmyStep {
+    pub(crate) player_id: PlayerId,
+    pub(crate) turn: i32,
+    pub(crate) my_army: f32,
+    pub(crate) opp_army: f32,
+}
+
+/// First decision per (player, turn). Mirrors `spt_checkpoints_by_player`.
+pub(crate) fn army_checkpoints_by_player(steps: &[ArmyStep]) -> HashMap<PlayerId, Vec<ArmyStep>> {
+    let mut out: HashMap<PlayerId, Vec<ArmyStep>> = HashMap::new();
+    for s in steps {
+        let list = out.entry(s.player_id).or_default();
+        if list.last().map_or(true, |c| c.turn != s.turn) {
+            list.push(*s);
+        }
+    }
+    out
+}
+
+/// `[my, opp]` army value at the first same-player turn >= turn+5, else the
+/// final values. Mirrors `spt_target` exactly.
+pub(crate) fn army_target(
+    cps: Option<&Vec<ArmyStep>>,
+    turn: i32,
+    final_my: f32,
+    final_opp: f32,
+) -> (f32, f32) {
+    cps.and_then(|c| {
+        let i = c.partition_point(|s| s.turn < turn + 5);
+        c.get(i).map(|s| (s.my_army, s.opp_army))
+    })
+    .unwrap_or((final_my, final_opp))
+}
+
+/// EXP_ELO_120 (horizon-compression Stage 2): windowed-max, not a
+/// single-point lookup like `spt_target` — "does a siege open on the
+/// OPPONENT within (turn, turn+5]". Siege events are sparse (unlike SPT,
+/// which is dense every turn), so a direct scan over the game's full event
+/// list is cheap — no checkpoint/binary-search structure needed. No
+/// final-game fallback: the event list is complete by construction, so "no
+/// event in the window" honestly means 0.0, not a missing value.
+pub(crate) fn siege_pressure_target(events: &[(i32, PlayerId)], turn: i32, opp_id: PlayerId) -> f32 {
+    let in_window = events
+        .iter()
+        .any(|&(t, owner)| owner == opp_id && t > turn && t <= turn + 5);
+    if in_window { 1.0 } else { 0.0 }
+}
+
 /// Per-decision per-city production snapshot, the spatial counterpart of
 /// `SptStep`. Not `Copy` — one entry per city the POV holds.
 #[derive(Clone)]
@@ -374,12 +473,38 @@ pub(crate) fn macro_ballot_for_history_step(
     Some(ballot)
 }
 
+/// Horizon-compression Stage 1a (EXP_ELO_120): gates the (expensive-ish,
+/// ~9-10ms/call per EXP_ELO_086) `ceiling_for_goal` computation to once per
+/// (turn, pov) — the same dedup shape as `macro_ballot_for_history_step`,
+/// since the empire ceiling is stable for every ply within a turn (nothing
+/// about the reachable economy changes mid-turn except via the moves this
+/// very search is choosing among). Row-masked downstream like `macro_mask`,
+/// not the aux-head per-file convention — presence varies per-row.
+pub(crate) fn eco_ceiling_for_history_step(
+    key: (i32, PlayerId),
+    last_key: &mut Option<(i32, PlayerId)>,
+    ceiling: Option<[f32; 4]>,
+) -> Option<[f32; 4]> {
+    if *last_key == Some(key) {
+        return None;
+    }
+    *last_key = Some(key);
+    ceiling
+}
+
 /// End-of-episode ground truth for the aux heads: per-tile owner ids,
-/// per-player SPT, and per-player researched-tech multi-hot. Read off the
-/// final state before it is dropped.
+/// per-player SPT, per-player researched-tech multi-hot, and per-player
+/// territory tile count (aux_territory5's horizon-past-game-end fallback).
+/// Read off the final state before it is dropped.
 pub(crate) fn final_ground_truth(
     state: &GameState,
-) -> (Vec<i32>, HashMap<PlayerId, i32>, HashMap<PlayerId, Vec<f32>>) {
+) -> (
+    Vec<i32>,
+    HashMap<PlayerId, i32>,
+    HashMap<PlayerId, Vec<f32>>,
+    HashMap<PlayerId, i32>,
+    HashMap<PlayerId, f32>,
+) {
 // Aux-head ground truth; the final state is dropped when this returns.
 let n_tiles = features::MAP_SIZE * features::MAP_SIZE;
 let mut final_owner = vec![0i32; n_tiles];
@@ -391,11 +516,20 @@ for (&idx, tile) in &state.tiles {
 }
 let mut final_spt = HashMap::new();
 let mut final_tech = HashMap::new();
+let mut final_territory = HashMap::new();
+let mut final_army = HashMap::new();
 for (id, t) in &state.tribes {
     final_spt.insert(*id, polyfish::functions::get_tribe_spt(&state, t));
     final_tech.insert(*id, tech_multihot(&t.tech_vanilla));
+    let territory: i32 = t
+        .cities
+        .iter()
+        .map(|c| polyfish::rules::economy::territory_tiles(state, c).count() as i32)
+        .sum();
+    final_territory.insert(*id, territory);
+    final_army.insert(*id, polyfish::ai::evaluator::army::evaluate_army(state, *id));
 }
-    (final_owner, final_spt, final_tech)
+    (final_owner, final_spt, final_tech, final_territory, final_army)
 }
 
 #[cfg(test)]

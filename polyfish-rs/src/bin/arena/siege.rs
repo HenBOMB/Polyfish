@@ -83,6 +83,16 @@ impl SiegeTracker {
         })
     }
 
+    /// The transition-detection core (open/closed pairs, in the same shape
+    /// `polyfish::ai::siege::scan_siege_transitions` returns) is shared with
+    /// `self_play`'s pressure aux head (EXP_ELO_120) — extracted so both
+    /// consumers agree on exactly what a "siege" is. This method keeps its
+    /// own `active: HashMap<_, Value>` (not the shared function's plain
+    /// `HashSet`) because it needs to carry `open_facts` payloads per
+    /// episode; it mirrors the shared function's own open/close predicates
+    /// exactly rather than calling it directly, so the two data structures
+    /// (facts-carrying map vs. plain set) don't have to be kept in lockstep
+    /// by hand every scan.
     pub(crate) fn scan(
         &mut self,
         state: &polyfish::states::GameState,
@@ -136,5 +146,57 @@ impl SiegeTracker {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cross_check {
+    //! Byte-for-byte cross-check that this struct's open/close predicates
+    //! haven't drifted from the shared `polyfish::ai::siege` core, without
+    //! actually routing through it (see the `scan` doc comment for why).
+    use super::*;
+    use polyfish::ai::siege::{SiegeOutcome, scan_siege_transitions};
+    use polyfish::states::{CityState, GameState, TribeState, UnitState};
+    use std::collections::HashSet;
+
+    fn state_with(owner_city: (i32, i32), enemy_owner: Option<i32>) -> GameState {
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        let (owner, city_idx) = owner_city;
+        let mut tribe = TribeState::default();
+        tribe.id = owner;
+        tribe.cities.push(CityState { idx: city_idx, owner, ..Default::default() });
+        state.tribes.insert(owner, tribe);
+        if let Some(eo) = enemy_owner {
+            let mut t = TribeState::default();
+            t.id = eo;
+            t.units.push(UnitState {
+                coords: polyfish::coords::Coords::from_index(city_idx, 11),
+                owner: eo,
+                ..Default::default()
+            });
+            state.tribes.insert(eo, t);
+        }
+        state
+    }
+
+    #[test]
+    fn siege_tracker_agrees_with_the_shared_core_on_open_and_close() {
+        let sieged = state_with((1, 50), Some(2));
+        let mut arena_tracker = SiegeTracker::new(false);
+        let mut shared_active = HashSet::new();
+
+        arena_tracker.scan(&sieged, [None, None]);
+        let t = scan_siege_transitions(&sieged, &mut shared_active);
+        assert_eq!(t.opened, vec![(1, 50)]);
+        assert_eq!(arena_tracker.sieges, [1, 0], "arena's own opened-counter must agree");
+        assert!(arena_tracker.active.contains_key(&(1, 50)));
+
+        let cleared = state_with((1, 50), None);
+        arena_tracker.scan(&cleared, [None, None]);
+        let t2 = scan_siege_transitions(&cleared, &mut shared_active);
+        assert_eq!(t2.closed, vec![(1, 50, SiegeOutcome::Unsieged)]);
+        assert_eq!(arena_tracker.unsieged, [1, 0]);
+        assert!(arena_tracker.active.is_empty());
     }
 }

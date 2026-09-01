@@ -37,6 +37,15 @@ pub(crate) struct HistoryStep {
     pub(crate) enemy_units: Vec<f32>,
     pub(crate) my_spt: i32,
     pub(crate) opp_spt: i32,
+    /// Territory tile count, summed over cities currently held — the
+    /// aux_territory5 target's raw material. Monotone "reached", not "held":
+    /// EXP_ELO_120.
+    pub(crate) my_territory: i32,
+    pub(crate) opp_territory: i32,
+    /// Army value differential raw material (aux_army5), already
+    /// `[0,1]`-clamped by `evaluate_army`.
+    pub(crate) my_army: f32,
+    pub(crate) opp_army: f32,
     /// `(city tile, production)` for every city the POV holds at decision time
     /// — the raw material for the aux_city_spt target.
     pub(crate) city_spt: Vec<(i32, i32)>,
@@ -52,6 +61,13 @@ pub(crate) struct HistoryStep {
     /// macro-mcts. Raw material for the macro_stance/macro_order targets;
     /// marginalized in post-game processing, not here.
     pub(crate) macro_ballot: Option<(Vec<polyfish::ai::oracle_macro::MacroGoal>, Vec<f32>)>,
+    /// Horizon-compression Stage 1a (EXP_ELO_120): `eco_plan`'s
+    /// `Goal::Balanced` ceiling from this state — `[spt, pop, giants,
+    /// monuments_used]`, captured once per (turn, pov) via
+    /// `eco_ceiling_for_history_step`, same shape as `macro_ballot`. `None`
+    /// on every ply after the first within a turn, or when the planner finds
+    /// no feasible plan (no city, or every scenario infeasible).
+    pub(crate) eco_ceiling: Option<[f32; 4]>,
 }
 
 /// Result from a single game - contains all data needed for training
@@ -131,6 +147,14 @@ pub(crate) struct GameResult {
     pub(crate) final_owner: Vec<i32>,
     pub(crate) final_spt: HashMap<PlayerId, i32>,
     pub(crate) final_tech: HashMap<PlayerId, Vec<f32>>,
+    /// Horizon-past-game-end fallback for aux_territory5 (EXP_ELO_120).
+    pub(crate) final_territory: HashMap<PlayerId, i32>,
+    /// Horizon-past-game-end fallback for aux_army5 (EXP_ELO_120).
+    pub(crate) final_army: HashMap<PlayerId, f32>,
+    /// `(turn_open, owner besieged)` for every siege-open event in the game
+    /// — the aux_pressure target's raw material (EXP_ELO_120, Stage 2). No
+    /// final-game fallback needed: this list is complete by construction.
+    pub(crate) siege_opens: Vec<(i32, PlayerId)>,
     /// Per-player tempo curves + unit-accounting counters.
     pub(crate) tempo: HashMap<PlayerId, TempoTrack>,
     /// Seat roles (index = player_id - 1): "model", "model_vs_anchor",

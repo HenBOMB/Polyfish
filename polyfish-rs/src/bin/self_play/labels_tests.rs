@@ -363,3 +363,102 @@ use polyfish::types::{TechnologyType, UnitEffect};
         // Unknown player -> final fallback.
         assert_eq!(spt_target(cp.get(&7), 0, 1, 2), (1, 2));
     }
+
+    fn tstep(player_id: PlayerId, turn: i32, my: i32, opp: i32) -> TerritoryStep {
+        TerritoryStep {
+            player_id,
+            turn,
+            my_territory: my,
+            opp_territory: opp,
+        }
+    }
+
+    #[test]
+    fn territory_checkpoints_keep_first_decision_per_turn() {
+        let steps = vec![tstep(1, 3, 12, 8), tstep(1, 3, 20, 8), tstep(1, 4, 14, 9)];
+        let cp = territory_checkpoints_by_player(&steps);
+        let c1 = &cp[&1];
+        assert_eq!(c1.len(), 2);
+        assert_eq!((c1[0].turn, c1[0].my_territory), (3, 12));
+        assert_eq!((c1[1].turn, c1[1].my_territory), (4, 14));
+    }
+
+    #[test]
+    fn territory_target_five_turn_lookup_and_final_fallback() {
+        let steps = vec![
+            tstep(1, 0, 5, 5),
+            tstep(1, 3, 10, 6),
+            tstep(1, 9, 22, 12),
+            tstep(1, 12, 25, 15),
+        ];
+        let cp = territory_checkpoints_by_player(&steps);
+        // T=3: first turn >= 8 is 9.
+        assert_eq!(territory_target(cp.get(&1), 3, 999, 999), (22, 12));
+        // T=4: exact boundary, turn 9 == 4+5.
+        assert_eq!(territory_target(cp.get(&1), 4, 999, 999), (22, 12));
+        // T=7: first turn >= 12 is 12 (present exactly).
+        assert_eq!(territory_target(cp.get(&1), 7, 0, 0), (25, 15));
+        // T=9: nothing at >= 14 -> final fallback.
+        assert_eq!(territory_target(cp.get(&1), 9, 99, 98), (99, 98));
+        // Unknown player -> final fallback.
+        assert_eq!(territory_target(cp.get(&7), 0, 1, 2), (1, 2));
+    }
+
+    #[test]
+    fn territory_target_reached_then_lost_still_counts_the_earlier_high() {
+        // EXP_ELO_120: momentum, not possession -- a city taken then
+        // recaptured must not silently erase the earlier tile count from
+        // the horizon lookup. Territory drops back down at turn 10 (city
+        // lost) but the checkpoint AT the +5 horizon (turn 8) still shows
+        // the peak, because it's a snapshot at that turn, not a max-so-far.
+        let steps = vec![
+            tstep(1, 0, 8, 8),
+            tstep(1, 5, 8, 8),
+            tstep(1, 8, 18, 8),  // captured a city, territory jumps
+            tstep(1, 10, 9, 8),  // city recaptured by opponent, drops back
+        ];
+        let cp = territory_checkpoints_by_player(&steps);
+        // T=3: first turn >= 8 is turn 8 itself -- the peak, not the later drop.
+        assert_eq!(territory_target(cp.get(&1), 3, 0, 0), (18, 8));
+        // T=5: horizon is turn 10, which already reflects the loss.
+        assert_eq!(territory_target(cp.get(&1), 5, 0, 0), (9, 8));
+    }
+
+    fn astep(player_id: PlayerId, turn: i32, my: f32, opp: f32) -> ArmyStep {
+        ArmyStep { player_id, turn, my_army: my, opp_army: opp }
+    }
+
+    #[test]
+    fn army_target_five_turn_lookup_and_final_fallback() {
+        let steps = vec![
+            astep(1, 0, 0.1, 0.1),
+            astep(1, 3, 0.3, 0.2),
+            astep(1, 9, 0.6, 0.4),
+            astep(1, 12, 0.8, 0.5),
+        ];
+        let cp = army_checkpoints_by_player(&steps);
+        assert_eq!(army_target(cp.get(&1), 3, 9.0, 9.0), (0.6, 0.4));
+        assert_eq!(army_target(cp.get(&1), 4, 9.0, 9.0), (0.6, 0.4));
+        assert_eq!(army_target(cp.get(&1), 7, 0.0, 0.0), (0.8, 0.5));
+        assert_eq!(army_target(cp.get(&1), 9, 0.99, 0.98), (0.99, 0.98));
+        assert_eq!(army_target(cp.get(&7), 0, 0.1, 0.2), (0.1, 0.2));
+    }
+
+    #[test]
+    fn siege_pressure_target_windowed_max() {
+        // Opponent (id 2) besieged at turns 3 and 9; POV (id 1) besieged at
+        // turn 4 -- must not leak into the opponent-only window.
+        let events = vec![(3, 2), (4, 1), (9, 2)];
+        // T=0: window is (0,5], catches turn 3.
+        assert_eq!(siege_pressure_target(&events, 0, 2), 1.0);
+        // T=3: window is (3,8], turn 3 itself is excluded (open interval).
+        assert_eq!(siege_pressure_target(&events, 3, 2), 0.0);
+        // T=4: window is (4,9], catches turn 9 exactly at the boundary.
+        assert_eq!(siege_pressure_target(&events, 4, 2), 1.0);
+        // T=10: nothing left in (10,15].
+        assert_eq!(siege_pressure_target(&events, 10, 2), 0.0);
+        // Querying the POV's own besiegement (opp_id=1) must not match the
+        // opponent's events.
+        assert_eq!(siege_pressure_target(&events, 0, 1), 1.0);
+        assert_eq!(siege_pressure_target(&events, 4, 1), 0.0);
+    }
