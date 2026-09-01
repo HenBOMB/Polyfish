@@ -109,7 +109,7 @@ fn probe_depth_at(full: &ModReplay, target_idx: usize, target_turn: i32, evaluat
     let goal = commit_macro_goal(&view.state, POV, &mut sc, counters.tier3_bought);
     let aux = compute_goal_aux(&view.state, POV, &goal, counters.techs_bought, counters.tier3_bought, Some(&lane));
     let gate = tech_discipline_active(&view.state, POV, &goal);
-    let ranked = rank_plies(&mut view, POV, &goal, &aux, gate, 1.0, None);
+    let ranked = rank_plies(&mut view, POV, &goal, &aux, gate, 1.0, None, None);
 
     println!("=== idx={target_idx} turn={target_turn} stance={:?} candidates={} ===", goal.stance, ranked.len());
     for (s, m) in ranked.iter().take(6) {

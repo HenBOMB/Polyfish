@@ -14284,11 +14284,25 @@ is `[(1, 1, Warrior, 6.0, worth=2.0), (18, 1, Giant, 40.0, worth=10.0),
 (3, 2, Warrior, 10.0, worth=2.0), (16, 2, Warrior, 10.0, worth=2.0),
 (17, 2, Giant, 40.0, worth=10.0), (19, 2, Giant, 40.0, worth=10.0)]`
 (id, dist, type, hp, worth). Two Warriors (worth 2, a fifth of a
-Giant's worth) sit at distance 1-2. The gap is plugged one turn later
-(turn 12) by a Giant again (id=26 -- a DIFFERENT giant, not id=18
-walking back, and not one of the three giants already visible at
-turn 11 either, so it's freshly arrived/trained) -- never by either
-idle Warrior.
+Giant's worth) sit at distance 1-2.
+
+CORRECTION (found while tracing id=26's provenance for the design
+review, per its own "confirm before sizing" instruction): id=18 itself
+IS the first unit to refill the gap -- global command idx177,
+`Step: 51->41`, confirmed by unit id (not just type/health) with a
+dedicated probe. This is the real, reward-driven decision the fix
+targets: the search chose to walk the valuable Giant home over sending
+either idle Warrior. What follows nine plies later (global idx186,
+`{moveType:9 (Reward), target:41, type:6}`) is a SEPARATE city-level-up
+reward event that spawns a brand-new Giant (id=26, `created_turn:12`,
+`prev_coords:(-1,-1)` i.e. never moved -- a fresh spawn, not a march)
+directly at city41, which is what's actually sitting there at the
+turn-12 end-of-turn snapshot -- NOT a second recall decision, and out
+of this fix's scope (CityReward pricing, unrelated to defend/recall).
+Net: the "never by either idle Warrior" finding still holds and is
+still the real bug -- id18's own Step back is the mechanism-caused
+mistake -- but the specific claim that id=26 was ALSO a recall pick is
+wrong and is corrected here rather than left standing.
 
 MECHANISM (read, not yet changed): `defend_garrison_hold` pays a FLAT
 `SHAPE_GOAL_DEFEND_COVER * attacker_pressure` regardless of which unit
@@ -14333,3 +14347,511 @@ Falsifier for whichever shape is chosen: re-run
 and confirm a Warrior (or a freshly Trained cheap unit), not a Giant,
 fills the city41 gap, with canonical KPIs (turn/units_lost/giants) not
 regressing and a paired gauge inside the established noise floor.
+
+DESIGN REVIEW (ml-expert, before implementation): rejected pure
+unit_worth discounting on the EXISTING flat terms (a multiplicative
+1/unit_worth on `defend_garrison_hold` cuts a lone-Giant's hold from
+600p to ~240p, below `attack_press`=500 -- a real sufficiency
+regression when the Giant genuinely is the only defender available).
+Rejected an explicit Train-for-defense term as double-paying (a Train
+candidate's post-state already puts a unit on the tile and
+`defend_garrison_hold` already pays it there). Recommended shape:
+additive, not a discount on anything already proven --
+1. New `defend_cheap_garrison` term:
+   `SHAPE_GOAL_DEFEND_CHEAP * attacker_pressure * cheapness(occupant)`,
+   `cheapness(u) = (2.0 / unit_worth(u)).clamp(0.4, 1.0)` (Warrior=1.0,
+   Giant=0.4). A Warrior-in state now beats a Giant-in state by
+   `B * attacker_pressure * 0.6`; the proven lone-Giant floor (600p)
+   never weakens.
+2. Mirror the SAME cheapness weight into `defend_kill_advance`
+   (EXP_ELO_106) -- required, not optional, else a cheap unit that
+   takes the kill-and-advance forfeits 600p+B but is refunded only
+   600*cheapness, re-taxing exactly what 106 un-taxed, specifically on
+   the units this fix steers into the garrison role.
+3. `defend_recall` becomes a weighted MAX over eligible units
+   (`cheapness(u) * proximity(u)`), not nearest-only -- inversion-safe
+   by construction (removing/retreating any unit weakly decreases a
+   max, so it can't reproduce EXP_ELO_117's collapse-on-success shape).
+   Explicitly NOT lexicographic cheapest-first (that pays Φ when the
+   cheap unit dies and selection falls back to a pricier one -- a
+   state-dependent trap of exactly the shape just reverted).
+Deferred to a later wave: touching `defend_plan_impl`'s waterfall
+`credit_frac` sort directly -- most entangled with EXP_ELO_096/110's
+already-tested behavior.
+Q2 (transition-safety): no `pre_health`-style ply-start snapshot
+needed -- `cheapness` is a static per-unit function (depends only on
+the unit's own `unit_worth`, never on live board state), so it can't
+reproduce EXP_ELO_117's inversion by construction. Standing rule going
+forward: per-unit weights in this block may depend on the unit, never
+on the live board, unless frozen at ply start.
+Sizing: `SHAPE_GOAL_DEFEND_CHEAP = 150.0` (0.25x
+`SHAPE_GOAL_DEFEND_COVER`) as the first fit, expecting the usual ~2x
+q-gap overshoot on the first measured pass (per [[q-gap-dial-method]]).
+
+## EXP_ELO_119 (pre-registration) — the search buys irrelevant tech while a city sits open, no mechanism suppresses star-spending in favor of addressing it
+
+STATUS: investigation registered, ground truth confirmed on one flagged
+ply, fix not yet designed/implemented (ml-expert design review
+in flight).
+
+CONTEXT: Verdi, watching a freshly generated single-game replay
+(canonical watch recipe, `--iteration 100 --anchor-decay-start 100`,
+XinXi vs Imperius): "At step 74 we researched hunting. Very bad
+decision we shouldve never done that... bc we wasted our stars on that
+useless tech, we ended up leaving the village empty with a nearby
+enemy unit... we need to fix the ply ordering here so that one of the
+FIRST things we do is address that emptiness before doing anything
+else. I keep seeing the net spend its stars elsewhere and then be left
+broke to make a standing unit on its villages." Two explicit asks, in
+his priority order: (1) close the loophole that let the net buy
+irrelevant tech, (2) fix the general ordering so addressing an open
+city happens first.
+
+GROUND TRUTH (`polyfish-rs/examples/turn6_hunting_probe.rs`, replay
+`replays/watch/game_iter100_game0_seed1787500020.replay.json`, move
+idx=74, matches Verdi's "step 74" report): turn=6, player=1, stars=8,
+goal.stance=Arm. City 41 (level 2) has an EMPTY garrison, nearest
+enemy at Chebyshev distance 3; cities 84/49 both garrisoned. Legal
+candidates at this ply include 4 Research options (`score_move`:
+Riding=12.6, Organization=18.0, Fishing=8.0, Hunting=13.0) and a
+Summon (recruit) candidate AT city 41 itself scoring 30.0 -- the
+single highest-scoring legal candidate at the ply, well above every
+Research option. The move actually executed (confirmed against the
+raw replay JSON, not assumed) was `Research type=15` = Hunting,
+score=13.0 -- not even the top-scoring Research option. Computed
+`goal_potential_breakdown` phi_pre/phi_post for all 4 Research
+candidates: dphi=0.000 for every one, structurally -- Research doesn't
+touch unit positions or city occupancy, so `city_open_exposed`
+(EXP_ELO_114, prices `r.open && r.arrives_next_turn` off current
+state) is identical pre/post for any Research candidate; it can only
+reward/punish candidates that change occupancy, never candidates that
+merely fail to address it. Traced the actual lambda used for this
+run's real ROOT scoring (not rollout): `--macro-rollout-lambda 0.0`
+only zeroes the rollout-phase lambda; root/tree scoring uses
+`macro_lambda` (default 1.0, not overridden here) via
+`rollout_lambda: args.macro_rollout_lambda.unwrap_or(args.macro_lambda)`
+(`self_play/main.rs`) -- so `city_open_exposed` and the rest of
+`goal_potential` DID apply to the real decision, and the full static
+formula (`score_move + 1.0*dphi`) still ranks Summon(41)=30 far above
+Hunting=13. Checked `passes_stance_tech_mask`
+(`ai/search/goal_aux.rs:503`): under `Stance::Arm` a Research move is
+gated only if `grows && !arms && arm_strength>=0.98`, where
+`arms=!get_tech_effects(tech).combat_units.is_empty()` and
+`grows=is_eco_tech(tech)` (harvests/eco_structures/tech_discount).
+Hunting unlocks no unit and no structure/harvest/discount directly
+(`settings/technology.rs`: pure bridge to Archery/Forestry) -- so
+`arms=false` AND `grows=false`, the gate's condition (`grows &&
+!arms`) is false, and Hunting is NEVER gated, in ANY stance, regardless
+of board urgency. Confirmed real, narrow classification blind spot:
+any tech that is neither purely-combat nor purely-eco by this
+effects-based test is invisible to stance masking entirely. Also
+confirmed `decay_crutch(HEURISTIC_PRIOR_W0=0.5, HEURISTIC_PRIOR_DECAY=
+0.97, iteration=100, ...)` floors the heuristic-prior blend at ~0.1 by
+iteration 100 -- the canonical watch recipe deliberately runs the
+network's own near-unassisted judgment, so even though the STATIC
+heuristic favors defending by a wide margin here, the actual 64-sim/
+k=8 net-asym tree search is ~90% driven by the trained network's own
+policy/value, which is what actually committed to Hunting. The
+divergence is a real network judgment, not a heuristic scoring bug --
+the heuristic layer already gets this ply right on its own.
+
+DIAGNOSIS (two independent, both-real mechanisms):
+(A) mask coverage gap -- `passes_stance_tech_mask` never gates
+"neither" techs (Hunting and similar pure prerequisites), so they
+sail through regardless of urgency or stance.
+(B) no ordering/opportunity-cost mechanism exists at all for the
+open+exposed-city case -- `city_open_exposed` can only price
+candidates that touch occupancy, never suppress unrelated
+star-spending while the gap goes unaddressed.
+
+DESIGN REVIEW: requested from ml-expert (in flight as of this
+writing -- the first response was truncated by a connection error
+mid-way through checking `city_risks`' exact predicate semantics; a
+continuation was requested). This entry will be updated with the
+review's actual recommendation before any code is written, per the
+project's design-review-before-touching-fragile-reward-code discipline
+(freshly reinforced by EXP_ELO_117's revert one investigation ago in
+this exact reward module).
+
+NOT YET DONE (at time of writing): no fix designed or implemented.
+Relevant precedent this review needs to reconcile: EXP_ELO_117 (a
+Φ-term whose EXISTENCE depended on a live per-state fact inverted the
+incentive under the phi_post-minus-phi_pre comparison -- reverted);
+EXP_ELO_075 (a broad soft price nudge fired on 75% of ordinary plies,
+not just the intended case, and tanked win rate 0.396->0.146 --
+reverted); EXP_ELO_026 (a genuinely well-scoped HARD gate/force --
+win rate 28%->81%, kept). A hard `gate_ok`-style legality gate
+(evaluated fresh per ply off current state, not a stored/incremental
+potential) is structurally immune to the EXP_ELO_117 inversion class,
+unlike a new Φ term would be -- current leaning is toward (B) being a
+gate, not a price, but this is exactly what the design review is
+being asked to confirm or override.
+
+CORRECTION AND MAJOR EXPANSION (same investigation, continued after
+Verdi's live interjection: "I do expect ordering to be something our
+micro mcts solves since we do 2-3 plies look ahead so if that's not
+happening or delivering the Q eval that we should be getting then
+something is dramatically wrong here"). The ml-expert design review
+never completed -- 3 consecutive connection failures on the same
+subagent -- so `advisor` (sees this session's full transcript) stood
+in instead, across two calls. Its first-call pressure-test flagged
+that the ORIGINAL ground truth above rested on an unverified
+assumption (`r.arrives_next_turn` for city41) and asked for 3 checks
+before any code got written. All 3 were run; two overturned the
+original diagnosis:
+
+1. **`city_risks()` doesn't just fail to trigger `arrives_next_turn`
+for city41 -- it omits city41 from its output ENTIRELY.** Extending
+`turn6_hunting_probe.rs` to print `city_risks(&game.state, player)`
+at idx=74 returns only city84 and city49 -- city41 is absent (the
+function's own early-continue: `if risk <= 0.0 && enterers.is_empty()
+{ continue; }`). This means EVERY downstream defense mechanism is
+structurally blind to city41 at this ply: not just the Defend-order
+assignment loop in `compute_macro_goal` (`for r in city_risks(...) {
+if r.needs_order() { orders.push((Defend, r.city)) } }` never even
+iterates a row for 41), but ALSO EXP_ELO_114's own standing
+`city_open_exposed` safety net (built specifically to catch a
+mid-turn vacate with no Defend order -- it iterates the SAME
+`city_risks` output and never sees city41 either). This is a single
+upstream root, not three independently-narrow gaps.
+
+2. **The apparent "3-tiles-away, should count as close" threat is
+terrain-blocked, confirmed by directly reading the map.** `examples/
+turn6_hunting_probe.rs` extended to print `threat_units(&game.state,
+player)`: the nearest visible enemy (owner=2 Warrior, tile 60,
+trust=1.000 -- genuinely visible, NOT a fog-of-war gap, confirmed via
+`tile.explorers.contains(&player)`) sits at Chebyshev distance 3 from
+city41 (tile41=(8,3), tile60=(5,5)). Dumping the terrain grid between
+them from the replay's own tile data: a Mountain block sits on every
+direct-path tile ((6,4), (7,4)/(8,4)/(9,4), (7,5)/(8,5)/(9,5), plus
+(7,2)/(8,2) to the north) -- the ONLY passable approach to city41's
+own tile is from (7,3)/(9,3), themselves boxed in by mountains on
+three sides. `turns_to_reach` (`combat.rs:272`, real terrain-aware
+`reach_search_turns`, not raw Chebyshev) returning None (path exceeds
+`THREAT_HORIZON=3` turns) for a move-1 Warrior here is very plausibly
+CORRECT, not a bug -- the mountain range genuinely puts this specific
+attacker several turns further out than straight-line distance
+suggests. **This means the flagged ply was less acutely dangerous
+than the replay viewer made it look**: no visible, currently-reachable
+threat existed at idx=74. This does not make Verdi's underlying
+principle wrong (an owned city sitting open is a standing liability
+regardless of the CURRENT threat snapshot -- a threat can close the
+distance over several turns with no re-evaluation ever firing, since
+nothing revisits an already-open, already-below-threshold city), but
+it does mean a threat-horizon-gated mechanism (city_open_exposed's own
+`arrives_next_turn`, or a gate keyed on the same predicate) would
+NOT have fired at this exact ply either, and building one wouldn't
+close this specific case.
+
+3. **Confirmed the REAL committed turn-6 goal via direct
+instrumentation, not reconstruction.** A standalone probe's own
+`commit_macro_goal(state, player, &mut StanceCommit::default(), ...)`
+call does NOT reliably reproduce the real search's internally-tracked
+goal (confirmed by direct comparison: the probe's reconstruction
+across two separate runs produced `[(Expand,21),(Expand,43),
+(Defend,49)]` both times -- consistent with itself, but neither
+matches the real one). Added a one-line, env-gated, cached-read debug
+trace (`POLYFISH_DEBUG_TURN_GOAL=1`, `macro_mcts.rs`'s `turn_goal_
+debug()`, right after `self.turn_goal = candidates.into_iter().nth
+(pick)`) and regenerated the same deterministic seed: the REAL
+committed turn-6 goal is `orders=[(Expand,43),(Defend,49),
+(Defend,84)], stance=Arm, pick=0` (matches ballot candidate index 0
+in `game0.jsonl` exactly). Every one of the 8 sampled turn-6 ballot
+candidates in `game0.jsonl` -- not just the committed one -- omits any
+Defend order on city41; some tag it `Expand` instead, most omit it
+entirely. This independently confirms finding #1's mechanism (the
+goal-candidate generator itself, not just a downstream pricing term,
+never proposes defending city41 at this ply) via a completely
+different method (direct search instrumentation vs. reading the
+`city_risks` function), while also confirming the probe's own
+goal reconstruction is NOT faithful enough to trust its exact
+`rank_plies` scores as a stand-in for what the real ply actually
+ranked -- the "Summon@41 scores 524.8, clearly correct" claim from
+the pre-correction ground truth is UNVERIFIED under the real goal
+and should not be relied on. What WAS re-confirmed under the (still
+imperfect) reconstruction: dphi for Summon@41 there is dominated by
+generic `arm_value`/`expand_approach` army-growth terms, NOT by
+anything defense-specific (`city_open_exposed`/`defend_*` are absent
+from the breakdown entirely) -- consistent with finding #1's claim
+that no defense-specific machinery touches city41 at all, from a
+second, independent angle.
+
+MICRO-MCTS FINDING (owed directly to Verdi's interjection, not
+speculative): micro-mcts (`ai/search/micro_mcts.rs`) is a real, built,
+integrated within-turn PUCT search using the trained network's own
+value head at leaves -- exactly the "2-3 ply lookahead with real Q
+eval" mechanism Verdi expects to solve exactly this class of problem.
+Two confirmed facts, not assumptions:
+(a) it was OFF for the watched game and is OFF in every production
+self-play/arena invocation -- gated by `POLYFISH_MICRO_MCTS_SIMS`,
+unset by default, confirmed both by the module's own doc comment
+("off in every existing invocation") and by this exact game's own
+stats line ("micro-mcts calls: 0 total, 0 overrode rank_view's top
+pick").
+(b) EVEN IF IT HAD BEEN ON, it has a real, previously-diagnosed,
+never-fixed structural bug (EXP_ELO_079, this same file, months
+earlier): `softmax_priors` runs over RAW `score_move` heuristic scores
+with no temperature. Whenever one root candidate's score dominates by
+more than roughly 20-30 points (common -- EXP_ELO_079 measured a ~110
+point gap at its own flagged ply), the softmax collapses to a
+numerically exact one-hot distribution (`e^-110 ~ 10^-48`), which
+zeroes PUCT's exploration term for every other candidate for the
+entire search regardless of sims/k/depth. Re-confirmed independently
+here (my own probe, `turn6_micro_softmax_probe.rs`, real top-8
+candidates at idx=74 under the imperfectly-reconstructed goal):
+prior=1.000000 on the top candidate, 0.000000 on every other one of
+the top 8. **This means micro-mcts, as currently implemented, cannot
+disagree with whatever `rank_plies`/`rank_view` already ranks first
+-- it can only ever re-confirm the root's own top pick.** EXP_ELO_079
+registered "add temperature/normalization to `softmax_priors`, then
+re-test" as its own next step and it was never implemented. That fix
+is a PREREQUISITE for micro-mcts delivering the kind of corrective
+lookahead Verdi is expecting -- simply flipping the env var on, by
+itself, would not have been sufficient even if it had been on for
+this game.
+
+STILL OPEN / NOT YET RESOLVED: exactly why the REAL search (under its
+real, now-known `orders=[(Expand,43),(Defend,49),(Defend,84)]` goal)
+ranked Research(Hunting) at the executed ply -- the standalone probe's
+own goal reconstruction has been shown unreliable (finding #3) and a
+byte-exact re-derivation (matching `self.recent_goals`/continuation
+candidates and the search's own internal counters) has not yet been
+attempted. Whether ply-level execution is simply `rank_view`'s own top
+pick (unconfirmed assumption used throughout this investigation) or
+involves further tree search below the goal-commit level is also not
+independently confirmed in this entry.
+
+DISPOSITION: no fix implemented. Two independent, still-real threads
+carried forward, deliberately NOT bundled into one diff:
+(A) the tech-mask "neither-class" gap (`passes_stance_tech_mask`
+never gates a tech with no unit AND no eco effect, e.g. Hunting, in
+any stance) -- narrow, small, independently justified regardless of
+this ply's specific outcome, not yet implemented.
+(B) the broader "no ordering/opportunity-cost mechanism for an open
+city" idea from the original diagnosis is DOWNGRADED, not confirmed --
+a threat-horizon-gated version would not have fired here (finding #2),
+and an un-gated "any open city" version risks the exact EXP_ELO_075
+over-firing shape advisor warned against twice. Not implemented
+pending further scoping.
+(C) NEW, higher-priority candidate raised by this session's own
+findings: fixing EXP_ELO_079's `softmax_priors` temperature/
+normalization bug and turning micro-mcts on is the mechanism Verdi
+explicitly expects to own this whole problem class, is independently
+diagnosed (not speculative), and was never implemented after being
+registered 40 experiments ago. Reported to Verdi as the leading
+candidate for the next concrete step; not yet started.
+
+CORRECTION #2 (Verdi disputed the "threat wasn't real" framing above,
+citing 2 specific Warriors at tiles 48/60 that "can step into the
+village the very next turn"): the mountain-blocked-path explanation
+in the entry above was found by hand-eyeballing a terrain grid and is
+WRONG about the mechanism, even though its bottom-line ("turns_to_
+reach returns None") was correctly read off the code. Ground-truthed
+properly this time: added a diagnostic `pub fn turns_to_reach_debug`
+wrapper (`combat.rs`, exposes the private `turns_to_reach` to
+examples) and called it directly -- `turns_to_reach(city41, horizon=
+10)` returns `None` for BOTH flagged Warriors (idx48 dist=4, idx60
+dist=3) even at a 10-turn budget, not just the production
+`THREAT_HORIZON=3`. Read why: `reach_search_turns`'s `is_steppable`
+gate (`combat.rs`/`moves/mod.rs`) requires `tile.explorers.contains(
+&unit.owner)` for EVERY tile along the path -- `unit.owner` here is
+the THREAT's own owner (player 2), so the search only credits the
+enemy with a route through tiles player 2 currently has LIVE vision
+on. Confirmed via the replay's own tile data: city41's tile and every
+tile on the one viable corridor route (a mountain range does
+genuinely wall off the direct approach, forcing a detour north)
+show `explorers=[]` -- player 2 has not scouted that area at all, so
+the search can't construct a route through it, no matter how large
+the turn budget. **This is a materially different and more
+significant finding than "terrain blocks it"**: the threat-
+reachability model structurally cannot foresee ANY approach through
+territory the enemy hasn't already personally scouted, regardless of
+Chebyshev distance -- a real route Verdi (and a human opponent) would
+obviously use is invisible to this search purely because no enemy
+unit has laid eyes on it yet. Whether this FOW-gated pathing is an
+intentional, defensible modeling choice (don't credit the enemy with
+knowledge it doesn't have) or a bug worth loosening (a real opponent
+scouts INTO fog as it advances, revealing the route turn by turn,
+which this static single-shot search never simulates) is an open
+design question, not yet resolved or acted on -- flagged for a
+separate follow-up, not bundled into this entry's fix.
+
+SHIPPED (this same investigation): the EXP_ELO_079 `softmax_priors`
+fix Verdi directly requested ("we need to fix the micro-mcts then so
+that it does a real search"). `micro_mcts.rs`'s `softmax_priors` now
+normalizes candidate scores by the score list's OWN population std
+(floored at `MICRO_SOFTMAX_STD_FLOOR=1.0`) before the softmax
+exponential, instead of exponentiating raw, unnormalized scores.
+Verified two ways: (1) re-ran the exact EXP_ELO_079-flagged ply
+(idx177, `examples/micro_depth_probe.rs`, its own stale `rank_plies`
+call signature fixed to match the current `eco_plan` parameter) --
+priors for that ply's real 6 candidates are now `[0.595, 0.140,
+0.140, 0.055, 0.036, 0.034]`, not `[1.0, 0, 0, 0, 0, 0]`; (2) 3 new
+pinning unit tests in `micro_mcts.rs`'s own test module: the real
+idx177 gap no longer collapses (every candidate keeps >1% prior), a
+genuine 2.6-std outlier still clearly dominates (>50% -- population
+std measured INCLUDING the outlier self-dilutes its own z-score,
+documented in the test, not a bug), and a near-equal score cluster
+stays close to uniform rather than blowing up. Full CI-equivalent
+suite (`cargo test --lib --tests --bin self_play`) passes (one
+`test_gumbel_tree_reuse_on_consecutive_same_player_search` failure
+confirmed pre-existing/flaky -- passes standalone, unrelated module).
+
+REAL-EVALUATOR VALIDATION (done after the above, same investigation):
+Dummy-evaluator tests can only confirm the MECHANISM (priors no longer
+collapse), not that the search's DECISION actually changes -- a
+constant leaf value gives PUCT no reason to ever prefer a lower-prior
+branch regardless of how well-spread the priors are. Two follow-ups
+with the real trained network (`model.safetensors` loaded via
+`Evaluator::Inline`/`candle_nn::VarBuilder::from_mmaped_safetensors`,
+CPU device):
+1. `turn6_micro_softmax_probe.rs` extended to run both `Evaluator::
+Dummy` and the real network side by side at idx=74 -- both agree
+(`pick=Some(0)`, endorsing the Summon@41 candidate) at every tested
+sims/k. Confirmatory, not decisive on its own (this ply's own
+top-ranked candidate, under this probe's still-imperfect goal
+reconstruction, already was the defensive option).
+2. The decisive one: regenerated the SAME seed's full game
+(`POLYFISH_MICRO_MCTS_SIMS=64`, otherwise the identical watch-recipe
+command, `replays/watch_micro/`) with micro-mcts actually turned on
+end-to-end. Self-play's own stats: **"micro-mcts calls: 72 total, 11
+overrode rank_view's top pick (15.3%)"** -- nonzero, real disagreement
+with the root prior under production conditions, a first for this
+mechanism (EXP_ELO_079 measured exactly 0% on its own flagged plies).
+The game also diverged from turn ~1 onward (a different early ballot,
+ended in 11 turns/146 moves vs the original's 20 turns/399) and Hunting
+was researched again at a later turn (idx=91, turn 7) -- expected:
+turning on a real search this early changes the whole trajectory, so
+this run is NOT a clean re-test of the original turn-6/city41 ply
+specifically (that exact situation may not recur once upstream plies
+differ) -- the 15.3% override rate is the real, generalizable
+evidence the fix works, not the specific turn-7 Hunting recurrence.
+
+CORRECTION #3 (Verdi, again): "we are looking at the wrong village
+here, the village under threat is the one both those warriors is
+standing next to. At city at tile 49" -- Corrections #1/#2 above were
+both about city41; Verdi's actual complaint was city49 all along.
+Re-verified: city49=(5,4), tile48=(4,4), tile60=(5,5) -- BOTH
+attackers are Chebyshev distance 1, directly adjacent, no pathfinding
+ambiguity at all. This is unambiguously a real, immediate threat, and
+city49 already has a live Defend order and a garrison (id=7, Warrior)
+-- a genuinely different situation from city41's (empty, no order).
+
+Extended `turn6_hunting_probe.rs` with a full unfiltered candidate
+listing plus a dphi breakdown for every candidate touching city49.
+Findings, all measured, not inferred:
+- The defend machinery IS working correctly here: every Step-away
+candidate (vacating the garrison) prices at dphi=-338 net (loses
+`defend_garrison_hold`/`defend_hold`/`defend_recall`/EXP_ELO_118's
+`defend_cheap_garrison`, only partially offset by a `defend_cover`
+gain) -- strongly discouraged, exactly as intended.
+- Both Attack candidates (garrison striking either adjacent Warrior)
+price even more negatively (dphi=-866 to -1038, `defend_garrison_
+hold` also collapses to 0 post-move) -- consistent with the attack
+losing the garrison in the trade, i.e. correctly flagging a 1-vs-2
+Warrior fight as a bad gamble that would leave the city fully open.
+- **Recruiting a second defender AT city49 was never a legal option
+at all**: `moves/summon.rs`'s own legality check requires the CITY
+TILE ITSELF to be unoccupied (`!is_tile_occupied`) -- Recruit spawns
+directly on the city tile, one unit per tile, so a garrisoned city
+structurally cannot recruit a second unit until the first vacates.
+Confirmed no `Summon@49` candidate exists at idx=71 (or 74) at all,
+for exactly this reason -- not a stars/level/cooldown issue.
+- What WAS available and unused: `{"moveType":3,"src":49,"type":7}`
+(AbilityType::Recover -- heal the garrison), `score_move=40.000,
+dphi=0.000`. Neutral on defense (heals, doesn't change occupancy or
+threat exposure) but a strictly FREE, positive action that scored
+HIGHER than Research(Hunting) (13.000, also dphi=0.000) under the
+plain heuristic, and it went unpicked in favor of the lower-scoring
+Research anyway.
+
+This is the SAME pattern the city41 investigation found (Summon@41
+scored 30 vs Hunting's 13, also unpicked), now confirmed a second
+time on a completely different city/situation: the trained network's
+own policy (dominant at iteration 100, heuristic crutch floored to
+~0.1 per `decay_crutch`) is passing up heuristically-better, readily
+available options in favor of Research, consistently, not just once.
+Verdi's "the threat wasn't real" pushback (Correction #2, re city41)
+turned out to be about the wrong city, but the underlying mechanism
+this whole thread converges on -- the search not properly weighing
+available defensive/tactical options against Research -- is the exact
+thing the shipped `softmax_priors` fix targets. Nothing further
+implemented for city49 specifically; the general fix already shipped
+above is the response to this pattern, not a city49-specific patch.
+
+DEFAULT FLIPPED ON (Verdi, explicit: "fix micro-mcts once and for all
+and then make sure that it's turned on by default in future runs").
+
+Throughput cost measured first, since this is now paid by EVERY future
+self-play/training run: baseline (micro-mcts off) 46.85-57.70
+moves/sec on the canonical seed; sims=8 costs ~2.2x (21.7-21.74
+moves/sec); sims=16 ~2.9x (16.2); sims=32 ~5.4x (8.75); sims=64 ~6-7.5x
+(7.68-7.70). Override rate (how often the search actually disagrees
+with `rank_view`'s own top pick) stayed flat at 10-15% across every
+sims value tested on this one seed -- no measured evidence higher sims
+buys more on this seed, though each sims value also diverges the whole
+game trajectory from turn ~1 (not a clean like-for-like comparison
+across budgets, matching the same caveat noted for the earlier
+idx177/idx74 tests). Flagged this cost/flat-curve tradeoff to Verdi
+before picking a number (AskUserQuestion) -- his call, overriding the
+question's own auto-selected default: **sims=8**.
+
+IMPLEMENTED (`micro_mcts.rs`): new `MICRO_MCTS_DEFAULT_SIMS: usize = 8`
+constant; `micro_mcts_params()` now falls back to it when
+`POLYFISH_MICRO_MCTS_SIMS` is unset, instead of returning `None`
+(the old "opt-in, off unless explicitly set" behavior). Kept an
+explicit escape hatch: `POLYFISH_MICRO_MCTS_SIMS=0` still disables the
+search entirely -- verified both directions on the canonical seed: no
+env var set now reproduces the sims=8 measurement exactly (21.74
+moves/sec, 208 calls, 13.5% override); `SIMS=0` reproduces the old
+baseline exactly (57.70 moves/sec, 0 calls, 399 moves matching the
+original game byte-for-byte in move count). Full CI-equivalent suite
+(`cargo test --lib --tests --bin self_play`) passes clean, no
+failures at all this run (the earlier flaky gumbel tree-reuse test
+did not reproduce).
+
+VALIDATION RESULT (n=128, Imperius vs Imperius, seed 770425, both
+arms complete): control (`POLYFISH_MICRO_MCTS_SIMS=0`) vs treatment
+(no env var, new sims=8 default).
+
+**Caveat that limits what this specific gauge can say**: this is two
+INDEPENDENT self-play generation runs (each seat, within each run,
+uses the SAME mechanism) -- not a head-to-head competition between
+old-default and new-default. It cannot produce a literal win-rate
+delta between the two mechanisms (they never play each other). What
+it CAN validate: whether turning the new default on breaks anything
+or shifts aggregate game quality/behavior in an alarming direction,
+across a real 128-game sample, not just one seed.
+
+Aggregate comparison (control -> treatment): move volume 67050 ->
+67668 (near-identical); sim move failures 783 -> 0 (fewer, not more);
+EndTurn-despite-alternatives rate 1.501% -> 1.511% (flat);
+EXP_ELO_114 `city_open_exposed` gate fire rate 18.596% -> 17.696% (a
+small, directionally favorable drop -- fewer cities caught open+
+exposed, directly on-theme for this whole investigation, though the
+two runs diverge in trajectory from turn ~1 so this isn't a strict
+causal readout); `defend_cover`/`defend_hold` fractional-credit rates
+both close (27.8%->26.9%, 30.9%->32.6%). Throughput in this
+CONCURRENT/contended run: 246.75 -> 104.64 moves/sec (~2.36x,
+consistent with the isolated ~2.2x measured earlier). Override rate
+at full scale: 26115 micro-mcts calls, 5378 overrides (**20.6%** --
+higher than the 10-15% seen on individual seeds, and 22829/26115
+root-advancement carries succeeded, so the tree-reuse machinery is
+also working as designed at scale).
+
+VERDICT: SHIP. No crashes, no increase in failure/no-op rates, no
+alarming shift in any diagnostic, one small favorable signal
+(city_open_exposed), and confirmed broad, real engagement of the
+fixed search (20.6% override across 128 games, not a fluke). The
+throughput cost (~2.2-2.4x) is real, known, and was Verdi's own
+explicit call after seeing it. A genuine competitive win-rate
+comparison (arena, old-default-agent vs new-default-agent head to
+head) has NOT been run and would be the next escalation if stronger
+proof is wanted before this flows into a real training campaign --
+flagged to Verdi, not run here.
+
+Disposition: SHIPPED. `micro_mcts.rs`'s `softmax_priors` fix and the
+`MICRO_MCTS_DEFAULT_SIMS=8` on-by-default flip are both live in the
+working tree (uncommitted, alongside the still-unresolved EXP_ELO_118
+diff from earlier in this session). Scratch gauge logs/dirs
+(`replays/exp119_gauge/`) to be cleaned up after this is committed.

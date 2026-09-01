@@ -62,13 +62,32 @@ impl Default for MicroParams {
     }
 }
 
-/// Real-trajectory-only env gate, mirroring `ply_trace_path`'s style. Unset
-/// (the default in every existing invocation) costs one cached read and
-/// changes nothing -- `select_move` skips the search entirely.
+/// EXP_ELO_119: default sims budget once micro-mcts became the default
+/// (previously opt-in only, off everywhere). Chosen from a throughput/
+/// override-rate sweep on the canonical watch seed: sims=8 costs ~2.2x
+/// baseline self-play throughput (21.7 vs 46.85 moves/sec) vs. sims=64's
+/// ~6x (7.7 moves/sec), with no measured improvement in override rate
+/// (10-15% at every tested budget on that one seed) -- Verdi's call,
+/// given the flat curve. Not yet validated for win-rate impact, only
+/// behavioral override rate -- see the EXP_ELO_119 ledger entry.
+const MICRO_MCTS_DEFAULT_SIMS: usize = 8;
+
+/// Real-trajectory-only search (never inside macro-mcts's own rollouts --
+/// see the module doc). ON BY DEFAULT as of EXP_ELO_119 at
+/// `MICRO_MCTS_DEFAULT_SIMS`; `POLYFISH_MICRO_MCTS_SIMS` overrides the
+/// budget, and `POLYFISH_MICRO_MCTS_SIMS=0` is the escape hatch that
+/// disables it entirely (replacing "just leave it unset", the old
+/// opt-in's default state).
 pub fn micro_mcts_params() -> Option<MicroParams> {
     static PARAMS: std::sync::OnceLock<Option<MicroParams>> = std::sync::OnceLock::new();
     *PARAMS.get_or_init(|| {
-        let sims: usize = std::env::var("POLYFISH_MICRO_MCTS_SIMS").ok()?.parse().ok()?;
+        let sims: usize = std::env::var("POLYFISH_MICRO_MCTS_SIMS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(MICRO_MCTS_DEFAULT_SIMS);
+        if sims == 0 {
+            return None;
+        }
         let depth: usize = std::env::var("POLYFISH_MICRO_MCTS_DEPTH")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -148,12 +167,44 @@ impl MicroNode {
     }
 }
 
+/// Floor on the population std used to normalize `softmax_priors`' input --
+/// prevents a near-equal score cluster (std -> 0) from amplifying tiny raw
+/// differences into an artificial spread. First-fit per this project's own
+/// Q-gap dial convention (typically overshoots ~2x) -- untuned pending a
+/// paired gauge (EXP_ELO_119).
+const MICRO_SOFTMAX_STD_FLOOR: f32 = 1.0;
+
+/// EXP_ELO_079/119: raw, un-normalized `score_move`/`rank_plies` scores
+/// span wildly different scales depending on context (root candidates carry
+/// full Φ pricing -- tens to low thousands; interior nodes use the raw
+/// heuristic alone -- tens to low hundreds). Softmax at temperature 1 over
+/// a RAW score gap of even ~20-30 points already collapses to a numerically
+/// exact one-hot distribution (EXP_ELO_079 measured e^-110 ~ 1e-48 on a
+/// real ply; EXP_ELO_119 independently reproduced prior=1.000000 on the
+/// top candidate, 0.000000 on 7 others, on an unrelated ply), zeroing
+/// PUCT's exploration term for every other candidate for the rest of the
+/// search regardless of sims/k/depth -- the search can then never disagree
+/// with its own root prior. Normalizing by the score list's OWN spread
+/// (population std, floored) before the softmax keeps prior concentration
+/// a function of RELATIVE preference within this specific candidate set,
+/// not the arbitrary absolute unit scale that set happens to carry -- a
+/// genuine outlier (many std-devs clear of the rest) still collapses close
+/// to one-hot, which is correct; a modest real gap no longer
+/// catastrophically zeroes every alternative.
 fn softmax_priors(scores: &[f32]) -> Vec<f32> {
     if scores.is_empty() {
         return Vec::new();
     }
-    let max = scores.iter().cloned().fold(f32::MIN, f32::max);
-    let exps: Vec<f32> = scores.iter().map(|s| (s - max).exp()).collect();
+    if scores.len() == 1 {
+        return vec![1.0];
+    }
+    let mean = scores.iter().sum::<f32>() / scores.len() as f32;
+    let var =
+        scores.iter().map(|s| (s - mean).powi(2)).sum::<f32>() / scores.len() as f32;
+    let std = var.sqrt().max(MICRO_SOFTMAX_STD_FLOOR);
+    let scaled: Vec<f32> = scores.iter().map(|s| (s - mean) / std).collect();
+    let max = scaled.iter().cloned().fold(f32::MIN, f32::max);
+    let exps: Vec<f32> = scaled.iter().map(|s| (s - max).exp()).collect();
     let sum: f32 = exps.iter().sum();
     if sum <= 0.0 || !sum.is_finite() {
         let n = scores.len() as f32;
@@ -421,5 +472,51 @@ mod tests {
         );
         // Not a pass/fail assertion on the exact number -- this test's job is
         // to print the real measurement; see the ledger entry for the read.
+    }
+
+    /// EXP_ELO_119: pins the fix for EXP_ELO_079's own collapse -- a real
+    /// gap this project has actually measured (idx177, GARRISON_49) no
+    /// longer zeroes every other candidate's prior.
+    #[test]
+    fn softmax_priors_no_longer_collapses_on_a_real_measured_gap() {
+        let scores = [873.678, 446.889, 445.889, 168.399, 41.915, 27.000];
+        let priors = softmax_priors(&scores);
+        assert!((priors.iter().sum::<f32>() - 1.0).abs() < 1e-4, "priors must sum to 1: {priors:?}");
+        for (i, p) in priors.iter().enumerate() {
+            assert!(
+                *p > 0.01,
+                "candidate {i} (score {}) got a near-zero prior ({p}) -- the collapse EXP_ELO_079 \
+                 diagnosed is back: PUCT's exploration term can never pull visits toward it",
+                scores[i]
+            );
+        }
+        assert!(priors[0] > priors[1], "the top-scoring candidate should still lead");
+    }
+
+    /// A genuine outlier (not just a "big" gap, but overwhelmingly clear of
+    /// a tight cluster) should still concentrate the bulk of the mass on
+    /// it. Population std is measured INCLUDING the outlier, so a single
+    /// extreme value inflates its own denominator ("self-dilution") --
+    /// this candidate set's z-score comes out to ~2.65, giving ~0.75 rather
+    /// than the near-1.0 a naive read might expect. That's still a real,
+    /// large majority (vs. the flat 1.0/0.0 EXP_ELO_079 diagnosed), so it's
+    /// pinned at a looser bound, not tightened until a real gauge says the
+    /// dilution itself costs something.
+    #[test]
+    fn softmax_priors_still_favors_a_genuine_outlier() {
+        let scores = [1000.0, 10.0, 10.5, 9.5, 10.2, 9.8, 10.1, 9.9];
+        let priors = softmax_priors(&scores);
+        assert!(priors[0] > 0.5, "a true outlier should still clearly dominate: {priors:?}");
+    }
+
+    /// Near-equal scores (std -> floor) must not blow up into a wild,
+    /// artificially spread distribution.
+    #[test]
+    fn softmax_priors_stays_reasonable_when_scores_are_nearly_equal() {
+        let scores = [10.0, 10.01, 9.99, 10.02];
+        let priors = softmax_priors(&scores);
+        for p in &priors {
+            assert!(*p > 0.15 && *p < 0.35, "near-equal scores should land close to uniform: {priors:?}");
+        }
     }
 }

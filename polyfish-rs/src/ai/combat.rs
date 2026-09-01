@@ -269,6 +269,19 @@ fn can_reach_tile(state: &GameState, unit: &UnitState, target_tile: i32) -> bool
 /// Escape ("bounce") is honoured: a unit that may move again after a kill
 /// covers up to twice its movement in a turn, but only when there is
 /// something of mine in range to strike on the way through.
+/// EXP_ELO_119 diagnostic-only wrapper: exposes the private `turns_to_reach`
+/// to examples (which only see `pub` items) so a specific unit/tile
+/// reachability claim can be ground-truthed against the real engine search
+/// instead of eyeballing a terrain dump. Not called from production code.
+pub fn turns_to_reach_debug(
+    state: &GameState,
+    unit: &UnitState,
+    target_tile: i32,
+    max_turns: i32,
+) -> Option<i32> {
+    turns_to_reach(state, unit, target_tile, max_turns)
+}
+
 fn turns_to_reach(
     state: &GameState,
     unit: &UnitState,

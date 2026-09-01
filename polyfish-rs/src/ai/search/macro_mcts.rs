@@ -26,6 +26,17 @@ fn ply_trace_path() -> Option<&'static str> {
         .as_deref()
 }
 
+/// EXP_ELO_119: `POLYFISH_DEBUG_TURN_GOAL=1` eprintln's the REAL committed
+/// `MacroGoal` for every real-turn commit. The only faithful way to learn
+/// what a turn's goal actually was -- a standalone probe's own
+/// `commit_macro_goal` reconstruction does not reliably match (misses the
+/// EXP_ELO_038 `recent_goals` continuation candidates and any belief-driven
+/// ballot entries). Cached env read, no-op cost when unset.
+fn turn_goal_debug() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("POLYFISH_DEBUG_TURN_GOAL").is_ok())
+}
+
 fn dump_ply_decision(
     path: &str,
     turn: i32,
@@ -1286,6 +1297,19 @@ impl<'a> MacroMctsAgent<'a> {
             }
             self.last_belief_target = belief_target;
             self.turn_goal = candidates.into_iter().nth(pick);
+            // EXP_ELO_119: a standalone probe's own `commit_macro_goal`
+            // reconstruction (fresh StanceCommit/LaneState) does not
+            // reliably reproduce this turn's REAL committed goal -- ballot
+            // candidates 5-8 alone (EXP_ELO_038 continuations from
+            // `self.recent_goals`) have no fresh-recompute equivalent. This
+            // is the only ground truth for "what did the real search
+            // actually commit to," one line, env-gated, no-op when unset.
+            if turn_goal_debug() {
+                eprintln!(
+                    "TURN_GOAL_DEBUG turn={} pov={pov} pick={pick} goal={:?}",
+                    view0.state.settings.turn, self.turn_goal
+                );
+            }
             paint_probe(
                 self.evaluator,
                 &view0.state,
