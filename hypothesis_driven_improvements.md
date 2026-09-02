@@ -15604,3 +15604,66 @@ single AUC number, before spending the 3-backend Tier B build (the
 single most expensive unit of work in the whole plan, Metal's
 positional-ordering footgun specifically) on it. Recorded as evidence
 for that future call, not as the call itself.
+
+## EXP_ELO_120 (continued) — Phase 2 spike: turn-atomic (+1) territory transition target, built + initial evidence
+
+CONTEXT: the plan's Phase 2 destination (a learned turn-transition model
+replacing `execute_turn`'s real ply-by-ply loop for rollout depth >=2)
+was explicitly scoped as "built + initial evidence" for this window, not
+"solved." Phase 1's heads all predict turn+5 directly from current
+state — useful for representation shaping, but not the turn-atomic
+(turn+1, chainable) granularity a real transition model needs. This is
+the smallest honest test of that different granularity, not the full
+latent-dynamics design in the plan's destination sketch.
+
+METHOD: extended the existing turn+5 checkpoint machinery
+(`territory_checkpoints_by_player`, unchanged) with a turn+1 lookup
+(`territory_target_h1`, `labels.rs`) and a raw "current value" field
+(`aux_territory_now`, no lookup needed) alongside the new turn+1 target
+(`aux_territory1`) — both flow through `self_play/{game,result,dataset,
+shard}.rs` and a new `train.py` head, same pattern as every Phase 1
+head, unit-tested, 369/369 lib tests green. Falsifier: held-out MSE
+beats the naive "predict no change" baseline (`aux_territory_now` vs.
+`aux_territory1`), the correct bar for a horizon this short — territory
+barely moves turn to turn, so this is a genuinely strong baseline, not
+a strawman.
+
+RESULT (train-set, not held-out — see caveat below): naive baseline MSE
+0.0184 on 5,031 fresh rows. Trained head at increasing budget:
+
+| config | MSE | vs. naive |
+|---|---|---|
+| untrained (random head on the trained trunk) | 0.60-0.79 | 33-43x worse |
+| 2 epochs, AUX_TERR1_W=1.0 | 0.147 | 8x worse |
+| 8 epochs, AUX_TERR1_W=1.0 | 0.047 | 2.6x worse |
+| 20 epochs, AUX_TERR1_W=1.0 | 0.036 | 1.9x worse |
+| 8 epochs, AUX_TERR1_W=5.0 | 0.041 | 2.2x worse |
+
+Clean, monotone convergence toward the baseline with more epochs, with
+clearly diminishing returns per epoch (2->8 closes 0.10; 8->20 closes
+only 0.011) — the standard signature of a data-scale limit, not a
+broken representation. 5x the loss weight at matched epochs (8) barely
+moved the number (0.047 -> 0.041), ruling out "just weight it harder"
+as the fix.
+
+CAVEAT (stated plainly, not smoothed over): every number above is
+train-set, not held-out. A second, independently-generated self-play
+batch to serve as a genuine file-level held-out set did not finish in
+the time available — this spike's data-generation run hit several
+unusually long, heavily-contested games (one batch of 8 games took
+over an hour against a typical ~3-5 minutes) and was still incomplete
+when this entry was written. This is the same held-out discipline every
+other result in this program has been held to; it is explicitly NOT
+met here yet, and the numbers above should be read as "the head is
+learning something real" (untrained-vs-trained is not in question) but
+NOT yet as "the head generalizes" (unverified).
+
+DISPOSITION: Phase 2 spike ships as **built + initial evidence, exactly
+the bar the plan set** — real pipeline, real training, a real and
+informative result (converging but not yet crossing a legitimately
+strong baseline), with the one gap that remains honestly named rather
+than hidden. NOT a green light for the plan's Phase 2 consumption
+target (replacing real ply-by-ply rollout) — that was never in scope
+for this window. Next session's first move on this thread: let the
+in-flight self-play batch finish, get a real held-out read, and if the
+convergence trend holds, scale data rather than epochs or weight.
