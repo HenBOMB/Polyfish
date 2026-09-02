@@ -15794,3 +15794,73 @@ regression or quietly dropped. Next session: a PAIRED read (same-seed
 per-game win/loss, McNemar) would resolve significance far more
 tightly than two independent n=128 samples — worth doing before
 drawing any conclusion strong enough to act on.
+
+## EXP_ELO_120 (continued) — PAIRED (McNemar) re-read resolves it: consistent with zero
+
+CONTEXT: the prior entry's unpaired two-proportion z-test had a
+95% CI wide enough to be uninformative (spans zero by a wide margin at
+n=128 each). This entry runs the paired version the prior entry's own
+disposition called for: same `--base-seed 770425` seeds in both arms
+(seed = `base_seed + game_idx`, deterministic per `cli.rs`), per-game
+outcome joined by seed instead of compared as two independent samples.
+
+METHOD: re-ran both `baseline_e8` and `combined_e8` on the identical
+seed-770425 recipe, adding `--dump-games-dir` to get an explicit
+per-game `{seed, final_scores}` JSON per game (`self_play/traces.rs`'s
+`dump_failed_game`), joined the two arms on seed, and ran an exact
+two-sided binomial McNemar test on the discordant pairs (`math.comb`,
+no scipy in this venv) alongside the continuity-corrected chi2
+approximation as a cross-check. `--dump-games-dir` turns on full
+per-ply decision tracing (`trace_all = ... || dump_games_dir.is_some()`
+in `game.rs`) as a side effect, which made both runs far slower than
+the untraced gauge (baseline: ~70min instead of ~19min) and each hit
+one abnormally long-running outlier game that never finished within a
+generous wait; both runs were cleanly salvaged at 127/128 completed
+games (launchd `launchctl remove` tears down the job's full process
+tree, so no partial/corrupt files) and paired on the 127 common seeds.
+
+RESULT:
+
+| metric | baseline_e8 (paired n=127) | combined_e8 (paired n=127) |
+|---|---|---|
+| win rate | 0.4488 | 0.4016 |
+| delta | | **-4.72pp** |
+
+Both win: 27. Both lose: 46. Discordant (baseline only): 30.
+Discordant (combined only): 24. **54/127 discordant pairs** — well
+above the ~25-pair threshold below which the chi2 approximation is
+unreliable, so this is a genuinely well-powered paired test, not
+another under-powered read. Exact binomial McNemar **p=0.4966**
+(chi2-approx p=0.4962, essentially identical — confirms the
+approximation was already trustworthy at this discordant count).
+
+Bonus reproduction check: this rerun's paired win rates (44.88% /
+40.16%) land within ~1.2pp of the original unpaired gauge's
+`anchor_net_wr` (46.09% / 41.41%), and the delta itself is nearly
+identical (-4.72pp here vs -4.69pp there) despite the net/Gumbel
+eval path's batch composition being timing-dependent across runs
+(unlike the macro-mcts variant's proven 0.0pp exact-reproduction,
+[[same-seed-not-reproducible]]) and despite the extra per-ply tracing
+overhead perturbing that timing further. The net-eval variant is
+evidently still close to reproducible in practice, not just in the
+no-eval-server macro-mcts case that memory was measured on.
+
+DIAGNOSIS: **consistent with zero.** The properly-powered paired test
+does not reject the null — the -4.7pp reading in both the unpaired and
+paired versions is the same real, small, negative-leaning point
+estimate, but 54 discordant pairs at 30-24 is exactly the kind of
+split ordinary win/loss noise produces at this game count. This is the
+"(a) genuine noise" branch from the prior entry's two candidate
+readings, not "(b) a real small behavioral cost" — to the resolution
+this paired design is actually powered to give.
+
+DISPOSITION: **closes the behavior-gauge caveat.** All three concerns
+this session's Phase-1 work opened against the four Tier-A aux heads
+are now resolved: held-out prediction quality (clears its bar), the
+pressure/combined value-loss flag (was undertraining, reversed at 8
+epochs), and this behavior gauge (paired read consistent with zero).
+Nothing already shipped needs retraction. Tier B for pressure remains
+gated on its own separate falsifier (the plan's n=128 paired arena
+gauge on `pressure_root_w`, not yet run) — this entry removes the
+main reason for extra caution going into that decision, it does not
+substitute for running it. Write-up and MEMORY.md updated to match.
