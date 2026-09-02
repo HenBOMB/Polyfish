@@ -15382,3 +15382,30 @@ Tier B for pressure specifically, per the plan's own gate. Checkpoints
 scratch training directory (`/private/tmp/.../exp120_train/`), not
 committed -- reproducible from the committed code + this ledger entry,
 not meant to ship as-is.
+
+BEHAVIOR-CURVE SPOT CHECK (2026-09-02, same night, cheap follow-up
+since real time remained). Recommendation (2) above didn't need to
+wait for a full campaign to get a first read: `combined_v3` vs.
+`baseline_v3` head-to-head, both macro-mcts+net-asym, n=16 seeds/32
+games, same-seed paired.
+
+RESULT: 16-16 (50.0%/50.0%), score 4848.8 vs 4626.7, siege metrics
+within noise of each other (2.59 vs 2.75 sieges/game). No detectable
+behavioral difference.
+
+DIAGNOSIS: this is the expected result at this training scale, not a
+disappointing one. `AUX_*_W=0.1` against a total loss around 4.2-4.3
+where each aux term individually sits in the 0.05-0.9 range means the
+aux gradients are a small fraction of what's shaping the shared trunk
+after just 2 epochs of light fine-tuning -- there's no real reason to
+expect a detectable policy shift yet, and this run confirms there
+isn't one. This is a genuine, informative null (rules out "the
+representation-shaping effect is already large enough to see"), not
+evidence against the heads -- the training-loss trend across three
+data scales is still the only real positive signal from tonight, and
+it says the heads are learning, not that play has changed yet.
+
+Disposition: recorded as a clean baseline reading for whatever
+comes next -- a real held-out split and more training (recommendation
+1) is the right lever before re-checking behavior, not a bigger aux
+weight or a longer arena run against undertrained checkpoints.
