@@ -15664,6 +15664,29 @@ informative result (converging but not yet crossing a legitimately
 strong baseline), with the one gap that remains honestly named rather
 than hidden. NOT a green light for the plan's Phase 2 consumption
 target (replacing real ply-by-ply rollout) — that was never in scope
-for this window. Next session's first move on this thread: let the
-in-flight self-play batch finish, get a real held-out read, and if the
-convergence trend holds, scale data rather than epochs or weight.
+for this window.
+
+HELD-OUT FOLLOW-UP (same day, later): the in-flight batch finished --
+stopped the remaining 13/15 queued batches once the first genuinely
+new, never-trained-on shard landed (3,147 rows) — one fresh shard
+answers the held-out question, not fifteen. Re-ran
+`phase2_eval.py` against it directly (true held-out this time, not the
+training rows):
+
+| config | train-set MSE | held-out MSE | held-out vs. naive (0.0233) |
+|---|---|---|---|
+| untrained | 0.60-0.79 | 0.927 | 40x worse |
+| 2 epochs | 0.147 | 0.170 | 7.3x worse |
+| 8 epochs | 0.047 | 0.058 | 2.5x worse |
+| 20 epochs | 0.036 | **0.051** | **2.2x worse** |
+| 8ep, 5x weight | 0.041 | 0.057 | 2.4x worse |
+
+**The train-set trend holds on genuine held-out data** -- the gap
+between train and held-out loss is small at every config (largest
+relative gap is 20 epochs, +42% relative, still the best-scoring config
+on held-out data, not a memorization collapse) and the same monotone,
+diminishing-returns convergence shape survives. This resolves the
+caveat this entry originally shipped with: "the head is learning
+something real" now upgrades to "the head generalizes, it just hasn't
+closed the gap to a strong baseline yet at this data scale" --
+data-scale-limited, not overfit, not a broken representation.
