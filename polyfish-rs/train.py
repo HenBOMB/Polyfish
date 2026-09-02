@@ -536,6 +536,28 @@ def train():
     # toward known-good play regardless of self-play drift (RLHF-style reference
     # anchor). Never archived or pruned. USE_TEACHERS_DS=0 opts out entirely.
     teacher_files = sorted(glob.glob("teachers/games_*.safetensors")) if USE_TEACHERS_DS else []
+
+    # Held-out validation split, by FILE not by row: rows within one shard
+    # come from the same handful of games and are heavily correlated (same
+    # map, same trajectory), so a row-level split would leak — entire files
+    # go to one side or the other. Sorted (not `random.shuffle`'d, which
+    # runs on `game_files` below) so the SAME held-out set is reproducible
+    # across separate `train()` invocations trained from the same data —
+    # required for comparing configs against each other, which a
+    # differently-randomized split every run would silently break.
+    # Teacher files are never held out: they're a fixed reference anchor,
+    # not a sample of self-play performance to validate against.
+    val_holdout_frac = float(os.environ.get("VAL_HOLDOUT_FRAC", "0.0"))
+    val_files = []
+    splittable_files = fresh_files + archive_files[:replay_buffer_size]
+    if val_holdout_frac > 0.0 and splittable_files:
+        splittable_sorted = sorted(splittable_files)
+        n_val = max(1, int(len(splittable_sorted) * val_holdout_frac))
+        val_files = splittable_sorted[-n_val:]
+        val_set = set(val_files)
+        fresh_files = [f for f in fresh_files if f not in val_set]
+        archive_files = [f for f in archive_files if f not in val_set]
+
     game_files = fresh_files + archive_files[:replay_buffer_size] + teacher_files
 
     if not game_files:
@@ -545,7 +567,10 @@ def train():
     print(f"Training on {len(game_files)} files ({len(fresh_files)} fresh, "
           f"{len(archive_files[:replay_buffer_size])} archived, {len(teacher_files)} teacher"
           f"{'' if USE_TEACHERS_DS else ', USE_TEACHERS_DS=0'}).")
-    
+    if val_files:
+        print(f"Held out {len(val_files)} files ({val_holdout_frac:.0%}) for validation, "
+              f"never trained on: {val_files}")
+
     # 2. Init Model
     MAP_SIZE = 11
     SPATIAL_CHANNELS = 169  # mirror of features.rs NUM_CHANNELS (incl. obs memory, pursuit, goal channels + v7 SAVE stance plane)
@@ -795,6 +820,77 @@ def train():
             "macro_mask": macro_mask,
             "dataset_size": dataset_size,
             "chunk_idx": chunk_idx,
+        }
+
+    def evaluate_holdout():
+        """Forward-only pass over `val_files` (never trained on this run).
+        No D4 augmentation (validation measures the real distribution, not
+        an artificially rotated one) and no KL-anchor term (that's a
+        training-time regularizer, not part of what held-out loss means to
+        report). Batched under no_grad purely to bound activation memory —
+        gradients are never computed either way. Returns None when there's
+        no held-out set (VAL_HOLDOUT_FRAC unset/0), so the caller's JSON
+        write can tell "not run" apart from "ran, scored 0"."""
+        if not val_files:
+            return None
+        chunk = load_chunk(val_files, "val")
+        if chunk is None:
+            return None
+        was_training = model.training
+        model.eval()
+        v_loss_t = torch.zeros((), device=DEVICE)
+        p_loss_t = torch.zeros((), device=DEVICE)
+        loss_t = torch.zeros((), device=DEVICE)
+        n_batches = 0
+        aux_loss_t = {k: torch.zeros((), device=DEVICE) for k in AUX_DIMS}
+        aux_n_t = {k: torch.zeros((), device=DEVICE) for k in AUX_DIMS}
+        dataset_size = chunk["dataset_size"]
+        with torch.no_grad():
+            for j in range(0, dataset_size, BATCH_SIZE):
+                idx = slice(j, min(j + BATCH_SIZE, dataset_size))
+                b_spatial = chunk["spatial_maps"][idx].to(DEVICE, dtype=torch.float32)
+                b_spatial = b_spatial.view(-1, SPATIAL_CHANNELS, MAP_SIZE, MAP_SIZE)
+                b_player = chunk["player_states"][idx].to(DEVICE)
+                b_values = {'win': chunk["targets_win"][idx].to(DEVICE)}
+                if chunk["targets_progress"] is not None:
+                    b_values['progress'] = chunk["targets_progress"][idx].to(DEVICE)
+                b_targets = {h: t[idx].to(DEVICE) for h, t in chunk["target_heads"].items()}
+                b_aux = {k: t[idx].to(DEVICE) for k, t in chunk["target_aux"].items()}
+                b_aux_mask = {k: m[idx].to(DEVICE) for k, m in chunk["aux_mask"].items()}
+
+                policy_pred, values_pred, aux_pred = model(b_spatial, b_player)
+                if MACRO_STANCE_W > 0.0 or MACRO_ORDER_W > 0.0:
+                    blind_spatial = b_spatial.clone()
+                    blind_spatial[:, GOAL_CHANNEL_START:, :, :] = 0.0
+                    _, blind_values_pred, _ = model(blind_spatial, b_player)
+                    values_pred['macro_stance'] = blind_values_pred['macro_stance']
+                    values_pred['macro_order'] = blind_values_pred['macro_order']
+
+                loss, p_loss, v_loss, _v_win, aux_losses, _kl, _macro = compute_loss(
+                    policy_pred, values_pred, b_targets, b_values,
+                    aux_pred, b_aux, b_aux_mask)
+
+                loss_t += loss.detach()
+                p_loss_t += p_loss.detach()
+                v_loss_t += v_loss.detach()
+                n_batches += 1
+                for k, l in aux_losses.items():
+                    n_k = b_aux_mask[k].sum().detach()
+                    aux_n_t[k] += n_k
+                    aux_loss_t[k] += l.detach() * n_k
+        if was_training:
+            model.train()
+        aux_n = {k: v.item() for k, v in aux_n_t.items()}
+        return {
+            "val_loss": (loss_t / n_batches).item() if n_batches > 0 else 0.0,
+            "val_policy_loss": (p_loss_t / n_batches).item() if n_batches > 0 else 0.0,
+            "val_value_loss": (v_loss_t / n_batches).item() if n_batches > 0 else 0.0,
+            "val_aux": {
+                k: (aux_loss_t[k].item() / aux_n[k] if aux_n.get(k, 0) > 0 else 0.0)
+                for k in AUX_DIMS
+            },
+            "val_files": len(val_files),
+            "val_rows": dataset_size,
         }
 
     chunk_groups = [
@@ -1068,6 +1164,22 @@ def train():
         torch.mps.empty_cache()
     gc.collect()
 
+    # Held-out validation, after training finishes and the training chunks
+    # are freed (val_files were never in game_files, so this data was never
+    # trained on this run — see the split at the top of this function).
+    holdout_result = evaluate_holdout()
+    if holdout_result is not None:
+        print(
+            f"Held-out validation ({holdout_result['val_files']} files, "
+            f"{holdout_result['val_rows']} rows): loss={holdout_result['val_loss']:.4f} "
+            f"(policy={holdout_result['val_policy_loss']:.4f}, "
+            f"value={holdout_result['val_value_loss']:.4f})"
+        )
+        if DEVICE == "cuda":
+            torch.cuda.empty_cache()
+        elif DEVICE == "mps":
+            torch.mps.empty_cache()
+
     final_loss = (total_loss_t / total_batches).item() if total_batches > 0 else 0.0
     final_p_loss = (total_p_loss_t / total_batches).item() if total_batches > 0 else 0.0
     final_v_loss = (total_v_loss_t / total_batches).item() if total_batches > 0 else 0.0
@@ -1147,6 +1259,20 @@ def train():
                 # reading 0 that used to read high means the mask broke.
                 "aux_supervised": {k: int(v) for k, v in total_aux_n.items()},
                 "kl_ref_loss": round(final_kl, 4),
+                # None when VAL_HOLDOUT_FRAC is unset/0 -- distinguishes
+                # "validation not run" from "ran, scored 0".
+                "val": (
+                    {
+                        "loss": round(holdout_result["val_loss"], 4),
+                        "policy_loss": round(holdout_result["val_policy_loss"], 4),
+                        "value_loss": round(holdout_result["val_value_loss"], 4),
+                        "aux": {k: round(v, 4) for k, v in holdout_result["val_aux"].items()},
+                        "files": holdout_result["val_files"],
+                        "rows": holdout_result["val_rows"],
+                    }
+                    if holdout_result is not None
+                    else None
+                ),
             },
             f,
         )
