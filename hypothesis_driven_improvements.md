@@ -15724,3 +15724,73 @@ treating pressure's Tier A evidence as clean. Tier B remains a separate
 question (still gated on the plan's own n=128 paired arena falsifier,
 not yet run) -- this only closes the value-loss contra-signal, it does
 not itself clear Tier B.
+
+## EXP_ELO_120 (continued) — real n=128 behavior gauge, combined_e8 vs baseline_e8: directionally negative, not significant
+
+CONTEXT: the earlier n=16-seed arena spot check (prior entry,
+combined_v3 vs baseline_v3) had a real methodology gap flagged by
+review: its banner read `shape_w=0/0`, meaning `goal_w_tree` (the
+in-tree goal-potential shaping weight) was OFF in both arms, not
+matching training's actual configuration -- and it used the 2-epoch,
+now-known-undertrained checkpoints. This entry re-runs the check
+properly: the frozen seed-770425 vs-Greedy harness (n=128,
+`--goal-w-tree 1` set correctly this time) against `baseline_e8` and
+`combined_e8` (this session's 8-epoch retrains).
+
+METHOD: two independent n=128 runs (not head-to-head against each
+other -- each checkpoint plays 128 games vs the Greedy anchor on the
+same `--base-seed 770425` map set), `--gumbel-k 16`, `--goal-channels
+--goal-w-tree 1`, `--anchor-frac 1.0 --iteration 100
+--anchor-decay-start 100`. Both runs got SIGKILLed by this Mac's known
+session-teardown mechanism ([[macos-wakeup-limit-kills-net-leaf-actors]])
+on the first two attempts (once mid-progress at 51/128, once at 25/128
+after a `caffeinate` wrapper broke `DYLD_LIBRARY_PATH` propagation and
+crashed the third attempt outright); the combined_e8 run only completed
+after resubmitting via `launchctl submit` with explicit `PATH`, per
+that memory's documented fix, with a unique-per-attempt log file and
+immediate `launchctl remove` on the completion marker to dodge the
+auto-restart-on-success gotcha.
+
+RESULT:
+
+| metric | baseline_e8 | combined_e8 | delta |
+|---|---|---|---|
+| anchor_net_wr | 0.4609 | 0.4141 | -4.69pp |
+| avg_spt_t20 | 13.49 | 12.49 | -1.01 |
+| avg_spt_t25 | 15.31 | 13.48 | -1.83 |
+| t2c_2nd_rate | 0.9766 | 0.9375 | -3.91pp |
+| **t2c_3rd_rate** | 0.7344 | 0.7344 | **0.0000** |
+| t2c_3rd_turn | 10.63 | 10.61 | -0.02 |
+| t2c_4th_rate | 0.5156 | 0.5156 | 0.0000 |
+| avg_cap_cities | 1.27 | 1.22 | -4.69pp rel. |
+
+Directionally negative across most of the behavior curve for
+`combined_e8` — but a two-proportion z-test on the headline win-rate
+delta (unpaired, n=128 each) gives **z=0.76, 95% CI on the difference
+[-7.5pp, +16.8pp]** — comfortably includes zero. **Not statistically
+resolvable at this n.** `t2c_3rd_rate`, the metric most directly tied
+to the star-gate/momentum mechanism this whole program traces back to
+(Part 1-2 of this week's write-up), is EXACTLY unchanged.
+
+DIAGNOSIS: this is a real, honestly-negative-leaning read, not a
+clean null and not a confirmed regression. Two candidate readings,
+neither confirmed: (a) genuine noise at this n — the CI is wide enough
+that this is fully consistent with zero true effect; (b) the four Tier
+A aux heads' gradient, even correctly weighted and at 8 epochs, pulls
+the shared trunk's policy/value heads toward something that costs a
+little behavioral quality vs. Greedy specifically, a real but small
+cost the held-out loss numbers (which never regressed) wouldn't show
+since they measure prediction accuracy on the aux TARGETS, not
+downstream policy quality. Cannot distinguish (a) from (b) with a
+single unpaired n=128 run.
+
+DISPOSITION: does NOT block anything already committed (Tier A's
+held-out generalization and PR-AUC results stand on their own
+methodology, unaffected by this). DOES mean the write-up's earlier
+"an n=16 spot check read a null, not yet the proper n=128 gauge" line
+is now superseded — the proper gauge ran, and reads slightly negative,
+not neutral. Flagged honestly rather than either oversold as a
+regression or quietly dropped. Next session: a PAIRED read (same-seed
+per-game win/loss, McNemar) would resolve significance far more
+tightly than two independent n=128 samples — worth doing before
+drawing any conclusion strong enough to act on.
