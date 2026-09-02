@@ -262,6 +262,23 @@ pub(crate) fn territory_target(
     .unwrap_or((final_my, final_opp))
 }
 
+/// `[my, opp]` territory tile count at the first same-player turn >= turn+1,
+/// else final values. Phase-2 spike (EXP_ELO_120): the turn-atomic horizon a
+/// chainable transition prediction needs, vs. `territory_target`'s turn+5
+/// representation-shaping horizon -- same checkpoints, different window.
+pub(crate) fn territory_target_h1(
+    cps: Option<&Vec<TerritoryStep>>,
+    turn: i32,
+    final_my: i32,
+    final_opp: i32,
+) -> (i32, i32) {
+    cps.and_then(|c| {
+        let i = c.partition_point(|s| s.turn < turn + 1);
+        c.get(i).map(|s| (s.my_territory, s.opp_territory))
+    })
+    .unwrap_or((final_my, final_opp))
+}
+
 /// Per-decision army-value snapshot for the aux_army5 target (horizon-
 /// compression Stage 3, EXP_ELO_120). Third copy of the SPT+5 template —
 /// `evaluate_army` is already `[0,1]`-clamped, so unlike territory/eco

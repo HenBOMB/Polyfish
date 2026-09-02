@@ -29,6 +29,8 @@ pub(crate) fn flush_shard(
     collected_aux_fog: Vec<Vec<f32>>,
     collected_aux_spt: Vec<f32>,
     collected_aux_territory5: Vec<f32>,
+    collected_aux_territory_now: Vec<f32>,
+    collected_aux_territory1: Vec<f32>,
     collected_aux_eco_ceiling: Vec<Vec<f32>>,
     collected_eco_ceiling_mask: Vec<f32>,
     collected_aux_pressure: Vec<f32>,
@@ -92,6 +94,13 @@ pub(crate) fn flush_shard(
     let aux_spt_tensor = Tensor::from_vec(collected_aux_spt, (total_steps, 2), device)?;
     let aux_territory5_tensor =
         Tensor::from_vec(collected_aux_territory5, (total_steps, 2), device)?;
+    // Phase-2 spike (EXP_ELO_120): current + turn+1 territory, the pair a
+    // chainable transition target needs. Same per-file AUX_DIMS convention
+    // as territory5 — no row mask needed, every row has both.
+    let aux_territory_now_tensor =
+        Tensor::from_vec(collected_aux_territory_now, (total_steps, 2), device)?;
+    let aux_territory1_tensor =
+        Tensor::from_vec(collected_aux_territory1, (total_steps, 2), device)?;
     let aux_eco_ceiling_tensor = Tensor::from_vec(
         flatten_vec(collected_aux_eco_ceiling),
         (total_steps, 4),
@@ -142,6 +151,8 @@ pub(crate) fn flush_shard(
     tensors.insert("aux_fog_units".to_string(), aux_fog_tensor);
     tensors.insert("aux_spt".to_string(), aux_spt_tensor);
     tensors.insert("aux_territory5".to_string(), aux_territory5_tensor);
+    tensors.insert("aux_territory_now".to_string(), aux_territory_now_tensor);
+    tensors.insert("aux_territory1".to_string(), aux_territory1_tensor);
     tensors.insert("aux_eco_ceiling".to_string(), aux_eco_ceiling_tensor);
     tensors.insert("aux_eco_ceiling_mask".to_string(), eco_ceiling_mask_tensor);
     tensors.insert("aux_pressure".to_string(), aux_pressure_tensor);

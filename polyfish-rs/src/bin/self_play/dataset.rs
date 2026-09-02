@@ -18,7 +18,7 @@ use crate::labels::{ArmyStep, CitySptStep, FINAL_OUTCOME_REL_W, GOOD_BOT_FINAL_S
                     army_target, city_spt_checkpoints, city_spt_target, macro_policy_targets,
                     ownership_from_pov, siege_pressure_target, spt_checkpoints_by_player,
                     spt_target, td_lambda_labels, territory_checkpoints_by_player,
-                    territory_target};
+                    territory_target, territory_target_h1};
 use crate::result::{GameResult, HistoryStep};
 use crate::shard::{SHARD_GAMES, flush_shard};
 use crate::stats::is_net_seat;
@@ -46,6 +46,14 @@ pub(crate) struct ShardBuffers {
     // vs. turn+5, same flat-2-per-step shape as aux_spt. Monotone "reached",
     // not "held" — see labels.rs's TerritoryStep doc.
     collected_aux_territory5: Vec<f32>,
+    // Phase-2 spike (EXP_ELO_120): the turn-atomic pair a chainable
+    // transition target needs -- current territory (horizon+0, no
+    // checkpoint lookup, just the row's own snapshot) and the target one
+    // player-turn later (horizon+1). `_now` is what a naive "predict no
+    // change" baseline would emit; comparing predictions of `_h1` against
+    // it is the whole point of the spike.
+    collected_aux_territory_now: Vec<f32>,
+    collected_aux_territory1: Vec<f32>,
     // Horizon-compression Stage 1a (EXP_ELO_120): row-masked like
     // macro_ballot/macro_mask, not the file-level AUX_DIMS convention --
     // presence varies per-row (once per (turn, pov), same shape as
@@ -99,6 +107,8 @@ impl ShardBuffers {
             collected_aux_fog: Vec::new(),
             collected_aux_spt: Vec::new(),
             collected_aux_territory5: Vec::new(),
+            collected_aux_territory_now: Vec::new(),
+            collected_aux_territory1: Vec::new(),
             collected_aux_eco_ceiling: Vec::new(),
             collected_eco_ceiling_mask: Vec::new(),
             collected_aux_pressure: Vec::new(),
@@ -137,6 +147,8 @@ impl ShardBuffers {
             collected_aux_fog,
             collected_aux_spt,
             collected_aux_territory5,
+            collected_aux_territory_now,
+            collected_aux_territory1,
             collected_aux_eco_ceiling,
             collected_eco_ceiling_mask,
             collected_aux_pressure,
@@ -233,6 +245,8 @@ impl ShardBuffers {
                 root_own_value: step_root_own_value,
                 macro_ballot,
                 eco_ceiling,
+                my_territory: step_my_territory,
+                opp_territory: step_opp_territory,
                 ..
             } = step;
             let flat_map = features
@@ -361,6 +375,19 @@ impl ShardBuffers {
             );
             collected_aux_territory5.push(terr_my as f32 / 40.0);
             collected_aux_territory5.push(terr_opp as f32 / 40.0);
+            // Phase-2 spike: same normalization as territory5 (same
+            // quantity, different horizon) so the two are directly
+            // comparable without a unit-conversion step downstream.
+            collected_aux_territory_now.push(step_my_territory as f32 / 40.0);
+            collected_aux_territory_now.push(step_opp_territory as f32 / 40.0);
+            let (terr1_my, terr1_opp) = territory_target_h1(
+                territory_cp.get(&p_id),
+                turn,
+                result.final_territory.get(&p_id).copied().unwrap_or(0),
+                result.final_territory.get(&opp_id).copied().unwrap_or(0),
+            );
+            collected_aux_territory1.push(terr1_my as f32 / 40.0);
+            collected_aux_territory1.push(terr1_opp as f32 / 40.0);
             collected_aux_pursuit.push(pursuit);
             if let Some((candidates, visits)) = &macro_ballot {
                 let (stance, order) = macro_policy_targets(candidates, visits);
@@ -425,6 +452,8 @@ impl ShardBuffers {
             std::mem::take(&mut self.collected_aux_fog),
             std::mem::take(&mut self.collected_aux_spt),
             std::mem::take(&mut self.collected_aux_territory5),
+            std::mem::take(&mut self.collected_aux_territory_now),
+            std::mem::take(&mut self.collected_aux_territory1),
             std::mem::take(&mut self.collected_aux_eco_ceiling),
             std::mem::take(&mut self.collected_eco_ceiling_mask),
             std::mem::take(&mut self.collected_aux_pressure),
@@ -467,6 +496,8 @@ impl ShardBuffers {
             std::mem::take(&mut self.collected_aux_fog),
             std::mem::take(&mut self.collected_aux_spt),
             std::mem::take(&mut self.collected_aux_territory5),
+            std::mem::take(&mut self.collected_aux_territory_now),
+            std::mem::take(&mut self.collected_aux_territory1),
             std::mem::take(&mut self.collected_aux_eco_ceiling),
             std::mem::take(&mut self.collected_eco_ceiling_mask),
             std::mem::take(&mut self.collected_aux_pressure),

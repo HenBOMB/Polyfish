@@ -70,7 +70,7 @@ USE_TEACHERS_DS = os.environ.get("USE_TEACHERS_DS", "1") == "1"
 # (old archives, teachers) are masked out per sample, never zero-filled.
 AUX_DIMS = {'aux_ownership': 121, 'aux_fog_units': 121, 'aux_spt': 2, 'aux_opp_tech': 42, 'aux_pursuit': 1,
             'aux_city_spt': 121, 'aux_territory5': 2, 'aux_eco_ceiling': 4, 'aux_pressure': 1,
-            'aux_army5': 2}
+            'aux_army5': 2, 'aux_territory1': 2}
 # EXP_ELO_061 (Stage 3b): macro policy head. NOT in AUX_DIMS/AUX_WEIGHTS --
 # unlike the aux_* heads this one IS mirrored into Rust (network.rs) and
 # consumed at inference, and its targets are masked per-ROW (macro_mask),
@@ -106,6 +106,14 @@ AUX_WEIGHTS = {
     # city just stops contributing, it isn't penalized. Default 0.0: inert
     # until explicitly turned on, same convention as every other AUX_*_W.
     'aux_territory5': float(os.environ.get("AUX_TERR5_W", "0.0")),
+    # Phase-2 spike (EXP_ELO_120): territory tile count now vs. turn+1 --
+    # the turn-atomic horizon a chainable transition prediction would need,
+    # vs. territory5's representation-shaping turn+5. Same normalization,
+    # same monotone-reached semantics. Its only point of comparison is
+    # aux_territory_now (also in every shard but NOT a trained head --
+    # it's the naive "predict no change" baseline, read directly from the
+    # shard files by the standalone Phase-2 analysis script instead).
+    'aux_territory1': float(os.environ.get("AUX_TERR1_W", "0.0")),
     # Horizon-compression Stage 1a (EXP_ELO_120): eco_plan's Balanced-goal
     # ceiling from this state -- [spt, pop, giants, monuments_used]. Unlike
     # every other aux head, its per-sample mask is NOT the per-file AUX_DIMS
@@ -259,6 +267,10 @@ class PolyZeroNet(nn.Module):
         # now vs. turn+5, scalar pair off the same global-average-pool input
         # as aux_spt (not v_latent -- see the comment above).
         self.aux_territory5 = nn.Linear(self.filters, 2)
+        # Phase-2 spike (EXP_ELO_120): same input, turn+1 horizon instead of
+        # turn+5 -- a second head, not a reuse of aux_territory5, since the
+        # two are trained/read independently for the horizon comparison.
+        self.aux_territory1 = nn.Linear(self.filters, 2)
         # Horizon-compression Stage 1a (EXP_ELO_120): eco_plan ceiling,
         # [spt, pop, giants, monuments_used], same gap-pooled input.
         self.aux_eco_ceiling = nn.Linear(self.filters, 4)
@@ -326,6 +338,7 @@ class PolyZeroNet(nn.Module):
         aux['aux_pursuit'] = self.aux_pursuit(gap)
         aux['aux_city_spt'] = self.aux_city_spt(x).flatten(1)
         aux['aux_territory5'] = self.aux_territory5(gap)
+        aux['aux_territory1'] = self.aux_territory1(gap)
         aux['aux_eco_ceiling'] = self.aux_eco_ceiling(gap)
         aux['aux_pressure'] = self.aux_pressure_head(gap)  # logits, BCE loss
         aux['aux_army5'] = self.aux_army5(gap)
@@ -452,6 +465,7 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target,
             'aux_pursuit': lambda p, t: ((p - t) ** 2).mean(dim=1),
             'aux_city_spt': city_masked_mse,
             'aux_territory5': lambda p, t: ((p - t) ** 2).mean(dim=1),
+            'aux_territory1': lambda p, t: ((p - t) ** 2).mean(dim=1),
             'aux_eco_ceiling': lambda p, t: ((p - t) ** 2).mean(dim=1),
             'aux_pressure': lambda p, t: bce(p, t, reduction='none').mean(dim=1),
             'aux_army5': lambda p, t: ((p - t) ** 2).mean(dim=1),
@@ -1251,6 +1265,7 @@ def train():
                 "aux_pursuit_loss": round(final_aux['aux_pursuit'], 4),
                 "aux_city_spt_loss": round(final_aux['aux_city_spt'], 4),
                 "aux_territory5_loss": round(final_aux['aux_territory5'], 4),
+                "aux_territory1_loss": round(final_aux['aux_territory1'], 4),
                 "aux_eco_ceiling_loss": round(final_aux['aux_eco_ceiling'], 4),
                 "aux_pressure_loss": round(final_aux['aux_pressure'], 4),
                 "aux_army5_loss": round(final_aux['aux_army5'], 4),

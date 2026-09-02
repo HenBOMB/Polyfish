@@ -424,6 +424,27 @@ use polyfish::types::{TechnologyType, UnitEffect};
         assert_eq!(territory_target(cp.get(&1), 5, 0, 0), (9, 8));
     }
 
+    #[test]
+    fn territory_target_h1_one_turn_lookup_and_final_fallback() {
+        // Phase-2 spike (EXP_ELO_120): same checkpoints as territory_target,
+        // a +1 window instead of +5.
+        let steps = vec![
+            tstep(1, 0, 5, 5),
+            tstep(1, 3, 10, 6),
+            tstep(1, 9, 22, 12),
+            tstep(1, 12, 25, 15),
+        ];
+        let cp = territory_checkpoints_by_player(&steps);
+        // T=0: first turn >= 1 is 3.
+        assert_eq!(territory_target_h1(cp.get(&1), 0, 999, 999), (10, 6));
+        // T=3: exact boundary, turn 4 has no checkpoint -> first turn >= 4 is 9.
+        assert_eq!(territory_target_h1(cp.get(&1), 3, 999, 999), (22, 12));
+        // T=8: first turn >= 9 is present exactly.
+        assert_eq!(territory_target_h1(cp.get(&1), 8, 0, 0), (22, 12));
+        // T=12: nothing at >= 13 -> final fallback.
+        assert_eq!(territory_target_h1(cp.get(&1), 12, 99, 98), (99, 98));
+    }
+
     fn astep(player_id: PlayerId, turn: i32, my: f32, opp: f32) -> ArmyStep {
         ArmyStep { player_id, turn, my_army: my, opp_army: opp }
     }
