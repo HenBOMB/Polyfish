@@ -15690,3 +15690,37 @@ caveat this entry originally shipped with: "the head is learning
 something real" now upgrades to "the head generalizes, it just hasn't
 closed the gap to a strong baseline yet at this data scale" --
 data-scale-limited, not overfit, not a broken representation.
+
+## EXP_ELO_120 (continued) — the 2-epoch pressure/combined held-out value-loss flag was undertraining, resolved at 8 epochs
+
+CONTEXT: the epoch sweep above (2->8->20 epochs closing territory1's
+gap to its naive baseline) raises an upstream question: the ENTIRE
+6-config Phase-1 ablation matrix, including the still-open flag that
+`pressure_held`/`combined_held`'s held-out VALUE loss (not aux loss)
+read WORSE than baseline's (1.2078/1.1549 vs 1.0973), was trained at
+`TRAIN_EPOCHS=2` (the default). If territory1 needed 8-20 epochs to
+show its real shape, that flag may be the same undertraining artifact,
+not a real degradation.
+
+METHOD: retrained `baseline` and `combined` at `TRAIN_EPOCHS=8` (same
+17-shard dataset, same `VAL_HOLDOUT_FRAC=0.2`, same held-out 3 files by
+construction since the file list and sort order are unchanged) --
+`baseline_e8`, `combined_e8`.
+
+RESULT: held-out value loss **flips**. `baseline_e8`: 1.1416.
+`combined_e8`: **1.0794** — now BETTER than baseline, not worse, the
+opposite ordering from the 2-epoch reading. `aux_pressure` held-out
+loss also improves with the extra training (0.6193 at 8 epochs vs.
+~0.676 at 2 epochs in the original matrix, consistent with every other
+head's "more training helps" pattern already established).
+
+DISPOSITION: **the flag is resolved, not just explained away** -- a
+direct retrain at more epochs reverses the ordering the original entry
+flagged as unexplained. The 2-epoch reading undersold combined's value
+head specifically; matched training budget shows it isn't a real cost
+of adding the four aux heads. This removes the strongest concrete
+objection standing between Tier A's PR-AUC clearance (prior entry) and
+treating pressure's Tier A evidence as clean. Tier B remains a separate
+question (still gated on the plan's own n=128 paired arena falsifier,
+not yet run) -- this only closes the value-loss contra-signal, it does
+not itself clear Tier B.
