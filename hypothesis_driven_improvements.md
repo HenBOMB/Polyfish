@@ -15519,3 +15519,60 @@ individual and combined configs is a new, real flag for next session,
 not resolved here. Multiple training seeds per config would be needed
 before trusting the specific config-vs-config ordering above; single-
 run numbers are directional, not decisive.
+
+## EXP_ELO_120 (continued) — the plan's actual pressure falsifier: held-out PR-AUC, not BCE
+
+CONTEXT: the horizon-compression plan's Stage 2 falsifier is explicit --
+"Tier A -- held-out PR-AUC beats a base-rate baseline" -- but every
+result logged so far only tracked BCE loss, a related but different
+metric (BCE can improve while ranking quality, which PR-AUC measures,
+stays flat). Closing this gap before treating pressure as cleared for
+any further work.
+
+METHOD: standalone script (`pressure_auc.py`, not wired into train.py),
+manual PR-AUC (rank by predicted probability, trapezoidal-integrate
+precision over recall -- no sklearn in this venv), against the same 3
+held-out files (9200 rows) `evaluate_holdout()` already uses. Verified
+the implementation first: pure-random scores against the true label
+distribution give PR-AUC 0.546 (std 0.0044, n=8 trials) — matches the
+theoretical "no-skill PR-AUC = base rate" result, confirming the
+integrator is correct and the numbers below aren't a measurement bug.
+
+RESULT: base rate (siege-open-within-5-turns positive rate) 0.5492 --
+NOT the rare/imbalanced class the plan worried about, close to
+balanced. `baseline_held` (AUX_PRESSURE_W=0, head never trained --
+confirmed via `aux_pressure_loss: 0.0` in its own metrics file, i.e.
+`compute_loss` skips the term entirely at weight 0 and the linear head
+sits at pure random init the whole run) scores PR-AUC **0.6101** --
+well above the 0.549 base-rate/pure-noise floor. `pressure_held`
+scores **0.6665**, `combined_held` **0.6693**.
+
+DIAGNOSIS: the base-rate baseline the plan specified is real but too
+weak a comparison on its own -- a random, never-trained linear probe on
+this trunk already clears it by +0.061, because the trunk is trained on
+several OTHER supervision signals correlated with military
+pressure (ownership, city_spt, fog/enemy-unit occupancy, pursuit) even
+when AUX_PRESSURE_W=0. A random linear functional of a representation
+that already encodes pressure-adjacent structure is not the same as a
+random functional of pure noise -- it inherits some of that structure
+by construction, which is exactly what the null-noise check above (0.546,
+not 0.610) rules out as an artifact. The meaningful comparison is
+therefore pressure_held/combined_held vs. **baseline_held**, not vs.
+the raw base rate: **+0.056 to +0.059 PR-AUC from explicit pressure
+supervision on top of what the trunk already carries for free.**
+
+DISPOSITION: **Tier-A falsifier for pressure is CLEARED** -- held-out
+PR-AUC beats both the base-rate baseline (+0.12) and the more honest
+same-trunk untrained-head comparison (+0.06). Per the plan's own
+sequencing ("Tier B, conditional... only if Stage 0.1 favors momentum
+AND Tier A's held-out AUC clears a real bar"), this clears the first
+half of the Tier-B gate. NOT a green light to build Tier B today,
+though: the plan's own Tier B falsifier is a full n=128 paired arena
+gauge on `pressure_root_w`, and the prior entry's still-open flag
+(pressure/combined reading WORST of all six configs on held-out VALUE
+loss specifically, 1.2078/1.1549 vs baseline's 1.0973) is exactly the
+kind of contra-signal that should be reconciled, not overridden by a
+single AUC number, before spending the 3-backend Tier B build (the
+single most expensive unit of work in the whole plan, Metal's
+positional-ordering footgun specifically) on it. Recorded as evidence
+for that future call, not as the call itself.
