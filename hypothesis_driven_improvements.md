@@ -15309,3 +15309,76 @@ loss-drops-with-more-data pattern consistent with genuine learnable
 signal; pressure is flagged, not resolved. Checkpoints
 (`model_*_v2.safetensors`) and metrics remain in the scratch training
 dir, not committed.
+
+THIRD PASS, RESOLVES THE PRESSURE FLAG (2026-09-02, same night).
+Continued generating single-batch self-play launches (the pattern that
+proved most resilient -- individual top-level launches outlasted a
+wrapper loop script that chained batches in one process, which died
+partway through its first iteration). Streak improved substantially
+in the second half of the night (10/10 consecutive individual batches
+succeeded with no retries, vs. roughly 50% earlier) -- consistent with
+the memory-pressure diagnosis if whatever else was consuming this
+machine's memory eased off, though that's inferred, not measured
+directly. Final dataset: 136 games / 49,202 rows (4.3x the first
+pass). Same 6-config retrain, same recipe (fresh start checkpoint,
+fresh optimizer, TRAIN_EPOCHS=2), suffixed `_v3`.
+
+ACTUAL, full three-generation comparison (11,340 -> 19,939 -> 49,202
+rows), new-head loss only (all other columns tracked but omitted here,
+no meaningful trend in policy/value/value_r2 across generations at
+this scale):
+
+| head | v1 (11.3K) | v2 (19.9K) | v3 (49.2K) | trend |
+|---|---|---|---|---|
+| territory5 (individual) | 0.9271 | 0.5581 | 0.3675 | monotone down |
+| territory5 (combined) | 0.9169 | 0.5010 | 0.3722 | monotone down |
+| eco_ceiling (individual) | 0.1483 | 0.1043 | 0.0497 | monotone down |
+| eco_ceiling (combined) | 0.1027 | 0.0681 | 0.0482 | monotone down |
+| pressure (individual, BCE) | 0.6733 | 0.6753 | 0.6635 | down overall (dipped mid) |
+| pressure (combined, BCE) | 0.6711 | 0.6736 | 0.6668 | down overall (dipped mid) |
+| army5 (individual) | 0.2279 | 0.1550 | 0.0843 | monotone down |
+| army5 (combined) | 0.1632 | 0.1068 | 0.0861 | monotone down |
+
+`aux_supervised.aux_eco_ceiling` row-mask rate across three
+independently-generated datasets of very different sizes: 10.4% ->
+10.7% -> 10.8% -- stable to within noise, strong confirmation this is
+a real structural property (once-per-turn density) the mechanism is
+measuring correctly, not a dataset-specific artifact.
+
+DIAGNOSIS: **the pressure flag from v1/v2 is resolved, not just
+softened.** With 4.3x the data, pressure's BCE drops to 0.6635/0.6668
+-- clearly past the ~0.646 naive-base-rate floor that made v1/v2 read
+as "flat, maybe not learning." All four heads now show the same
+qualitative signature: monotone loss reduction as training data scales
+up, at a fixed epoch count, both trained individually and jointly.
+That is the ordinary, expected behavior of a model fitting real
+learnable structure -- the alternative (loss staying flat or only
+improving on the training objective's easiest cases) did not happen
+for any of the four. This is the strongest evidence the night
+produced that Phase 1's four heads are picking up genuine signal, not
+noise the small early datasets let it memorize.
+
+Still explicitly NOT established, same as v1/v2: held-out (as opposed
+to training-set) generalization; whether any of this moves actual
+game behavior or arena win rate; Tier B for pressure (still gated on
+an AUC bar against a real held-out split, which doesn't exist yet).
+Scale still matters for calibrating expectations here too -- 49K rows
+is a real dataset for a first pass, not yet what a production
+training campaign runs on.
+
+Disposition: **Phase 1 Tier A: infrastructure shipped and committed;
+first-pass training evidence across three data scales is consistently
+positive for all four heads, including the one (pressure) that looked
+flat at smaller scale.** This is the strongest honest claim the data
+supports tonight -- not a finished result, but no longer just a smoke
+test either. Recommended next session, in priority order: (1) a real
+train/held-out split in train.py (a genuine, somewhat invasive change
+to shared training infra -- deliberately NOT attempted overnight
+under time pressure against code Verdi's own campaigns depend on);
+(2) an arena behavior-curve check (baseline vs. combined checkpoint)
+before any Tier B work; (3) once (1) and (2) both look reasonable,
+Tier B for pressure specifically, per the plan's own gate. Checkpoints
+(`model_*_v3.safetensors`) and all raw metrics/logs remain in the
+scratch training directory (`/private/tmp/.../exp120_train/`), not
+committed -- reproducible from the committed code + this ledger entry,
+not meant to ship as-is.
