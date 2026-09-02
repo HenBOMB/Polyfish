@@ -31,7 +31,27 @@ struct AppState {
     training_status: Mutex<Option<u32>>, // Store PID of running training
     network: Option<Arc<polyfish::ai::network::PolyZeroNet>>, // Trained neural network
     recorder: Arc<GameRecorder>,
+    /// EXP_ELO_028 goal-script state, per acting seat. Persists across plies:
+    /// the stance is a standing commitment with hysteresis, not a per-ply
+    /// recompute.
+    goal_script: Mutex<std::collections::HashMap<i32, GoalSeat>>,
 }
+
+/// Per-seat carry-over for the goal script. Without it `/autostep` runs the net
+/// with its 7 goal planes zeroed and no in-tree goal pricing — the exact
+/// configuration that voided a 512-game tip-vs-tip match (ledger EXP_ELO_028),
+/// since `Brain` defaults both off and training runs `--goal-channels
+/// --goal-w-tree 1`.
+#[derive(Default)]
+struct GoalSeat {
+    stance_commit: polyfish::ai::oracle_macro::StanceCommit,
+    lane_state: polyfish::ai::oracle_macro::LaneState,
+    techs_bought: u32,
+    tier3_bought: u32,
+}
+
+/// Matches `run_training_loop.sh`'s `--goal-w-tree 1`.
+const GOAL_W_TREE: f32 = 1.0;
 
 const DEFAULT_TRIBES: &[TribeType] = &[TribeType::Imperius, TribeType::Imperius];
 const DEFAULT_SIZE: MapSize = MapSize::Tiny;
@@ -149,6 +169,7 @@ async fn main() {
         training_status: Mutex::new(None),
         network: Some(Arc::new(network)),
         recorder,
+        goal_script: Mutex::new(std::collections::HashMap::new()),
     });
 
     // Build our application with routes
@@ -411,11 +432,42 @@ async fn auto_step(
     if let Some(net) = &state.network {
         use polyfish::ai::brain::Brain;
         use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
+        use polyfish::ai::oracle_macro;
+
+        // EXP_ELO_028 Stage 1: the same scripted goal self_play paints for net
+        // seats. It must be set before `think`, or the goal planes the net was
+        // trained on arrive zeroed.
+        let pov = game.state.settings.current_player_turn_id;
+        let (goal, star_gate, goal_aux) = {
+            let mut seats = state.goal_script.lock().unwrap();
+            let seat = seats.entry(pov).or_default();
+            let goal = oracle_macro::commit_macro_goal(
+                &game.state,
+                pov,
+                &mut seat.stance_commit,
+                seat.tier3_bought,
+            );
+            let gate = oracle_macro::tech_discipline_active(&game.state, pov, &goal);
+            oracle_macro::update_lane_state(&game.state, pov, &mut seat.lane_state);
+            let aux = oracle_macro::compute_goal_aux(
+                &game.state,
+                pov,
+                &goal,
+                seat.techs_bought,
+                seat.tier3_bought,
+                Some(&seat.lane_state),
+            );
+            (goal, gate, aux)
+        };
+
         let evaluator = Evaluator::Inline(InlineEvalHandle::new(net.clone()));
         let mut brain = Brain::with_backend(&evaluator, params.iterations, polyfish::ai::brain::SearchBackend::Gumbel { k: 16 })
             .with_prior_heuristic_weight(0.1)
             .with_policy_target_q_weight(1.0)
-            .with_tree_q_weight(1.0);
+            .with_tree_q_weight(1.0)
+            .with_goal_shape_w(GOAL_W_TREE);
+        brain.set_macro_goal(Some(goal), star_gate);
+        brain.set_goal_aux(Some(goal_aux));
         game.state._messages.clear();
         let (chosen_move, brain_policy) = brain.think_with_stats(&mut game);
         policy = brain_policy.into();
@@ -424,6 +476,20 @@ async fn auto_step(
         if !params.dry_run {
             if let Some(m) = chosen_move {
                 move_name = format!("{:?}", m.move_type());
+                // The goal script's tech caps are whole-game counters, so the
+                // purchase has to be booked before the move is applied.
+                if m.move_type() == polyfish::types::MoveType::Research {
+                    let mut seats = state.goal_script.lock().unwrap();
+                    let seat = seats.entry(pov).or_default();
+                    seat.techs_bought += 1;
+                    if let Ok(tech) = m.tech_type() {
+                        if polyfish::settings::technology::get_technology_setting(tech).tier
+                            == Some(3)
+                        {
+                            seat.tier3_bought += 1;
+                        }
+                    }
+                }
                 game.play_move(m.as_ref());
             }
         }
@@ -746,6 +812,7 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
 
     let initial_state = generate(settings);
     game.state = initial_state;
+    state.goal_script.lock().unwrap().clear();
     game.state.settings._verbose = true;
     // GameSettings::default_max_turns() is 10 -- fine as the network-feature
     // normalization baseline (features.rs), wrong as a game length for an
@@ -1126,6 +1193,7 @@ async fn load_game(State(state): State<Arc<AppState>>) -> Json<Value> {
         serde_json::from_str(&json).expect("Failed to deserialize game state");
 
     game.state = loaded_state;
+    state.goal_script.lock().unwrap().clear();
     game.post_load();
 
     let mut tiles: Vec<_> = game.state.tiles.values().collect();

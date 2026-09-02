@@ -68,7 +68,7 @@ class MapRenderer {
     }
 
     render(state, legalMoves, povOverride = null) {
-        const currentTribeId = povOverride !== null ? povOverride : state.settings.currentPlayerTurnId;
+        const currentTribeId = povOverride ?? state.settings.currentPlayerTurnId;
         this.currentPovId = currentTribeId;
 
         const unitsByIndex = {};
@@ -426,7 +426,10 @@ class MapRenderer {
             if (!isExplored) {
                 this.selectedIdx = null;
                 selectedUnitIdx = null;
-                this.render(GAME_STATE, currentLegalMoves);
+                // Keep the POV we were already rendering. Defaulting would fall
+                // back to the acting player, so a click during the AI's turn
+                // would repaint the board through the AI's eyes.
+                this.render(GAME_STATE, this.viewerMoves(), this.currentPovId);
                 updateSelectionInfo();
                 return;
             }
@@ -490,8 +493,18 @@ class MapRenderer {
             }
         }
 
-        this.render(GAME_STATE, currentLegalMoves);
+        this.render(GAME_STATE, this.viewerMoves(), this.currentPovId);
         updateSelectionInfo(e.clientX, e.clientY);
+    }
+
+    /// The legal moves belong to whoever is acting; they may only be drawn when
+    /// the actor is also the viewer. Otherwise the overlays -- capture
+    /// indicators especially, which place markers by tile index with no FOW
+    /// check -- would leak the AI's options during its turn.
+    viewerMoves() {
+        return GAME_STATE.settings?.currentPlayerTurnId === this.currentPovId
+            ? currentLegalMoves
+            : [];
     }
 
     setupHover(el, idx, isExplored) {

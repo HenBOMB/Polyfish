@@ -93,6 +93,10 @@ async function loadInitialState(id) {
 
 
 var GAME_STATE = {};
+// The seat the screen belongs to. FOW, the HUD and every overlay render from
+// this seat only -- the view must never flip to the AI on its turn, which
+// would expose its vision, economy and candidate moves.
+const HUMAN_SEAT = 1;
 var currentLegalMoves = [];
 let selectedUnitIdx = null; // Currently selected unit's tile index
 var ENABLE_FOW = true; // Fog of War toggle
@@ -345,7 +349,11 @@ function updateUI(data) {
         GAME_STATE = data.state;
     }
     if (data.legalMoves) currentLegalMoves = data.legalMoves;
-    if (data.movePlayed) lastMoveVal.textContent = data.movePlayed;
+    // Only ever label the human's own move: the AI's move type is information
+    // the fog is meant to withhold.
+    if (data.movePlayed && GAME_STATE.settings?.currentPlayerTurnId === HUMAN_SEAT) {
+        lastMoveVal.textContent = data.movePlayed;
+    }
 
     let lastMctsAnalysis = null;
 
@@ -365,7 +373,10 @@ function updateUI(data) {
     }
 
     const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
-    const currentTribe = GAME_STATE.tribes[currentTribeId.toString()] || GAME_STATE.tribes[currentTribeId];
+    const isHumanTurn = currentTribeId === HUMAN_SEAT;
+    // Who acts vs whose eyes: the turn flow follows currentTribeId, but every
+    // stat and overlay below reads the human's seat.
+    const currentTribe = GAME_STATE.tribes[HUMAN_SEAT.toString()] || GAME_STATE.tribes[HUMAN_SEAT];
 
     if (!currentTribe) return;
 
@@ -403,10 +414,11 @@ function updateUI(data) {
     }, 0);
     incomeVal.textContent = `+${income}`;
 
-    // Perspective rendering:
-    // We use the current player's POV for rendering to ensure vision/FOW updates immediately.
-    const renderPov = currentTribeId;
-    renderer.render(GAME_STATE, currentLegalMoves, renderPov);
+    // Perspective rendering: always the human's POV, never the acting player's.
+    // The legal moves are the acting player's, and the overlays drawn from them
+    // (capture indicators especially) place markers by tile index with no FOW
+    // check -- so on the AI's plies they are dropped rather than drawn.
+    renderer.render(GAME_STATE, isHumanTurn ? currentLegalMoves : [], HUMAN_SEAT);
     updateSelectionInfo();
 
     // Highlight End Turn if it's the only move left
@@ -422,13 +434,15 @@ function updateUI(data) {
     // Check for forced rewards
     checkRewardPopup();
 
-    // Render MCTS heatmap if we have analysis data
-    if (lastMctsAnalysis) {
+    // Render MCTS heatmap if we have analysis data. /autostep returns analysis
+    // for every ply including the AI's own -- drawing that would put the AI's
+    // search over its fogged tiles on screen.
+    if (lastMctsAnalysis && isHumanTurn) {
         renderer.renderMCTSHeatmap(lastMctsAnalysis);
     }
 
     // Render FOW predictions (villages, enemy capitals)
-    if (GAME_STATE._prediction) {
+    if (GAME_STATE._prediction && isHumanTurn) {
         renderer.renderFOWPredictions(GAME_STATE._prediction);
     }
 
@@ -764,9 +778,9 @@ function centerOnCoordinates(tX, tY, smooth = false) {
 
 function focusCamera(smooth = false) {
     if (!GAME_STATE.settings) return;
-    // Camera should pan to CURRENT player's capital
-    const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
-    const tribe = GAME_STATE.tribes[currentTribeId.toString()] || GAME_STATE.tribes[currentTribeId] || Object.values(GAME_STATE.tribes)[0];
+    // Camera pans to the human's capital -- panning to the acting player's
+    // would hand over the AI's capital location on its first turn.
+    const tribe = GAME_STATE.tribes[HUMAN_SEAT.toString()] || GAME_STATE.tribes[HUMAN_SEAT] || Object.values(GAME_STATE.tribes)[0];
 
     if (tribe && tribe.cities && tribe.cities.length > 0) {
         // Find capital if possible
@@ -865,8 +879,8 @@ function updateSelectionInfo(clickX = null, clickY = null) {
 
     // 1. UPDATE BOTTOM CONSOLE (Rich Info)
     const isUnitMode = selectedUnitIdx === idx;
-    // Consistently use Current Player's POV for selection info / Tech visibility
-    const povId = GAME_STATE.settings.currentPlayerTurnId;
+    // Consistently use the human's POV for selection info / Tech visibility
+    const povId = HUMAN_SEAT;
     const povTribe = GAME_STATE.tribes[povId.toString()] || GAME_STATE.tribes[povId];
     const terrainName = TerrainType[tile.type] || `ID=${tile.type}`;
     const rawResourceName = resource ? ResourceTypes[resource.type] : "";
@@ -926,7 +940,7 @@ function updateSelectionInfo(clickX = null, clickY = null) {
 
         let actionsHtml = '';
 
-        const currentStars = GAME_STATE.tribes[GAME_STATE.settings.currentPlayerTurnId].stars;
+        const currentStars = GAME_STATE.tribes[HUMAN_SEAT].stars;
 
         // Harvest
         if (harvestMove) {
@@ -1407,7 +1421,8 @@ document.getElementById('btn-interactive').onclick = () => {
 document.getElementById('btn-reset').onclick = () => apiAction('/reset', {});
 document.getElementById('btn-fow').onclick = () => {
     ENABLE_FOW = !ENABLE_FOW;
-    renderer.render(GAME_STATE, currentLegalMoves, 1);
+    const isHumanTurn = GAME_STATE.settings?.currentPlayerTurnId === HUMAN_SEAT;
+    renderer.render(GAME_STATE, isHumanTurn ? currentLegalMoves : [], HUMAN_SEAT);
 };
 document.getElementById('btn-train').onclick = () => {
     if (confirm("Start a background training session? This will run 'cargo run --bin self_play' on the server.")) {
