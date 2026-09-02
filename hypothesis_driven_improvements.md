@@ -15409,3 +15409,66 @@ Disposition: recorded as a clean baseline reading for whatever
 comes next -- a real held-out split and more training (recommendation
 1) is the right lever before re-checking behavior, not a bigger aux
 weight or a longer arena run against undertrained checkpoints.
+
+HELD-OUT SPLIT SHIPPED, RECOMMENDATION (1) CLOSED (2026-09-02, later
+same session, on Verdi's explicit go-ahead). Added `VAL_HOLDOUT_FRAC`
+to `train.py` (default 0.0, off): a deterministic FILE-level split
+(not row-level -- rows within one shard share a map/trajectory and
+would leak), reusing `load_chunk`/`compute_loss` under `no_grad` in a
+new `evaluate_holdout()`, results in `.last_train_metrics.json` under
+a new `"val"` key (`null` when off, so "not run" stays distinguishable
+from "ran, scored 0"). Verified directly, not just by inspection:
+default behavior reproduced `val: null` and trained on all 17 files
+unchanged; `VAL_HOLDOUT_FRAC=0.2` correctly held out exactly 3/17
+files (9,200 rows, summing with the 40,002 training rows back to the
+full 49,202) and reported a held-out loss sensibly higher than the
+training loss on that same run -- the expected generalization-gap
+signature, not a degenerate copy of the training number. Committed.
+
+Re-ran the full 6-config matrix a fourth time (`_held` suffix) on the
+same 49,202-row dataset, `VAL_HOLDOUT_FRAC=0.2`, same held-out 3 files
+for every config (the deterministic split's whole point):
+
+| config | train loss | held-out loss | train value | held-out value | new-head: train -> held-out |
+|---|---|---|---|---|---|
+| baseline | 4.1787 | 4.5372 | 0.8486 | 1.0973 | -- |
+| territory | 4.2463 | 4.5557 | 0.8821 | 1.0630 | terr5 0.3805 -> 0.4009 |
+| eco_ceiling | 4.2089 | 4.5121 | 0.8661 | 1.0681 | eco 0.0557 -> 0.0540 |
+| pressure | 4.2787 | 4.7040 | 0.8823 | 1.2078 | pressure 0.6700 -> 0.6761 |
+| army5 | 4.2369 | 4.4014 | 0.9003 | 0.9731 | army5 0.0923 -> 0.0869 |
+| combined | 4.3001 | 4.7323 | 0.8378 | 1.1549 | terr5 .4002->.4045, eco .0488->.0480, pressure .6674->.6763, army5 .0899->.0838 |
+
+DIAGNOSIS -- this is the strongest evidence of the night, because it's
+the first real generalization check rather than a training-loss trend:
+- **No head shows a meaningful train-to-held-out gap.** Territory
+  +0.020, pressure +0.006, and eco_ceiling/army5 actually score
+  BETTER on held-out than training (-0.002, -0.005) -- all within
+  what one held-out set of 9,200 rows and one training run can
+  resolve, none showing the growing gap that would signal
+  memorization. Combined with the three-generation "loss drops with
+  more data" finding, this is a coherent picture: real, generalizing
+  signal, not a small dataset being memorized.
+- **Core policy/value objectives don't degrade on held-out data either.**
+  Held-out value loss actually improves over baseline for territory
+  (1.0630 vs 1.0973), eco_ceiling (1.0681), and especially army5
+  (0.9731, the best of any config) -- though with only one training
+  run per config and no repeated seeds, this specific ordering carries
+  real run-to-run variance and shouldn't be read as "army5 is proven
+  best." Pressure and combined read worst on held-out (1.2078, 1.1549)
+  -- flagged, not explained; plausibly the same "needs more data"
+  pattern pressure already showed in the three-generation loss trend,
+  now showing up as a held-out gap on the *value* head specifically
+  rather than the aux head. Single-run variance is the honest caveat
+  on all of this.
+
+Disposition: **Recommendation (1) from the prior entry is done,
+shipped, and used for a real result the same night.** The combination
+of (a) loss dropping with more data across three scales and (b) no
+overfitting gap on a genuine held-out set is the strongest evidence
+Phase 1's four heads are learning real signal that this project has
+produced so far -- still not a behavioral/arena result (recommendation
+2), and pressure's relatively worse held-out value-loss reading in the
+individual and combined configs is a new, real flag for next session,
+not resolved here. Multiple training seeds per config would be needed
+before trusting the specific config-vs-config ordering above; single-
+run numbers are directional, not decisive.
