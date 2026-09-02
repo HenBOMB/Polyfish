@@ -207,6 +207,19 @@ pub const SHAPE_GOAL_CITY_OPEN_EXPOSED: f32 = 25.0;
 /// scores by, so a genuinely idle unit's march is worth redirecting.
 pub const SHAPE_GOAL_PREPARE_PER_TILE: f32 = 20.0;
 
+/// EXP_ELO_118: additive bonus for a CHEAP unit filling the garrison/cover/
+/// recall/kill-advance role instead of a valuable one -- Verdi's ground-
+/// truthed complaint that a Giant (`unit_worth`=10) walked home to garrison
+/// while two idle Warriors (`unit_worth`=2) sat closer. Scaled by
+/// `defend_cheapness` (1.0 for a Warrior-cheap unit, floored at 0.4 for a
+/// Giant-expensive one) on top of, never in place of, the existing flat
+/// `SHAPE_GOAL_DEFEND_COVER` terms -- a lone Giant defender's floor never
+/// weakens (design review: a multiplicative discount on the existing flat
+/// terms cut a lone-Giant hold below `attack_press`, a real sufficiency
+/// regression). First fit at ~0.17x `SHAPE_GOAL_DEFEND_COVER`, sized against
+/// the actual measured margin once ground-truthed, not assumed correct.
+pub const SHAPE_GOAL_DEFEND_CHEAP: f32 = 100.0;
+
 /// Rewards keeping units focused on attacking a targeted enemy city instead
 /// of wandering off — pays up to 4 attackers per target.
 pub const SHAPE_GOAL_ATTACK_PRESS: f32 = 500.0;

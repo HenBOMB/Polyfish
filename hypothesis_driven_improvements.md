@@ -14388,6 +14388,53 @@ Sizing: `SHAPE_GOAL_DEFEND_CHEAP = 150.0` (0.25x
 `SHAPE_GOAL_DEFEND_COVER`) as the first fit, expecting the usual ~2x
 q-gap overshoot on the first measured pass (per [[q-gap-dial-method]]).
 
+IMPLEMENTED (found already written, uncommitted, in the working tree at
+the start of this session — the EXP_ELO_119/120 arc ran on top of it
+without landing it; picked up and closed out here). Matches the design
+review's shape exactly: `defend_cheapness(u) = (2.0 / unit_worth(u)
+).clamp(0.4, 1.0)` (`goal_potential.rs`), a new additive
+`defend_cheap_garrison` term stacked on the existing flat
+`defend_garrison_hold` (never discounting it — the lone-Giant floor
+regression the design review flagged), a mirrored `defend_cheap_kill_
+advance` term (point 2 of the review, so a cheap unit taking the kill
+isn't re-taxed relative to garrisoning), and `defend_recall`'s
+shortfall search rewritten from nearest-unit-only to a weighted MAX
+over `cheapness(u) * proximity(u)` (point 3 — inversion-safe by
+construction, since adding a candidate can only weakly raise a max).
+One deviation from the pre-registration found while closing out:
+`SHAPE_GOAL_DEFEND_CHEAP` shipped at `100.0`, not the `150.0` written
+above — no ledger note explains the change, and no measured dq
+comparison exists between the two. Not re-derived here (the doc-
+comment already flagged the constant as "not assumed correct," and a
+full q-gap dial pass is a separate follow-up); fixed the stale "0.25x"
+comment to the actual ~0.17x ratio so the code doesn't misdescribe
+itself. 3 new tests (`defend_cheap_garrison_rewards_a_warrior_over_a_
+giant_on_the_same_tile`, `defend_cheap_kill_advance_rewards_a_warrior_
+over_a_giant`, `defend_recall_weighted_max_prefers_a_same_distance_
+cheap_unit`) pin the exact expected magnitudes (Warrior hits cheapness
+1.0, Giant floors at 0.4, the flat hold term is unchanged across both,
+adding a same-distance cheap unit strictly raises the weighted-max
+recall credit). Full suite green: 369 lib tests (was 357 pre-fix, +12
+from this plus whatever landed in between), 0 failures, self_play +
+arena binaries included.
+
+NOT DONE: the canonical-game regen re-verification this entry's own
+falsifier calls for (`city41_unit_identity_probe` against a fresh
+regen, confirming a Warrior rather than the Giant fills the gap) was
+not re-run this session — the exact `--dump-games-dir`/`--anchor-
+decay-start`/seed invocation used for the `exp116_seed0_watch`-style
+canonical games was never written down anywhere findable (ledger,
+scripts), and reconstructing it from `self_play`'s ~40 CLI flags by
+trial was judged lower-value than the day's other open items. The unit
+tests above are strong mechanistic evidence (they pin the exact Φ
+deltas the selection incentive depends on) but are not the same claim
+as "the search's actual move choice changed on a real game" — that
+closed-loop check remains open, flagged for the next session rather
+than silently treated as done.
+
+COMMITTED: implementation + tests landed as their own commit,
+independent of the EXP_ELO_120 arc it was picked up alongside.
+
 ## EXP_ELO_119 (pre-registration) — the search buys irrelevant tech while a city sits open, no mechanism suppresses star-spending in favor of addressing it
 
 STATUS: investigation registered, ground truth confirmed on one flagged

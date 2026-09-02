@@ -1163,6 +1163,55 @@ mod risk_tests {
         );
     }
 
+    /// EXP_ELO_118: `defend_kill_advance`'s cheap-unit mirror -- a cheap
+    /// unit taking the kill-and-advance must earn MORE `defend_cheap_
+    /// kill_advance` credit than an expensive one would for the identical
+    /// kill, so the fix's incentive survives a kill-and-advance ply instead
+    /// of only applying to a passive garrison.
+    #[test]
+    fn defend_cheap_kill_advance_rewards_a_warrior_over_a_giant() {
+        let mut warrior_state = board(49);
+        warrior_state.tribes.get_mut(&1).unwrap().units.push(unit_at(37, UnitType::Warrior, 1));
+        warrior_state.tribes.get_mut(&2).unwrap().units.push(unit_at(37, UnitType::Warrior, 2));
+        let mut giant_state = board(49);
+        giant_state.tribes.get_mut(&1).unwrap().units.push(unit_at(37, UnitType::Giant, 1));
+        giant_state.tribes.get_mut(&2).unwrap().units.push(unit_at(37, UnitType::Warrior, 2));
+        let goal = MacroGoal { orders: vec![(OrderKind::Defend, 49)], stance: Stance::Arm, save_target: None, prepare: None };
+
+        // Freeze threats BEFORE clearing the (same-tile, pre-kill) attacker
+        // in each state, matching `defend_kill_advance`'s own frozen-list
+        // convention -- the friendly unit is standing on tile 37 because it
+        // just killed the attacker that was there.
+        let aux_w = crate::ai::oracle_macro::compute_goal_aux(&warrior_state, 1, &goal, 0, 0, None);
+        let threats_w = threat_units(&warrior_state, 1);
+        let aux_g = crate::ai::oracle_macro::compute_goal_aux(&giant_state, 1, &goal, 0, 0, None);
+        let threats_g = threat_units(&giant_state, 1);
+        warrior_state.tribes.get_mut(&2).unwrap().units.clear();
+        giant_state.tribes.get_mut(&2).unwrap().units.clear();
+
+        let (_, bd_w) = crate::ai::reward::goal_potential_breakdown(
+            &warrior_state, 1, &goal, Some(&aux_w), Some(&threats_w), None, None, None,
+        );
+        let (_, bd_g) = crate::ai::reward::goal_potential_breakdown(
+            &giant_state, 1, &goal, Some(&aux_g), Some(&threats_g), None, None, None,
+        );
+        let cheap_w: f32 = bd_w
+            .iter()
+            .filter(|(l, _)| *l == "defend_cheap_kill_advance")
+            .map(|(_, v)| v)
+            .sum();
+        let cheap_g: f32 = bd_g
+            .iter()
+            .filter(|(l, _)| *l == "defend_cheap_kill_advance")
+            .map(|(_, v)| v)
+            .sum();
+        assert!(
+            cheap_w > cheap_g,
+            "a Warrior taking the kill must earn more cheap-kill-advance credit than a Giant: \
+             warrior {cheap_w} giant {cheap_g}"
+        );
+    }
+
     /// Killing the unit that would walk in is a defense too — the attackers
     /// T2 named are looked up live, so their death shows up in the price.
     #[test]

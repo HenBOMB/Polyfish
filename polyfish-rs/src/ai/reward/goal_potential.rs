@@ -164,6 +164,15 @@ fn ruin_pull_discount(state: &GameState, tribe: &crate::states::TribeState, idx:
     }
 }
 
+/// EXP_ELO_118: 1.0 for a cheap unit (a Warrior, `unit_worth`<=2), floored
+/// at 0.4 for an expensive one (a Giant, `unit_worth`>=5) -- a static,
+/// per-unit function of the unit alone, never of live board state, so it
+/// can't reproduce EXP_ELO_117's state-vs-transition inversion (a per-unit
+/// weight is identical whether read pre- or post-move for that same unit).
+fn defend_cheapness(u: &crate::states::UnitState) -> f32 {
+    (2.0 / crate::rules::combat::unit_worth(u).max(1) as f32).clamp(0.4, 1.0)
+}
+
 fn goal_potential_inner(
     state: &GameState,
     player: i32,
@@ -720,6 +729,17 @@ fn goal_potential_inner(
                             "defend_garrison_hold",
                             SHAPE_GOAL_DEFEND_COVER * attacker_pressure,
                         );
+                        // EXP_ELO_118: additive bonus so a cheap unit (a
+                        // Warrior) filling this exact role earns MORE, not
+                        // just the same, as a valuable one (a Giant) --
+                        // ground-truthed: the search walked a Giant home to
+                        // garrison while two idle Warriors sat closer. Never
+                        // discounts the flat term above, so a lone Giant
+                        // defender's hold floor doesn't weaken.
+                        acc.add(
+                            "defend_cheap_garrison",
+                            SHAPE_GOAL_DEFEND_CHEAP * attacker_pressure * defend_cheapness(g),
+                        );
                     }
                 }
             }
@@ -731,10 +751,20 @@ fn goal_potential_inner(
             // the frozen assessment and this eval -- so this is a safe,
             // state-pure signal to pay the same latch back on the kill tile.
             for (u, w) in &th.attackers {
-                if crate::functions::get_unit_at(state, u.coords.idx)
-                    .map_or(false, |occ| occ.owner == player)
-                {
-                    acc.add("defend_kill_advance", SHAPE_GOAL_DEFEND_COVER * w);
+                if let Some(occ) = crate::functions::get_unit_at(state, u.coords.idx) {
+                    if occ.owner == player {
+                        acc.add("defend_kill_advance", SHAPE_GOAL_DEFEND_COVER * w);
+                        // EXP_ELO_118: mirror the cheap-unit bonus here too
+                        // -- without it, a cheap unit that takes the kill
+                        // forfeits the garrison_hold+cheap_garrison combo
+                        // above but is refunded only the flat kill_advance
+                        // rate, re-taxing exactly what EXP_ELO_106 un-taxed,
+                        // specifically on the units this fix steers here.
+                        acc.add(
+                            "defend_cheap_kill_advance",
+                            SHAPE_GOAL_DEFEND_CHEAP * w * defend_cheapness(occ),
+                        );
+                    }
                 }
             }
             // EXP_ELO_103: cover/hold/recall all read the OPEN-framing plan
@@ -776,7 +806,16 @@ fn goal_potential_inner(
             if plan.shortfall > 0.0 {
                 let assigned: std::collections::HashSet<i32> =
                     plan.assigned.iter().map(|(t, _, _)| *t).collect();
-                if let Some(d) = tribe
+                // EXP_ELO_118: weighted MAX over cheapness*proximity, not
+                // nearest-unit-only -- inversion-safe by construction
+                // (removing/retreating any single unit can only weakly
+                // decrease a max, so this can't reproduce EXP_ELO_117's
+                // collapse-on-success shape). Deliberately NOT cheapest-
+                // first-then-nearest: that would pay MORE Φ the instant the
+                // cheap unit dies and selection falls back to a pricier
+                // one -- a state-dependent trap of the same shape just
+                // reverted.
+                let best = tribe
                     .units
                     .iter()
                     .filter(|u| {
@@ -801,14 +840,14 @@ fn goal_potential_inner(
                                 &attack_targets,
                             )
                     })
-                    .map(|u| cheb(u.coords.idx, *idx, width))
-                    .min()
-                {
-                    acc.add(
-                        "defend_recall",
-                        SHAPE_GOAL_DEFEND_COVER * attacker_pressure * 0.5
-                            * ((SHAPE_PROX_CAP - d).max(0) as f32 / SHAPE_PROX_CAP as f32),
-                    );
+                    .map(|u| {
+                        let d = cheb(u.coords.idx, *idx, width);
+                        let proximity = (SHAPE_PROX_CAP - d).max(0) as f32 / SHAPE_PROX_CAP as f32;
+                        defend_cheapness(u) * proximity
+                    })
+                    .fold(0.0f32, f32::max);
+                if best > 0.0 {
+                    acc.add("defend_recall", SHAPE_GOAL_DEFEND_COVER * attacker_pressure * 0.5 * best);
                 }
             }
         }

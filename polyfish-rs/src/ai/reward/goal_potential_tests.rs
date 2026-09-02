@@ -794,7 +794,17 @@ use crate::types::UnitType;
             phi_hold > phi_adjacent && phi_adjacent > phi_far,
             "leash ordering violated: hold {phi_hold} adjacent {phi_adjacent} far {phi_far}"
         );
-        assert!((phi_hold - phi_adjacent - SHAPE_GOAL_DEFEND_HOLD).abs() < 1e-3);
+        // EXP_ELO_118: stepping off the garrison tile now ALSO forfeits
+        // `defend_cheap_garrison` (on-tile-only by design, not mirrored
+        // into `defend_cover` this wave) on top of the pre-existing
+        // `defend_hold` loss -- a Rider costs 3, so its cheapness is 2/3,
+        // not the 1.0 a Warrior would get.
+        let cheap_garrison_lost = SHAPE_GOAL_DEFEND_CHEAP * (2.0 / 3.0f32);
+        assert!(
+            (phi_hold - phi_adjacent - SHAPE_GOAL_DEFEND_HOLD - cheap_garrison_lost).abs() < 1e-3,
+            "hold delta wrong: hold {phi_hold} adjacent {phi_adjacent} expected_extra \
+             {cheap_garrison_lost}"
+        );
     }
     /// The prep mechanism in miniature: a NEW unit that lands inside the
     /// coverage ring is worth more Φ than the same unit far away — this is
@@ -932,6 +942,88 @@ use crate::types::UnitType;
             "recall exemption delta wrong: free {phi_free} committed {phi_committed} expected {recall}"
         );
     }
+    /// EXP_ELO_118: a cheap unit (Warrior, worth 2) garrisoning the exact
+    /// same threatened tile as an expensive one (Giant, worth 10) must earn
+    /// MORE `defend_cheap_garrison` credit, on top of -- never in place of
+    /// -- the flat `defend_garrison_hold` term both earn identically.
+    /// Ground truth: Verdi caught the search walking a Giant home to
+    /// garrison while two idle Warriors sat closer.
+    #[test]
+    fn defend_cheap_garrison_rewards_a_warrior_over_a_giant_on_the_same_tile() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        let mut warrior_state = defense_board(60);
+        warrior_state.tribes.get_mut(&1).unwrap().units.push(combat_unit(60, UnitType::Warrior, 1));
+        warrior_state.tribes.get_mut(&2).unwrap().units.push(combat_unit(59, UnitType::Swordsman, 2));
+        let mut giant_state = defense_board(60);
+        giant_state.tribes.get_mut(&1).unwrap().units.push(combat_unit(60, UnitType::Giant, 1));
+        giant_state.tribes.get_mut(&2).unwrap().units.push(combat_unit(59, UnitType::Swordsman, 2));
+        let goal = MacroGoal {
+            orders: vec![(OrderKind::Defend, 60)],
+            stance: Stance::Arm,
+            save_target: None, prepare: None,
+        };
+        let (_, bd_w) = goal_potential_breakdown(&warrior_state, 1, &goal, None, None, None, None, None);
+        let (_, bd_g) = goal_potential_breakdown(&giant_state, 1, &goal, None, None, None, None, None);
+        let cheap_w: f32 =
+            bd_w.iter().filter(|(l, _)| *l == "defend_cheap_garrison").map(|(_, v)| v).sum();
+        let cheap_g: f32 =
+            bd_g.iter().filter(|(l, _)| *l == "defend_cheap_garrison").map(|(_, v)| v).sum();
+        let hold_w: f32 =
+            bd_w.iter().filter(|(l, _)| *l == "defend_garrison_hold").map(|(_, v)| v).sum();
+        let hold_g: f32 =
+            bd_g.iter().filter(|(l, _)| *l == "defend_garrison_hold").map(|(_, v)| v).sum();
+        assert!(
+            (cheap_w - SHAPE_GOAL_DEFEND_CHEAP).abs() < 1e-3,
+            "a Warrior (worth 2) should hit cheapness 1.0: {cheap_w}"
+        );
+        assert!(
+            (cheap_g - SHAPE_GOAL_DEFEND_CHEAP * 0.4).abs() < 1e-3,
+            "a Giant (worth 10) should floor at cheapness 0.4: {cheap_g}"
+        );
+        assert!(cheap_w > cheap_g, "cheap unit garrison must outprice expensive: {cheap_w} vs {cheap_g}");
+        assert!(
+            (hold_w - hold_g).abs() < 1e-3,
+            "the flat garrison_hold floor must NOT weaken for the expensive occupant: warrior {hold_w} giant {hold_g}"
+        );
+    }
+
+    /// EXP_ELO_118: `defend_recall`'s shortfall search is a weighted MAX
+    /// over cheapness*proximity, not nearest-unit-only -- adding a
+    /// same-distance cheap unit alongside an existing expensive one must
+    /// raise the credit (the max picks the cheap unit), and must never
+    /// LOWER it (inversion-safety: a max can only weakly increase as
+    /// candidates are added).
+    #[test]
+    fn defend_recall_weighted_max_prefers_a_same_distance_cheap_unit() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        let mut state = defense_board(29);
+        state.tribes.get_mut(&2).unwrap().units.push(combat_unit(28, UnitType::Swordsman, 2));
+        let goal = MacroGoal {
+            orders: vec![(OrderKind::Defend, 29)],
+            stance: Stance::Arm,
+            save_target: None, prepare: None,
+        };
+        // 24 and 84 are both Chebyshev distance 5 from city 29 (idx (7,2)):
+        // 24 is (2,2) [dx=5,dy=0], 84 is (7,7) [dx=0,dy=5].
+        let mut giant_only = state.clone();
+        giant_only.tribes.get_mut(&1).unwrap().units.push(combat_unit(24, UnitType::Giant, 1));
+        let mut warrior_too = giant_only.clone();
+        warrior_too.tribes.get_mut(&1).unwrap().units.push(combat_unit(84, UnitType::Warrior, 1));
+        let (_, bd_giant_only) =
+            goal_potential_breakdown(&giant_only, 1, &goal, None, None, None, None, None);
+        let (_, bd_warrior_too) =
+            goal_potential_breakdown(&warrior_too, 1, &goal, None, None, None, None, None);
+        let recall_giant_only: f32 =
+            bd_giant_only.iter().filter(|(l, _)| *l == "defend_recall").map(|(_, v)| v).sum();
+        let recall_warrior_too: f32 =
+            bd_warrior_too.iter().filter(|(l, _)| *l == "defend_recall").map(|(_, v)| v).sum();
+        assert!(
+            recall_warrior_too > recall_giant_only,
+            "adding a same-distance cheap unit must raise the weighted-max recall credit: \
+             giant_only {recall_giant_only} warrior_too {recall_warrior_too}"
+        );
+    }
+
     /// CONTRACT CHANGED (EXP_ELO_050, was `no_defend_order_means_no_defense
     /// _pricing`): risk to a city is priced whether or not a Defend order
     /// names it. The 040 rule — enemy presence must not leak into Φ without
