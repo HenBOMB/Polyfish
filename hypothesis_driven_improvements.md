@@ -14418,19 +14418,47 @@ recall credit). Full suite green: 369 lib tests (was 357 pre-fix, +12
 from this plus whatever landed in between), 0 failures, self_play +
 arena binaries included.
 
-NOT DONE: the canonical-game regen re-verification this entry's own
-falsifier calls for (`city41_unit_identity_probe` against a fresh
-regen, confirming a Warrior rather than the Giant fills the gap) was
-not re-run this session — the exact `--dump-games-dir`/`--anchor-
-decay-start`/seed invocation used for the `exp116_seed0_watch`-style
-canonical games was never written down anywhere findable (ledger,
-scripts), and reconstructing it from `self_play`'s ~40 CLI flags by
-trial was judged lower-value than the day's other open items. The unit
-tests above are strong mechanistic evidence (they pin the exact Φ
-deltas the selection incentive depends on) but are not the same claim
-as "the search's actual move choice changed on a real game" — that
-closed-loop check remains open, flagged for the next session rather
-than silently treated as done.
+NOT DONE (at commit time): the canonical-game regen re-verification
+this entry's own falsifier calls for was not re-run in that session —
+the exact `--dump-games-dir`/`--anchor-decay-start`/seed invocation
+used for the `exp116_seed0_watch`-style canonical games was never
+written down anywhere findable (ledger, scripts).
+
+FOLLOW-UP (same day, later session): reconstructed the invocation from
+`self_play/cli.rs` directly (`--tribe1 XinXi --tribe2 Imperius
+--anchor-frac 1.0 --iteration 100 --anchor-decay-start 100
+--search-backend macro-mcts --goal-channels --base-seed 1787500020
+--dump-games-dir .`) and re-ran it. The output filename
+(`game_iter100_game0_seed1787500020.replay.json`) matches the
+original's exactly, confirming the seed derivation was reconstructed
+correctly. **Result: inconclusive, not a confirmation or a
+refutation.** `city41_unit_identity_probe` against the fresh regen
+shows city41's garrison going empty at turn 11 (a Giant, id=19, steps
+away) with two cheap Warriors (id=10, id=16, worth 2) at distance 2 —
+structurally the same shape of opportunity as the original bug — but
+the gap sits UNFILLED for three full turns (11-13, no march of any
+kind into the tile) and is only refilled at turn 14 by a brand-new
+Giant, id=28. Checked its provenance directly against the raw replay
+commands: turn 14 carries `{moveType:9 (Reward), target:41, type:6}` —
+the exact CityReward-spawn signature this entry's own CORRECTION
+paragraph already identified for id=26 in the original investigation,
+not a recall/garrison decision. So this regen's city41 window is, like
+that earlier corrected case, out of the defend/recall fix's scope by
+construction — there was no march-based recall decision in this
+window at all to have gone either way. The broader trajectory has
+also visibly diverged from the original (different unit IDs are
+already present by turn 5), expected given the volume of unrelated
+reward/search changes between Jul 28 and Sep 2 — so a single regen
+at this seed can't isolate this one fix's effect on this one city
+cleanly even if a comparable window had appeared. The unit tests
+remain the strongest mechanistic evidence (exact Φ deltas the
+selection incentive depends on); the real-game closed-loop
+confirmation remains open — attempted honestly, not silently
+abandoned, but genuinely unresolved. A clean test would need either a
+purpose-built scenario (a `GameState` fixture with a Giant and two
+idle Warriors near a threatened city, run through real search rather
+than replayed) or a broader sweep across many seeds reading the
+recall-fix's fire rate directly, not a single seed's replay.
 
 COMMITTED: implementation + tests landed as their own commit,
 independent of the EXP_ELO_120 arc it was picked up alongside.
