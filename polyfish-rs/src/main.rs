@@ -24,6 +24,9 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
+use polyfish::ai::brain::{Brain, SearchBackend};
+use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
+use polyfish::ai::macro_agent::MacroParams;
 use polyfish::recorder::GameRecorder;
 
 struct AppState {
@@ -35,6 +38,12 @@ struct AppState {
     /// the stance is a standing commitment with hysteresis, not a per-ply
     /// recompute.
     goal_script: Mutex<std::collections::HashMap<i32, GoalSeat>>,
+    /// Leaked once at startup so the search agents below can be `'static` and
+    /// outlive a single request.
+    evaluator: &'static Evaluator,
+    backend: SearchBackend,
+    /// The playing agent per seat, kept across plies (see `new_play_brain`).
+    agents: Mutex<std::collections::HashMap<i32, Brain<'static>>>,
 }
 
 /// Per-seat carry-over for the goal script. Without it `/autostep` runs the net
@@ -52,6 +61,77 @@ struct GoalSeat {
 
 /// Matches `run_training_loop.sh`'s `--goal-w-tree 1`.
 const GOAL_W_TREE: f32 = 1.0;
+
+/// Stage-3 macro-mcts settings, matching `run_training_loop.sh`'s MACRO_GEN
+/// argv (`--macro-sims 64 --macro-k 6`, heuristic leaf). The net leaf and the
+/// root prior are both deliberately left off: the loop's own comment gates the
+/// net leaf behind a registered paired A/B, and the root prior needs the
+/// goal-blind retrained macro head. Micro-mcts rides along on its own default
+/// (EXP_ELO_119, sims=8), tunable only via `POLYFISH_MICRO_MCTS_*` at launch.
+fn play_macro_params() -> MacroParams {
+    MacroParams {
+        sims: 64,
+        k: 6,
+        leaf: polyfish::ai::macro_agent::MacroLeaf::Heuristic,
+        ..MacroParams::default()
+    }
+}
+
+/// `POLYFISH_SERVER_BACKEND=gumbel` falls back to the old per-ply net search.
+/// Anything else (or unset) plays the macro tree.
+fn backend_from_env() -> SearchBackend {
+    match std::env::var("POLYFISH_SERVER_BACKEND").as_deref() {
+        Ok("gumbel") => SearchBackend::Gumbel { k: 16 },
+        _ => SearchBackend::MacroMcts,
+    }
+}
+
+/// The per-ply net search, as the server has always run it. Still used for
+/// hints, and for the whole game under `POLYFISH_SERVER_BACKEND=gumbel`.
+fn new_gumbel_brain(evaluator: &'static Evaluator, iterations: usize) -> Brain<'static> {
+    Brain::with_backend(evaluator, iterations, SearchBackend::Gumbel { k: 16 })
+        .with_prior_heuristic_weight(0.1)
+        .with_policy_target_q_weight(1.0)
+        .with_tree_q_weight(1.0)
+        .with_goal_shape_w(GOAL_W_TREE)
+}
+
+/// The opponent that actually plays. Held per seat across plies: the macro
+/// agent replans only when `(turn, player)` changes, so a fresh agent per ply
+/// would re-run the whole turn-level search every ply and reset the lane,
+/// unit-goal and micro-mcts continuity it is built around.
+fn new_play_brain(evaluator: &'static Evaluator, iterations: usize) -> Brain<'static> {
+    match backend_from_env() {
+        SearchBackend::Gumbel { .. } => new_gumbel_brain(evaluator, iterations),
+        backend => Brain::with_backend(evaluator, iterations, backend)
+            .with_macro_params(play_macro_params()),
+    }
+}
+
+/// Paint the scripted goal for `pov` onto a Gumbel brain (EXP_ELO_028 Stage 1).
+fn apply_goal_script(state: &AppState, game: &Game, pov: i32, brain: &mut Brain<'static>) {
+    use polyfish::ai::oracle_macro;
+    let mut seats = state.goal_script.lock().unwrap();
+    let seat = seats.entry(pov).or_default();
+    let goal = oracle_macro::commit_macro_goal(
+        &game.state,
+        pov,
+        &mut seat.stance_commit,
+        seat.tier3_bought,
+    );
+    let gate = oracle_macro::tech_discipline_active(&game.state, pov, &goal);
+    oracle_macro::update_lane_state(&game.state, pov, &mut seat.lane_state);
+    let aux = oracle_macro::compute_goal_aux(
+        &game.state,
+        pov,
+        &goal,
+        seat.techs_bought,
+        seat.tier3_bought,
+        Some(&seat.lane_state),
+    );
+    brain.set_macro_goal(Some(goal), gate);
+    brain.set_goal_aux(Some(aux));
+}
 
 const DEFAULT_TRIBES: &[TribeType] = &[TribeType::Imperius, TribeType::Imperius];
 const DEFAULT_SIZE: MapSize = MapSize::Tiny;
@@ -164,12 +244,22 @@ async fn main() {
 
     let recorder = Arc::new(GameRecorder::new());
 
+    let network = Arc::new(network);
+    let evaluator: &'static Evaluator = Box::leak(Box::new(Evaluator::Inline(
+        InlineEvalHandle::new(network.clone()),
+    )));
+    let backend = backend_from_env();
+    println!("🧠 AI Play backend: {:?}", backend);
+
     let shared_state = Arc::new(AppState {
         game: Mutex::new(game),
         training_status: Mutex::new(None),
-        network: Some(Arc::new(network)),
+        network: Some(network),
         recorder,
         goal_script: Mutex::new(std::collections::HashMap::new()),
+        evaluator,
+        backend,
+        agents: Mutex::new(std::collections::HashMap::new()),
     });
 
     // Build our application with routes
@@ -373,6 +463,19 @@ async fn analyze_game(State(state): State<Arc<AppState>>) -> Json<Value> {
     }))
 }
 
+/// Optional overrides for `/reset`. All absent (the UI's `{}`) keeps the old
+/// behaviour: a random seed and `DEFAULT_TRIBES`. Set them to reproduce a
+/// specific matchup — an `eval_seeds.json` entry, say.
+#[derive(serde::Deserialize, Default)]
+struct ResetParams {
+    #[serde(default)]
+    seed: Option<i64>,
+    #[serde(default)]
+    tribe1: Option<String>,
+    #[serde(default)]
+    tribe2: Option<String>,
+}
+
 #[derive(serde::Deserialize)]
 struct StepParams {
     #[serde(default = "default_iterations")]
@@ -427,49 +530,40 @@ async fn auto_step(
     let mut move_name = "none".to_string();
     let mut best_move_json = None;
     let mut policy = serde_json::json!({});
+    let mut committed_goal = None;
 
     // 1. Try to get AI move from trained model if available
-    if let Some(net) = &state.network {
-        use polyfish::ai::brain::Brain;
-        use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
-        use polyfish::ai::oracle_macro;
-
-        // EXP_ELO_028 Stage 1: the same scripted goal self_play paints for net
-        // seats. It must be set before `think`, or the goal planes the net was
-        // trained on arrive zeroed.
+    if state.network.is_some() {
         let pov = game.state.settings.current_player_turn_id;
-        let (goal, star_gate, goal_aux) = {
-            let mut seats = state.goal_script.lock().unwrap();
-            let seat = seats.entry(pov).or_default();
-            let goal = oracle_macro::commit_macro_goal(
-                &game.state,
-                pov,
-                &mut seat.stance_commit,
-                seat.tier3_bought,
-            );
-            let gate = oracle_macro::tech_discipline_active(&game.state, pov, &goal);
-            oracle_macro::update_lane_state(&game.state, pov, &mut seat.lane_state);
-            let aux = oracle_macro::compute_goal_aux(
-                &game.state,
-                pov,
-                &goal,
-                seat.techs_bought,
-                seat.tier3_bought,
-                Some(&seat.lane_state),
-            );
-            (goal, gate, aux)
+        game.state._messages.clear();
+
+        let (chosen_move, brain_policy) = if params.dry_run {
+            // Hints and the analysis panel run on a throwaway agent. The
+            // persistent one below mutates on every `select_move` — booking
+            // techs, advancing the micro-mcts carry — so letting a hint touch
+            // it would drift state for a move that never gets played.
+            let mut brain = new_gumbel_brain(state.evaluator, params.iterations);
+            apply_goal_script(&state, &game, pov, &mut brain);
+            brain.think_with_stats(&game)
+        } else {
+            let mut agents = state.agents.lock().unwrap();
+            let brain = agents
+                .entry(pov)
+                .or_insert_with(|| new_play_brain(state.evaluator, params.iterations));
+            // The macro backend is its own goal-setter: it commits a directive
+            // per turn inside the tree and carries the counters itself. Only
+            // the Gumbel path needs the scripted goal painted from outside.
+            if matches!(state.backend, SearchBackend::Gumbel { .. }) {
+                apply_goal_script(&state, &game, pov, brain);
+            }
+            let out = brain.think_with_stats(&game);
+            // The directive the macro tree actually committed this turn --
+            // `None` on every other backend, which makes it the honest
+            // tell-tale for which brain is playing.
+            committed_goal = brain.macro_committed_goal();
+            out
         };
 
-        let evaluator = Evaluator::Inline(InlineEvalHandle::new(net.clone()));
-        let mut brain = Brain::with_backend(&evaluator, params.iterations, polyfish::ai::brain::SearchBackend::Gumbel { k: 16 })
-            .with_prior_heuristic_weight(0.1)
-            .with_policy_target_q_weight(1.0)
-            .with_tree_q_weight(1.0)
-            .with_goal_shape_w(GOAL_W_TREE);
-        brain.set_macro_goal(Some(goal), star_gate);
-        brain.set_goal_aux(Some(goal_aux));
-        game.state._messages.clear();
-        let (chosen_move, brain_policy) = brain.think_with_stats(&mut game);
         policy = brain_policy.into();
         best_move_json = chosen_move.as_ref().map(|m| m.serialize());
 
@@ -477,8 +571,11 @@ async fn auto_step(
             if let Some(m) = chosen_move {
                 move_name = format!("{:?}", m.move_type());
                 // The goal script's tech caps are whole-game counters, so the
-                // purchase has to be booked before the move is applied.
-                if m.move_type() == polyfish::types::MoveType::Research {
+                // purchase has to be booked before the move is applied. Under
+                // macro the agent keeps its own `TurnCounters` instead.
+                if matches!(state.backend, SearchBackend::Gumbel { .. })
+                    && m.move_type() == polyfish::types::MoveType::Research
+                {
                     let mut seats = state.goal_script.lock().unwrap();
                     let seat = seats.entry(pov).or_default();
                     seat.techs_bought += 1;
@@ -542,7 +639,20 @@ async fn auto_step(
         "legalMoves": legal_moves,
         "policyDistribution": policy,
         "evaluation": evaluation,
-        "mctsAnalysis": mcts_analysis
+        "mctsAnalysis": mcts_analysis,
+        "backend": format!("{:?}", state.backend),
+        "macroGoal": committed_goal.map(|g| serde_json::json!({
+            "stance": format!("{:?}", g.stance),
+            "orders": g.orders.iter()
+                .map(|(k, i)| serde_json::json!([format!("{k:?}"), i]))
+                .collect::<Vec<_>>(),
+        })),
+        "microMcts": {
+            "calls": polyfish::ai::search::micro_mcts::MICRO_MCTS_CALLS
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "overrides": polyfish::ai::search::micro_mcts::MICRO_MCTS_OVERRIDES
+                .load(std::sync::atomic::Ordering::Relaxed),
+        }
     }))
 }
 
@@ -801,18 +911,37 @@ async fn save_training_data(State(state): State<Arc<AppState>>) -> Json<Value> {
     }
 }
 
-async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
+async fn reset_game(
+    State(state): State<Arc<AppState>>,
+    params: Option<Json<ResetParams>>,
+) -> Json<Value> {
+    let params = params.map(|Json(p)| p).unwrap_or_default();
     let mut game = state.game.lock().unwrap();
 
     let mut settings = MapGenSettings::default();
     settings.size = DEFAULT_SIZE;
-    settings.tribes = DEFAULT_TRIBES.to_vec();
-    settings.seed = rand::random();
+    // Seat 1 is the human, so tribe1 is the seat the caller plays.
+    settings.tribes = vec![
+        params
+            .tribe1
+            .as_deref()
+            .map_or(DEFAULT_TRIBES[0], |s| {
+                polyfish::eval_seeds::parse_tribe(s, DEFAULT_TRIBES[0])
+            }),
+        params
+            .tribe2
+            .as_deref()
+            .map_or(DEFAULT_TRIBES[1], |s| {
+                polyfish::eval_seeds::parse_tribe(s, DEFAULT_TRIBES[1])
+            }),
+    ];
+    settings.seed = params.seed.unwrap_or_else(rand::random);
     settings.map_type = MapType::Drylands;
 
     let initial_state = generate(settings);
     game.state = initial_state;
     state.goal_script.lock().unwrap().clear();
+    state.agents.lock().unwrap().clear();
     game.state.settings._verbose = true;
     // GameSettings::default_max_turns() is 10 -- fine as the network-feature
     // normalization baseline (features.rs), wrong as a game length for an
@@ -1194,6 +1323,7 @@ async fn load_game(State(state): State<Arc<AppState>>) -> Json<Value> {
 
     game.state = loaded_state;
     state.goal_script.lock().unwrap().clear();
+    state.agents.lock().unwrap().clear();
     game.post_load();
 
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
