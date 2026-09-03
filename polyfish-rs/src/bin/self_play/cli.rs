@@ -375,6 +375,22 @@ pub(crate) struct Args {
     #[arg(long)]
     pub(crate) dump_games_dir: Option<String>,
 
+    /// Write one JSONL row per game (game_idx, seed, roles, winner_id) to this
+    /// path. Lets two runs on the same --base-seed be joined game-by-game for a
+    /// paired test, using the SAME win definition `anchor_net_wr` aggregates —
+    /// unlike --dump-games-dir this carries no per-ply decision log.
+    #[arg(long)]
+    pub(crate) dump_results: Option<String>,
+
+    /// Seed the Gumbel search itself (root Gumbel draws + temperature
+    /// sampling) from each game's own seed, making a run reproducible.
+    /// `--base-seed` alone seeds only map generation and the tribe draw, so
+    /// two runs of the same config otherwise disagree on ~33% of games
+    /// (EXP_ELO_121). Measurement only — leave off for training, where the
+    /// unseeded draws are what give the data its diversity.
+    #[arg(long, default_value_t = false)]
+    pub(crate) seed_search: bool,
+
     /// Pin the Greedy anchor to this seat (1 or 2) instead of
     /// alternating by game ordinal. Lets a debug run put the NET in a
     /// chosen seat, and therefore on a chosen tribe (--tribe1/--tribe2

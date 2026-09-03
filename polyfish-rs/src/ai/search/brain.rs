@@ -114,6 +114,10 @@ pub struct Brain<'a> {
     /// (heuristic leaf) — which is what every MACRO_GEN round silently ran
     /// before this was threaded through.
     macro_params: Option<MacroParams>,
+    /// Seed for the Gumbel backend's root draws and temperature sampling.
+    /// `None` = unseeded (self-play default, preserves data diversity);
+    /// `Some` makes the search reproducible for measurement runs.
+    search_seed: Option<u64>,
 }
 
 /// Internal enum wrapping whichever concrete agent the configured backend
@@ -339,6 +343,7 @@ impl<'a> Brain<'a> {
             macro_star_gate: false,
             goal_aux: None,
             macro_params: None,
+            search_seed: None,
         }
     }
 
@@ -365,6 +370,7 @@ impl<'a> Brain<'a> {
             macro_star_gate: false,
             goal_aux: None,
             macro_params: None,
+            search_seed: None,
         }
     }
 
@@ -384,6 +390,15 @@ impl<'a> Brain<'a> {
     /// bias + whole-game purchase caps). Same lifecycle as `set_macro_goal`.
     pub fn set_goal_aux(&mut self, aux: Option<crate::ai::oracle_macro::GoalAux>) {
         self.goal_aux = aux;
+    }
+
+    /// Seed the Gumbel backend's root Gumbel draws and temperature sampling
+    /// so a run reproduces exactly (see `--seed-search` in self_play).
+    /// Builder-style: chain after `with_backend`. Leaving it unset keeps the
+    /// unseeded `thread_rng()` self-play uses for training-data diversity.
+    pub fn with_search_seed(mut self, seed: u64) -> Self {
+        self.search_seed = Some(seed);
+        self
     }
 
     /// Override the per-game virtual-loss mini-batch size (see `--leaf-batch`
@@ -490,7 +505,7 @@ impl<'a> Brain<'a> {
         }
 
         if self.agent.is_none() {
-            self.agent = Some(make_search_agent(
+            let mut agent = make_search_agent(
                 self.backend,
                 self.evaluator,
                 self.max_iterations,
@@ -503,7 +518,14 @@ impl<'a> Brain<'a> {
                 self.goal_shape_w,
                 self.unfreeze_opponent,
                 self.macro_params,
-            ));
+            );
+            if let (Some(seed), SearchAgent::Gumbel(a)) = (self.search_seed, &mut agent) {
+                use rand::SeedableRng;
+                a.rng = Some(std::cell::RefCell::new(
+                    rand::rngs::StdRng::seed_from_u64(seed),
+                ));
+            }
+            self.agent = Some(agent);
         }
         if let Some(SearchAgent::Gumbel(a)) = self.agent.as_mut() {
             a.macro_goal = self.macro_goal.clone();

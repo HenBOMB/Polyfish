@@ -202,6 +202,7 @@ pub(crate) fn run_games(
                             args.goal_w_tree,
                             macro_params,
                             args.max_turns,
+                            args.seed_search,
                         )
                     }))
                     .unwrap_or_else(|_| {

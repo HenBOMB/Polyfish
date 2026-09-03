@@ -79,6 +79,7 @@ pub(crate) fn play_single_game(
     goal_w_tree: f32,
     macro_params: MacroParams,
     max_turns: i32,
+    seed_search: bool,
 ) -> Option<GameResult> {
     // Verdi: drop the turn-count ramp — Tiny maps, flat 50-turn cap
     // regardless of iteration (was 10/15/20/30 ramping by iteration; games
@@ -262,6 +263,12 @@ pub(crate) fn play_single_game(
     if let Some(b) = leaf_batch {
         agent1 = agent1.with_leaf_batch(b);
         agent2 = agent2.with_leaf_batch(b);
+    }
+
+    // Distinct per seat, so the two agents don't draw the same Gumbel stream.
+    if seed_search {
+        agent1 = agent1.with_search_seed(seed as u64);
+        agent2 = agent2.with_search_seed((seed as u64) ^ 0x9E37_79B9_7F4A_7C15);
     }
 
     let initial_state = game.state.clone();
@@ -1021,6 +1028,8 @@ pub(crate) fn play_single_game(
     }
 
     Some(GameResult {
+        game_idx,
+        seed,
         history: game_history,
         scores,
         final_potentials,

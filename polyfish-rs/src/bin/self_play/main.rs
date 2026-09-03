@@ -425,6 +425,26 @@ fn main() -> anyhow::Result<()> {
                 anchor_net_wins += 1;
             }
         }
+        if let Some(path) = &args.dump_results {
+            let winner_seat = (result.winner_id - 1) as usize;
+            let row = serde_json::json!({
+                "game_idx": result.game_idx,
+                "seed": result.seed,
+                "roles": result.roles,
+                "winner_id": result.winner_id,
+                "is_anchor": result.roles.contains(&"anchor"),
+                // Exactly the anchor_net_wr predicate above, per game.
+                "net_win": winner_seat < 2 && result.roles[winner_seat] == "model_vs_anchor",
+                // Trajectory fingerprint: far more sensitive than the win bit
+                // for checking whether two runs actually reproduce.
+                "moves": result.history.len(),
+                "scores": result.scores.iter().map(|(id, s)| (*id, *s)).collect::<Vec<_>>(),
+            });
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                use std::io::Write;
+                let _ = writeln!(f, "{row}");
+            }
+        }
         // Net-only: mirror games count both seats (both are net); anchor/league
         // games exclude the non-net (Greedy/opponent) seat, so the score metrics
         // reflect the net's play, not the opponent's.

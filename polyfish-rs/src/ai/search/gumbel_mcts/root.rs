@@ -109,10 +109,14 @@ impl<'a> GumbelMctsAgent<'a> {
 
         // Re-sample Gumbel(0,1) on the new root's children: they were created
         // as non-root nodes with gumbel = 0.0, but root candidates need noise.
-        let mut rng = rand::thread_rng();
         let gumbel_dist = Gumbel::new(0.0, 1.0).expect("BUG: Gumbel distribution");
-        for c in &mut new_root.children {
-            c.gumbel = self.gumbel_scale * gumbel_dist.sample(&mut rng);
+        let draws: Vec<f32> = self.with_rng(|rng| {
+            (0..new_root.children.len())
+                .map(|_| self.gumbel_scale * gumbel_dist.sample(rng))
+                .collect()
+        });
+        for (c, g) in new_root.children.iter_mut().zip(draws) {
+            c.gumbel = g;
         }
         
         // Bootstrap with the priors from the heuristic mcts agent. Skip if
@@ -162,16 +166,17 @@ impl<'a> GumbelMctsAgent<'a> {
         let logits =
             policy_composer::compute_move_log_probs_raw(policy_row, &legal_moves, map_size);
 
-        let mut rng = rand::thread_rng();
         let gumbel_dist = Gumbel::new(0.0, 1.0).expect("BUG: Gumbel distribution");
-        root.children = legal_moves
-            .into_iter()
-            .zip(logits.into_iter())
-            .map(|(m, l)| {
-                let g = self.gumbel_scale * gumbel_dist.sample(&mut rng);
-                GumbelNode::new(l, g, Some(m))
-            })
-            .collect();
+        root.children = self.with_rng(|rng| {
+            legal_moves
+                .into_iter()
+                .zip(logits.into_iter())
+                .map(|(m, l)| {
+                    let g = self.gumbel_scale * gumbel_dist.sample(rng);
+                    GumbelNode::new(l, g, Some(m))
+                })
+                .collect()
+        });
 
         // Snapshot pre-blend logits for trace capture below; blend below
         // overwrites child.logit in place, so this is the only chance to see

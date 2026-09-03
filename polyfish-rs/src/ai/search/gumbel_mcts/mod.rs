@@ -148,6 +148,11 @@ pub struct GumbelMctsAgent<'a> {
     /// Diagnostic only (value-head calibration) — isolates the head from the
     /// reward-shaping backup that inflates `last_root_value`.
     last_root_own_value: Option<f32>,
+    /// Deterministic source for the root Gumbel draws and temperature
+    /// sampling. `None` = unseeded `thread_rng()`, which is the self-play
+    /// default and keeps training-data diversity. `Some` makes a run
+    /// reproducible for measurement — see `--seed-search`.
+    pub rng: Option<RefCell<rand::rngs::StdRng>>,
 }
 struct GumbelNode {
     visits: f32,
@@ -289,8 +294,18 @@ impl<'a> GumbelMctsAgent<'a> {
             trace: RefCell::new(None),
             last_root_value: None,
             last_root_own_value: None,
+            rng: None,
         }
     }
+    /// Run `f` against this agent's RNG: the seeded one when `--seed-search`
+    /// supplied a seed, otherwise a fresh `thread_rng()`.
+    pub(super) fn with_rng<T>(&self, f: impl FnOnce(&mut dyn rand::RngCore) -> T) -> T {
+        match &self.rng {
+            Some(cell) => f(&mut *cell.borrow_mut()),
+            None => f(&mut rand::thread_rng()),
+        }
+    }
+
     /// The completed search's root value (see `last_root_value` field docs),
     /// if the most recent `select_move*` call actually ran a search.
     pub fn last_root_value(&self) -> Option<f32> {

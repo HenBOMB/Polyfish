@@ -15864,3 +15864,442 @@ gated on its own separate falsifier (the plan's n=128 paired arena
 gauge on `pressure_root_w`, not yet run) — this entry removes the
 main reason for extra caution going into that decision, it does not
 substitute for running it. Write-up and MEMORY.md updated to match.
+
+## EXP_ELO_121 (pre-registration) — does the tip survive crutch-off? The
+literal `decay_crutch` test the "macro/hierarchical search surviving
+crutch-off" criterion names, run at inference on frozen weights
+
+CONTEXT: the Sep 2 research note scores the external rubric's third
+criterion as "partial fit", correctly noting the star gate is a
+permanent search rule rather than a crutch designed to be removed. But
+"crutch" is a precise term in this repo: `self_play/crutches.rs` governs
+exactly two quantities via `decay_crutch` — `prior_heuristic_weight`
+(the Greedy search-prior blend injected at the net's root) and
+`anchor_frac` — and its own module doc calls them "scaffolding, not
+permanent terms". That literal test has never been run: `DECAY_LAST_ITER`
+is 150 and the tip run (`1787307645`) stopped at **iteration 115**, so
+the strongest checkpoint has never played a game with the prior crutch
+below its `CRUTCH_FLOOR = 0.1` plateau. Verified this session against
+`training_log.csv` (115 is the max iteration of any run on record).
+
+The owned-vs-rented question this criterion is really asking does not
+need retraining to get a first read: `prior_w` is a **search-time** blend,
+so it can be set to 0 at inference on the unchanged tip weights. If the
+net has internalized Greedy's move ordering, removing a 10% blend costs
+little; if it is leaning on it, behavior degrades.
+
+SCOPE (deliberately one crutch at a time): this tests removal of the
+**Greedy prior blend only**, with the goal scaffold left fully up
+(`--goal-channels --goal-w-tree 1` in BOTH arms, per
+[[goal-w-tree-harness-trap]]). It does NOT test the goal-conditioning
+dependency, which is the half the research note actually points at. A
+"survives" result here must not be cited as the full owned-vs-rented
+answer.
+
+METHOD: the frozen n=128 seed-770425 gauge, `model.safetensors`
+unchanged between arms (md5 `ca587e63...`, == `gauge_1787307645_iter115`).
+Binary: `target/release/self_play` built from current HEAD (lib
+untouched by this session's edits, which are confined to `src/main.rs`).
+
+- Arm A (baseline, byte-identical to the canonical gauge recipe):
+  `--iteration 100 --anchor-decay-start 100`
+  -> prior_w = max(0.5*0.97^100, 0.1) = **0.1** (floor), anchor_frac = **1.0**
+- Arm B (crutch-off):
+  `--iteration 150 --anchor-decay-start 150 --decay-last-iter 150`
+  -> prior_w = **0.0** (hard cutover), anchor_frac = **1.0**
+
+The `--anchor-decay-start` shift is what makes this a clean A/B.
+`--force-zero-crutches` would have been the obvious flag and is a TRAP
+here: it zeroes `anchor_frac` too, silently converting a net-vs-Greedy
+gauge into net-vs-net mirror self-play and pinning the win rate near 50%
+by construction. `anchor_frac` decays on `iteration - anchor_decay_start`
+while `prior_w` decays on raw `iteration`, so moving both together holds
+the opponent fixed at 100% Greedy anchor games while removing only the
+prior blend. Audited that `iteration` reaches nothing else behavioral in
+`self_play`: the only other consumer is `q_target_w`, which saturates at
+1.0 for both 100 and 150 (`POLICY_TARGET_Q_RAMP_ITERS = 20`), so no
+`--value-trust` pin is needed and Arm A stays exactly canonical.
+
+Read `anchor_net_wr` (net-seat attributed, per its own comment —
+[[net-only-behavior-metrics]]) plus `t2c_3rd_rate` / `t2c_3rd_turn`, the
+metrics tied to the star-gate mechanism the note traces.
+
+POWER (stated up front): `.last_self_play_metrics.json` carries
+aggregates only, no per-game array, so **no McNemar is available** without
+heavier per-game dumping. This is a SCREENING test: high power for the
+large collapse "rented" predicts, low power for a few-pp effect. Per
+[[seed-770425-gauge-harness]], nominally-identical reruns of the net-eval
+variant drift ~1.2pp, so anything inside a few pp is not readable here.
+
+PREDICTIONS:
+- **P1 (OWNED):** `anchor_net_wr` within a few pp of Arm A and
+  `t2c_3rd_rate` essentially unchanged. Reading: the prior crutch is
+  removable at inference on the tip, which de-risks carrying training past
+  iteration 150.
+- **P2 (RENTED):** a large win-rate drop (>10pp) and/or third-city tempo
+  collapse. Reading: the net's measured strength depends on the Greedy
+  blend still being present; the criterion fails at its literal reading
+  and crutch removal must wait, per the standing rule (memo
+  [[goal-pricing-beats-masks]]: no crutch removal until `policy_loss`
+  closes).
+- **Inconclusive band:** a delta of a few pp either way — declare
+  underpowered and escalate to a per-game paired McNemar rather than
+  reading the point estimate.
+
+STATUS: pre-registered before running. Result appended below.
+
+### EXP_ELO_121 — INTERIM STATUS (incomplete, no verdict)
+
+Arm A (baseline, `prior_w` at the 0.1 floor) ran to completion:
+`anchor_net_wr` **0.2891 (37/128)**, `anchor_games` 128 (confirming
+`anchor_frac` held at 1.0, i.e. the `--force-zero-crutches` trap was
+avoided), `t2c_3rd_rate` 0.578, `t2c_3rd_turn` 10.91, `t2c_2nd_rate`
+0.891, `villages_first_rate` 0.813. `model.safetensors` md5 verified as
+`ca587e63...` (the iter-115 tip) before and after the run. This reading
+sits inside the historical band for this gauge (prior n=128 readings
+0.297 / 0.320 / 0.344 / 0.352 / 0.406); the ~0.46 figure from
+EXP_ELO_120 is NOT a valid reference here — those were that
+experiment's retrained `baseline_e8`/`combined_e8` checkpoints, not the
+tip.
+
+Arm B (crutch-off) was **terminated externally ~2 min in**, before its
+first progress line, and wrote no metrics and no games file. No Arm B
+data exists. **No verdict on P1/P2 — the experiment is half-run and must
+not be cited as evidence in either direction.** Re-running Arm B alone is
+sufficient to complete it (Arm A's numbers are saved and the model is
+unchanged); the arms are independent invocations, not a paired stream.
+
+Arm-value correctness is confirmed by the repo's own unit tests, not by
+hand arithmetic: `crutches_tests.rs` asserts
+`decay_crutch(W0, DECAY, 100, 150, false) == CRUTCH_FLOOR` (Arm A = 0.1)
+and `assert_eq!(decay_crutch(W0, DECAY, 150, 150, false), 0.0)`
+(Arm B = 0.0).
+
+Correction to the pre-registration above: it named only two outcomes
+(survives / collapses) and omitted a third — Arm B landing materially
+HIGHER, which would mean the Greedy prior blend is actively *hurting* at
+the tip rather than merely being removable. Recording it here as
+unregistered so it cannot later be presented as predicted.
+
+### EXP_ELO_121 — RESULT (Arm B completed under `launchctl submit`)
+
+Arm B re-run after the first attempt was killed ~2 min in by the macOS
+session-teardown mechanism ([[macos-wakeup-limit-kills-net-leaf-actors]]),
+NOT by the user and not by a self_play fault — the tell was that a
+trivial `sleep` waiter died in the same instant. Re-submitted via
+`launchctl submit` with `DYLD_LIBRARY_PATH` exported inside the job,
+per-attempt-unique log, and remove-on-detect. It survived a subsequent
+teardown sweep (lost the detector, kept running), completed once, and the
+job was removed before launchd's restart-on-any-exit could re-run and
+overwrite `.last_self_play_metrics.json`. Single attempt log, distinct
+`games_file` per arm — confirmed not a stale re-read.
+
+| metric | A (prior_w=0.1) | B (prior_w=0.0) | delta | 2-prop z | p |
+|---|---|---|---|---|---|
+| anchor_net_wr | 37/128 = 28.9% | 45/128 = 35.2% | +6.2pp | +1.07 | 0.284 |
+| t2c_3rd_rate | 74/128 = 57.8% | 88/128 = 68.8% | +10.9pp | +1.82 | 0.069 |
+| t2c_2nd_rate | 114/128 = 89.1% | 113/128 = 88.3% | -0.8pp | -0.20 | 0.844 |
+| t2c_3rd_turn | 10.91 | 11.61 | +0.71 | | |
+| avg_units_lost | 22.63 | 21.46 | -1.17 | | |
+
+`anchor_games` = 128 in BOTH arms, empirically confirming `anchor_frac`
+held at 1.0 and the `--force-zero-crutches` trap was avoided.
+
+DIAGNOSIS: **P2 (RENTED) is refuted.** Removing the Greedy prior blend
+entirely produced no collapse in anything — not win rate, not third-city
+tempo, not second-city reach. The pre-registered "rented" signature (a
+>10pp win-rate drop or a tempo collapse) did not appear; every
+mechanism-linked metric moved the *other* way.
+
+P1 (OWNED) is not cleanly confirmed either, because the movement exceeds
+the "within a few pp" band P1 specified. **This is the unregistered third
+outcome flagged in the interim status**: the direction is positive on win
+rate (+6.2pp), third-city reach (+10.9pp) and units lost (-1.17),
+suggesting the Greedy prior blend may be actively *costing* the tip
+rather than merely being removable. Recorded as unregistered — it was NOT
+predicted before the run and must not be presented as though it were.
+
+POWER — the honest limit: neither headline delta is significant at
+alpha=0.05 unpaired (p=0.284 and p=0.069), exactly as the pre-registration
+warned. n=128 unpaired cannot resolve a 6pp effect. The pre-registered
+escalation therefore stands: a per-game paired McNemar read (requires
+`--dump-games-dir` in both arms, since `.last_self_play_metrics.json`
+carries aggregates only). Two further caveats: (i) the two arms ran under
+different process parents (shell child vs launchd job), and the net-eval
+variant's eval batching depends on actor timing, so ~1pp of the delta
+could be that drift; (ii) `t2c_3rd_turn` rose +0.71 turns alongside the
+higher reach rate, i.e. more seats reached a third city but later —
+consistent with more seats completing a slower expansion, not a pure
+tempo gain.
+
+DISPOSITION: the literal reading of the "macro/hierarchical search
+surviving crutch-off" criterion does **not** fail for the Greedy prior
+crutch — it survives removal at inference on frozen tip weights, with a
+positive-leaning but underpowered hint that removal helps. This
+materially de-risks carrying training past `DECAY_LAST_ITER=150`, which
+has never been done (tip stopped at iteration 115). It does NOT resolve
+the goal-conditioning half of owned-vs-rented, which is the half the Sep 2
+research note's third criterion actually points at, and which this
+experiment deliberately left untouched (goal scaffold up in both arms).
+
+### EXP_ELO_121 — same-config rerun variance measured at ~4pp (incidental, important)
+
+Re-running Arm A verbatim (same binary features, same `--base-seed 770425`,
+same model md5, only the additive `--dump-results` flag) gave
+**42/128 = 32.8%** against the first run's **37/128 = 28.9%** — a **3.9pp**
+spread between two nominally identical configurations.
+
+This is ~3x the ~1.2pp drift [[seed-770425-gauge-harness]] records for the
+net/Gumbel variant, and it directly weakens the unpaired reading above: an
+observed +6.2pp between arms is only ~1.6x a same-config rerun gap. **Any
+unpaired delta under roughly 8pp on this harness should be treated as
+unresolved.** The macro-mcts variant's proven 0.0pp exact reproduction does
+NOT transfer to the net-eval path, where eval-batch composition depends on
+actor timing.
+
+Two operational notes from the same re-run: (i) the tail is extremely
+uneven — 102/128 games completed in ~13 min, the remaining 26 took ~50 min
+with a single actor at 99.6% CPU in `eco_plan::enumerate_empire`
+(`play_single_game` on the stack, so genuinely playing, not hung),
+consistent with static per-actor game blocks rather than work-stealing;
+budget wall-clock accordingly rather than from the mean. (ii) Verified
+128 rows / 128 unique `game_idx` / seeds 770425..770552 contiguous, which
+is the check that catches a launchd restart having appended a duplicate
+result set.
+
+### EXP_ELO_121 RESULT (paired McNemar + pooled, Sep 3 2026) — **P2 refuted, P1 supported, and the gauge itself is the story**
+
+Arm B's launchd job restarted after a clean finish and ran the full 128 again,
+appending a second result set. Not a loss: it yields a **same-config paired
+replicate**, which is the control this experiment never had.
+
+Integrity first (all three sets): 128 rows, 128 unique `game_idx`, seeds
+770425..770552, `seed == 770425 + game_idx`, and **0 role mismatches** against
+Arm A' — so the pairing is genuinely valid and not assumed.
+
+| comparison | win rate | discordant b/c | exact McNemar p |
+|---|---|---|---|
+| A' vs B' | 32.8% vs 28.1% | 19 / 13 | 0.377 |
+| A' vs B'' | 32.8% vs 28.1% | 20 / 14 | 0.392 |
+| **B' vs B'' (same config)** | 28.1% vs 28.1% | **21 / 21** | 1.000 |
+
+**The control row is the finding.** Two byte-identical configurations disagree
+on **42 of 128 individual games** — *more* discordance than between the two
+different arms (32, 34). Pairing on `--base-seed` therefore recovers almost
+nothing on the net/Gumbel path.
+
+Quantified: observed per-seed agreement 0.672 vs chance 0.596 → **Cohen's
+kappa = 0.19**. Under fully independent outcomes we would expect 51.8
+discordant games; we observe 42. So the map seed pins **under 20%** of the
+reducible outcome agreement — the rest is re-rolled every run.
+
+**Pooled verdict over all five completed runs** (n=128 each):
+
+- Arm A (`prior_w=0.1`): 37, 42 → **79/256 = 30.86%**
+- Arm B (`prior_w=0.0`): 45, 36, 36 → **117/384 = 30.47%**
+- **delta = -0.39pp**, two-proportion z = -0.105, **p = 0.916**, 95% CI
+  [-7.7, +6.9]pp.
+
+- **P2 (RENTED — collapse >10pp) is refuted.** Five runs, no collapse; the CI
+  excludes a 10pp drop comfortably.
+- **P1 (OWNED — within ~3pp) is supported** by the pooled point estimate
+  (-0.39pp), though the CI is far too wide to call it established. Removing the
+  last 0.1 of heuristic prior weight does not measurably change play.
+- The earlier unpaired **"+6.2pp for Arm B" reading is withdrawn.** Arm B's own
+  three same-config runs spread **7.0pp** (35.2 / 28.1 / 28.1); the first B run
+  was a high draw. The sign flipped on rerun. Arm A's spread is 3.9pp.
+
+**Root cause of the noise (found, not inferred):** `--base-seed` seeds map
+generation and the tribe draw only. The Gumbel search runs on unseeded
+`rand::thread_rng()` at three sites — `gumbel_mcts/root.rs:112` (re-sample on
+promoted root), `root.rs:165` (fresh-root draws), `finish.rs:161` (temperature
+sampling under `TEMPERATURE_MOVE_THRESHOLD`). Every root decision in every game
+is re-randomized per process launch. `runner.rs:149` even documents the intent
+— *"seeded off its game seed so runs stay reproducible"* — but only tribes got
+it. This is why [[same-seed-not-reproducible]]'s 0.0pp result held on the
+macro-mcts variant (no Gumbel draws) and does not transfer here.
+
+**Power of the gauge as it currently stands** (exact McNemar, ~33% discordance):
+
+| effect | games/arm needed |
+|---|---|
+| 10pp | ~128 |
+| 8pp | ~256 |
+| 5pp | ~1024 |
+| 3pp | ~2048 |
+
+**Standing correction to protocol:** at n=128 this harness resolves ~10pp and
+nothing finer. Any delta under ~8pp read off a single 128-game pair — paired or
+not — is unresolved. Several past reads sit in that band and should be treated
+as open, not settled.
+
+
+## EXP_ELO_122 — seed the Gumbel search so the gauge becomes a sharp instrument (PRE-REGISTERED, Sep 3 2026)
+
+**Motivation.** EXP_ELO_121 measured the gauge's real resolution at ~10pp for
+n=128, with kappa=0.19 between same-config paired reruns. The cause is
+identified, not guessed: `--base-seed` seeds map generation and the tribe draw
+only; the Gumbel search draws from unseeded `rand::thread_rng()` at
+`gumbel_mcts/root.rs` (fresh root + promoted root) and `finish.rs`
+(temperature sampling). If those draws dominate the per-game noise, seeding
+them collapses it.
+
+**Change.** New `--seed-search` flag on `self_play` (default OFF). When set,
+each game seeds its two agents' Gumbel RNG from its own game seed (seat 2
+salted by the golden-ratio constant so the seats don't share a stream), via
+`Brain::with_search_seed` → `GumbelMctsAgent::rng: Option<RefCell<StdRng>>`.
+Unset, the agent keeps `thread_rng()`, so training data diversity, the server,
+and arena are all untouched and `make_search_agent`'s public signature is
+unchanged. `--dump-results` now also records `moves` and `scores` per game.
+
+**Hypothesis.** The unseeded Gumbel draws are the dominant source of per-game
+non-determinism on the net path.
+
+**Test.** Two runs, n=16, identical args, `--seed-search` on, compared at
+*trajectory* level (per-game move count + final scores), not just `net_win`.
+Trajectory comparison is decisive at small n: under the status quo essentially
+every game diverges.
+
+**Pre-registered outcomes — all three, so none can be retrofitted:**
+
+- **O1 (full determinism):** all 16 games match on moves, scores and winner.
+  The gauge becomes byte-reproducible; pairing then removes ~all variance and
+  n=128 resolves single-digit pp. Protocol switches to `--seed-search` for
+  every measurement run.
+- **O2 (partial):** trajectories still diverge, but materially less. Residual
+  is eval-batch composition (MPSGraph batches across concurrently-running
+  games; batch shape can perturb low-order bits, and one flipped argmax
+  cascades over ~500 moves). Diagnostic: rerun with 1 actor + `leaf_batch=1`;
+  determinism there confirms eval batching. Gauge protocol then becomes
+  "deterministic mode for measurement" (slower) or we re-measure kappa and
+  take the partial win.
+- **O3 (no change):** residual non-determinism is elsewhere in the engine —
+  the EXP_ELO_091 HashMap/HashSet iteration-order class. Hunt that; do not
+  blame eval batching without the 1-actor test.
+
+**Binary boundary.** Runs before and after this patch are not comparable —
+the EXP_ELO_121 arms were produced by `target/release/self_play` (shared dir);
+EXP_ELO_122 builds into a scratch `CARGO_TARGET_DIR` with `--features apple`.
+Any post-patch win rate must be re-baselined, not compared to 30.9%/30.5%.
+
+### EXP_ELO_122 — RESULT: **O1 confirmed, and the crutch-off question is now conclusively resolved**
+
+Build: `cargo test --features apple --lib --tests --bin self_play` green
+(373 passed, 0 failed, 11 ignored) before any measurement run — the seeding
+change touches three hot call sites in the Gumbel search and needed the
+regression check before trusting anything downstream.
+
+**Determinism diagnostic (pre-registered O1/O2/O3), n=16 x2, `--seed-search`
+on:** 16/16 exact trajectory matches (moves, per-player scores, winner) —
+**O1**. The one apparent discrepancy on first pass (6/16 "score mismatches")
+was a red herring: `--dump-results`' `scores` field serializes a HashMap in
+non-deterministic key order, so `[[2,9245],[1,2815]]` vs `[[1,2815],[2,9245]]`
+is the same result, differently ordered. Order-independent comparison gives
+a clean 16/16. (Cosmetic-only bug, doesn't affect `net_win`/`winner_id`/
+`moves` — noted for a future one-line fix, not touched now per the binary-
+boundary rule below.)
+
+**Concurrency-scale check (not in the original pre-registration, added
+because the O2 worry was specifically eval-batch composition, which differs
+between n=16 and n=128 concurrency):** Arm A's first 16 games (n=128 run,
+14 actors) compared against the standalone n=16 `--seed-search` run at
+matching game_idx/seed — **0/16 mismatches**. Determinism holds at full
+measurement scale, not just the small diagnostic. The sharp-instrument claim
+is airtight, not just directionally true.
+
+**The real crutch-off comparison, re-run with `--seed-search` on, n=128
+each, same tip checkpoint (`model.safetensors` md5 `ca587e63...`, iteration
+115, unchanged from EXP_ELO_121):**
+
+- Arm A: `--iteration 100 --anchor-decay-start 100 --seed-search` (prior_w
+  floor = 0.1)
+- Arm B: `--iteration 150 --anchor-decay-start 150 --decay-last-iter 150
+  --seed-search` (prior_w = 0.0, hard cutover)
+
+Both runs launched via `launchctl submit` (per
+[[macos-wakeup-limit-kills-net-leaf-actors]]); Arm B's completion-marker
+grep missed the exact "Self-Play Complete" line (killed by the poll's 55-min
+fallback right around when it finished) but integrity checks confirm it
+completed cleanly anyway: 128 rows, 128 unique `game_idx`, seeds
+770425–770552 contiguous, `games_file` present (only written after the
+shard-save step, i.e. after real completion), `anchor_games`=128 in both
+arms (confirms `anchor_frac` held at 1.0, the `--force-zero-crutches` trap
+avoided). 0 role mismatches between arms on the paired join.
+
+RESULT:
+
+| metric | Arm A (prior_w=0.1) | Arm B (prior_w=0.0) | delta |
+|---|---|---|---|
+| **anchor_net_wr** | **0.3203125 (41/128)** | **0.3203125 (41/128)** | **0.00pp** |
+| avg_spt_t20 | 11.59 | 10.99 | -0.60 |
+| avg_spt_t25 | 12.66 | 10.46 | -2.20 |
+| t2c_2nd_rate | 0.891 | 0.875 | -1.6pp |
+| t2c_3rd_rate | 0.617 | 0.594 | -2.3pp |
+| t2c_3rd_turn | 11.04 | 11.32 | +0.28 |
+| t2c_4th_rate | 0.430 | 0.391 | -3.9pp |
+| avg_cap_cities | 1.02 | 0.88 | -13.3pp rel. |
+| villages_first_rate | 0.8125 | 0.8125 | 0.00pp |
+
+Paired join (128/128 games, seed-matched): **both win 21, both lose 67, Arm
+A only 20, Arm B only 20 — 40/128 discordant, split exactly even.** Exact
+McNemar **p = 1.0000**. Win rate is identical to 7 significant figures
+because the discordant flips cancel exactly (20 A-wins-B-loses vs 20
+B-wins-A-loses).
+
+Trajectory check: **0/128 games are move-for-move identical between arms**
+— removing the crutch does change search behavior; every single game plays
+out differently once the prior blend is gone. But in aggregate, across 128
+seeds, exactly as many games flip toward Arm A as flip toward Arm B on the
+primary win/loss outcome.
+
+DIAGNOSIS: **P2 (RENTED) is refuted as decisively as a single n=128 run can
+refute it** — not merely "CI excludes >10pp" (EXP_ELO_121's pooled read) but
+an exact 20-20 split with p=1.0 on a now fully-reproducible instrument. **P1
+(OWNED) is supported** on the primary metric this experiment was designed to
+resolve. The secondary behavior-curve metrics (SPT, t2c_3rd_rate,
+avg_cap_cities) all lean mildly negative for crutch-off — small,
+directionally consistent, and for the first time measured with zero
+run-to-run instrument noise (determinism means these deltas are the exact
+effect on these 128 seeds, not noise-corrupted estimates of it) but this
+experiment was not powered on those secondary metrics and they were not
+pre-registered as the pass/fail criterion — flagged as a real, small,
+directionally-negative signal worth a future dedicated read, not folded into
+the headline verdict.
+
+DISPOSITION: **The literal "does macro/hierarchical search survive
+crutch-off" question, for the crutch this repo's own code actually names
+(`prior_heuristic_weight` via `decay_crutch`), is conclusively resolved:
+yes, on the primary win/loss outcome, at the tip checkpoint, with the goal
+scaffold held constant in both arms.** This is now backed by a sharp,
+deterministic instrument, not an underpowered aggregate. Scope discipline
+per the original pre-registration: this does NOT test the goal-conditioning
+dependency (`--goal-channels --goal-w-tree`), which both arms ran with on,
+and which is the half the external research-note criterion actually points
+at — that remains a separate, unrun experiment. Protocol going forward:
+**`--seed-search` should be used for every measurement run on this gauge**,
+per O1's own pre-registered instruction — [[seed-770425-gauge-harness]]
+memory updated to reflect this. The earlier EXP_ELO_120 same-day conclusion
+("paired McNemar, p=0.497, well-powered") predates this fix and used the
+unseeded instrument; its "well-powered" framing is retracted below, though
+its directional read is not overturned by this experiment (different
+question — aux heads vs. the prior crutch).
+
+### EXP_ELO_120 — correction to the "well-powered" framing (superseded by EXP_ELO_121/122's gauge-fragility finding)
+
+The EXP_ELO_120 paired-McNemar entry (54/127 discordant, p=0.497) called
+itself "well-powered" on the basis that 54 discordant pairs sits above the
+~25-pair threshold where the chi2 approximation is reliable. That threshold
+is about the chi2 approximation's own validity, not about whether the
+underlying instrument can actually resolve the effect size in question —
+and EXP_ELO_121/122 subsequently measured that a same-config rerun of this
+exact unseeded gauge disagrees on ~33% of individual games (up to 42/128)
+purely from unseeded Gumbel RNG draws. 54/127 discordant is not clearly
+distinguishable from that same-config noise floor. **Correct framing: the
+paired McNemar result is directionally consistent with "no real difference"
+but was not resolved with the precision originally claimed** — the
+instrument itself was later found to be blunter than believed at the time.
+This does not reverse the finding (a real cost was never confirmed either),
+it downgrades the confidence with which the null was asserted. Future reads
+on this gauge should use `--seed-search` (EXP_ELO_122) rather than relying
+on discordant-pair-count alone as a power justification.
+

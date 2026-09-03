@@ -87,6 +87,10 @@ pub(crate) struct GameResult {
     pub(crate) winner_score: i32,
     /// Adjudicated winner: sole survivor, else higher final score at timeout.
     pub(crate) winner_id: i32,
+    /// Identity of the game, for joining runs pairwise. Actors push results in
+    /// COMPLETION order, so position in the results vec is not the game index.
+    pub(crate) game_idx: usize,
+    pub(crate) seed: i64,
     pub(crate) recap: ModReplay,
     pub(crate) cap_ruins: usize,
     pub(crate) cap_villages: usize,

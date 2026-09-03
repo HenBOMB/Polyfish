@@ -158,7 +158,7 @@ impl<'a> GumbelMctsAgent<'a> {
             use rand::distributions::WeightedIndex;
             let weights: Vec<f32> = root.children.iter().map(|c| c.visits.max(0.0)).collect();
             match WeightedIndex::new(&weights) {
-                Ok(dist) => dist.sample(&mut rand::thread_rng()),
+                Ok(dist) => self.with_rng(|rng| dist.sample(rng)),
                 // All-zero weights (nothing searched) — fall back to the recommendation.
                 Err(_) => self.recommend_final_move(&root),
             }
