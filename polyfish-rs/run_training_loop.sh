@@ -453,16 +453,39 @@ do
         if [ -n "${MACRO_ROLLOUT_LAMBDA:-}" ]; then
             MACRO_ROLLOUT_LAMBDA_FLAG="--macro-rollout-lambda ${MACRO_ROLLOUT_LAMBDA}"
         fi
+        # EXP_ELO_125 piece 3 (2026-09-05): train the macro_stance/
+        # macro_order heads by default under MACRO_GEN -- precondition for
+        # --macro-root-prior-w to consume a meaningfully-trained prior
+        # instead of near-random weights. Scoped to MACRO_GEN only (not
+        # exported unconditionally at script top): train.py pays a second
+        # forward pass whenever either weight is nonzero, regardless of
+        # whether the data has any macro_stance/macro_order supervision --
+        # a real, if modest, wasted cost for plain Gumbel-backend runs that
+        # never capture these labels at all. Validated matched-pair:
+        # macro_stance_loss stable ~1.00-1.01 across 10 iterations, no
+        # collapse (the pre-fix EXP_ELO_066/067 -18.75pp regression is
+        # fully resolved by the goal-blind fix). Override to 0.0 for a
+        # control arm.
+        export MACRO_STANCE_W=${MACRO_STANCE_W:-1.0}
+        export MACRO_ORDER_W=${MACRO_ORDER_W:-1.0}
         # EXP_ELO_066 (Aug 21): PUCT-style prior at the search root from the
-        # macro_stance/macro_order head. Unset by default -- current
-        # behavior. Only meaningful once that head is retrained goal-blind
-        # (see train.py's GOAL_CHANNEL_START forward); set nonzero to use it.
-        MACRO_ROOT_PRIOR_FLAG=""
-        if [ -n "${MACRO_ROOT_PRIOR_W:-}" ]; then
-            MACRO_ROOT_PRIOR_FLAG="--macro-root-prior-w ${MACRO_ROOT_PRIOR_W}"
-        fi
-        BACKEND_FLAG="--search-backend macro-mcts --macro-leaf ${MACRO_LEAF:-heuristic} --macro-sims ${MACRO_SIMS:-64} --macro-k ${MACRO_K:-6} $MACRO_ROLLOUT_LAMBDA_FLAG $MACRO_ROOT_PRIOR_FLAG"
-        echo "🌲 MACRO_GEN=1 (Stage 3): macro-mcts generates self-play games (behavior cloning + on-distribution value labels), leaf=${MACRO_LEAF:-heuristic} sims=${MACRO_SIMS:-64} k=${MACRO_K:-6} rollout_lambda=${MACRO_ROLLOUT_LAMBDA:-default} root_prior_w=${MACRO_ROOT_PRIOR_W:-0}."
+        # macro_stance/macro_order head. Default 0.05 as of EXP_ELO_125
+        # piece 3's 2026-09-05 validation, now that the head is trained
+        # goal-blind by default (MACRO_STANCE_W/MACRO_ORDER_W above) and the
+        # prior is confirmed mechanically safe (flat win-rate, no repeat of
+        # the pre-fix collapse). Always passed explicitly (not conditionally
+        # omitted) so this script's actual behavior never silently depends
+        # on self_play's own CLI default staying in sync. Override to 0.0
+        # for a control arm.
+        MACRO_ROOT_PRIOR_FLAG="--macro-root-prior-w ${MACRO_ROOT_PRIOR_W:-0.05}"
+        # EXP_ELO_125 (piece 4): cheap NN rollout estimator. Default
+        # w=1.0/min_depth=1 as of the 2026-09-05 validation: 50.0%/50.0%
+        # win rate (zero measured cost) with a confirmed ~3.0x per-move
+        # speedup -- ships as the new default, not opt-in. Override
+        # MACRO_ROLLOUT_NN_W=0.0 for a control arm.
+        MACRO_ROLLOUT_NN_FLAG="--macro-rollout-nn-w ${MACRO_ROLLOUT_NN_W:-1.0} --macro-rollout-nn-min-depth ${MACRO_ROLLOUT_NN_MIN_DEPTH:-1}"
+        BACKEND_FLAG="--search-backend macro-mcts --macro-leaf ${MACRO_LEAF:-net-asym} --macro-sims ${MACRO_SIMS:-64} --macro-k ${MACRO_K:-6} $MACRO_ROLLOUT_LAMBDA_FLAG $MACRO_ROOT_PRIOR_FLAG $MACRO_ROLLOUT_NN_FLAG"
+        echo "🌲 MACRO_GEN=1 (Stage 3): macro-mcts generates self-play games (behavior cloning + on-distribution value labels), leaf=${MACRO_LEAF:-net-asym} sims=${MACRO_SIMS:-64} k=${MACRO_K:-6} rollout_lambda=${MACRO_ROLLOUT_LAMBDA:-default} root_prior_w=${MACRO_ROOT_PRIOR_W:-0.05} rollout_nn_w=${MACRO_ROLLOUT_NN_W:-1.0}/depth${MACRO_ROLLOUT_NN_MIN_DEPTH:-1} macro_stance_w=${MACRO_STANCE_W} macro_order_w=${MACRO_ORDER_W}."
 
         # EXP_ELO_061 (Aug 2026): ACTORS=128 below is tuned for the eval-server-
         # bound Gumbel/net-leaf path, where actors park (no CPU) awaiting a
@@ -473,8 +496,11 @@ do
         # useful work. Profiling at the real training argv (macro-sims=64,
         # macro-k=6, goal-channels) found semaphore_wait_trap alone eating more
         # sampled time than any single application function. Auto-scale down
-        # to core count unless the user explicitly set -a/-b/-c.
-        if [ "${MACRO_LEAF:-heuristic}" = "heuristic" ] && [ "${ACTORS_SET:-false}" != true ]; then
+        # to core count unless the user explicitly set -a/-b/-c. Net-driven
+        # leaves (net/net-asym/net-asym-paint, the default since the
+        # net-driven-search push) ARE eval-server-bound, so this must only
+        # fire for the heuristic leaf specifically, not just "unset".
+        if [ "${MACRO_LEAF:-net-asym}" = "heuristic" ] && [ "${ACTORS_SET:-false}" != true ]; then
             CORE_COUNT=$(sysctl -n hw.physicalcpu 2>/dev/null || nproc 2>/dev/null || echo 14)
             ACTORS=$CORE_COUNT
             echo "🐌 Heuristic-leaf macro-mcts: auto-scaling actors to core count ($ACTORS) instead of the GPU-tuned default -- override with -a N if measured otherwise."
@@ -615,7 +641,7 @@ do
     # One-line config echo so silent env misconfigurations (ITER_OFFSET,
     # LABEL_REL_W, BOOTSTRAP) are visible in the log — EXP_ELO_006 post-mortem:
     # two runs voided by a missing ITER_OFFSET that nothing surfaced.
-    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-0} td_missing=${TD_MISSING} goal_channels=${GOAL_CHANNELS:-0} goal_w_tree=${GOAL_W_TREE:-1} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=${NUM_GAMES}x${SELF_PLAY_LOOPS} mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0} macro_stance_w=${MACRO_STANCE_W:-0} macro_order_w=${MACRO_ORDER_W:-0}"
+    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-0} td_missing=${TD_MISSING} goal_channels=${GOAL_CHANNELS:-0} goal_w_tree=${GOAL_W_TREE:-1} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=${NUM_GAMES}x${SELF_PLAY_LOOPS} mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0} macro_stance_w=${MACRO_STANCE_W:-0} macro_order_w=${MACRO_ORDER_W:-0} macro_root_prior_w=${MACRO_ROOT_PRIOR_W:-0} macro_rollout_nn_w=${MACRO_ROLLOUT_NN_W:-0}"
 
     SP_LOG=$(mktemp)
     for ((sp=1; sp<=SELF_PLAY_LOOPS; sp++)); do

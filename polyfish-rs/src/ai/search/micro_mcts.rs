@@ -54,11 +54,20 @@ pub struct MicroParams {
     /// before trusting it, per this codebase's own convention for every
     /// other search constant (see macro_mcts::EXPLORATION's own history).
     pub c_puct: f32,
+    /// Weight on a net-derived root prior, blended with the existing
+    /// `rank_view`/Δφ-score softmax prior (0.0 = off, current behavior).
+    /// Mirrors `MacroParams::root_prior_w`'s convention. The goal painted for
+    /// this eval call is the ply's own COMMITTED macro goal -- the same
+    /// convention real training rows already use (`game.rs`'s `feat_goal`),
+    /// so unlike macro's root prior this carries no root-painting-mismatch
+    /// risk: the four decomposed policy heads it reads are already
+    /// behavior-cloned on macro-mcts's own committed picks (`brain.rs`).
+    pub net_prior_w: f32,
 }
 
 impl Default for MicroParams {
     fn default() -> Self {
-        Self { sims: 16, depth: 64, k: 4, c_puct: 1.5 }
+        Self { sims: 16, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0 }
     }
 }
 
@@ -100,7 +109,11 @@ pub fn micro_mcts_params() -> Option<MicroParams> {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(1.5);
-        Some(MicroParams { sims, depth, k, c_puct })
+        let net_prior_w: f32 = std::env::var("POLYFISH_MICRO_MCTS_NET_PRIOR_W")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
+        Some(MicroParams { sims, depth, k, c_puct, net_prior_w })
     })
 }
 
@@ -336,9 +349,13 @@ fn select_and_expand(
 /// spliced in as that child's already-explored subtree (root advancement --
 /// a free warm start instead of discarding a ply's search every ply).
 /// Returns `(index into `ranked` the search prefers, subtree to carry into
-/// the NEXT ply if the caller ends up actually playing that pick)`. The
-/// index is `None` when there's nothing to search (a lone EndTurn, or too
-/// few candidates); the carry is `None` whenever no search ran.
+/// the NEXT ply if the caller ends up actually playing that pick, the
+/// picked child's own backed-up Q)`. The index is `None` when there's
+/// nothing to search (a lone EndTurn, or too few candidates); the carry and
+/// Q are `None` whenever no search ran. The Q is `tree(V_net)` -- leaves are
+/// scored by the trained value head (see `leaf_value`), so this is a
+/// genuine per-ply self-distillation target, computed on nearly every real
+/// ply already (search runs regardless; only the return value was new).
 #[allow(clippy::too_many_arguments)]
 pub fn micro_search_pick(
     view: &Game,
@@ -350,16 +367,54 @@ pub fn micro_search_pick(
     evaluator: &Evaluator,
     params: &MicroParams,
     carry: Option<MicroTreeCarry>,
-) -> (Option<usize>, Option<MicroTreeCarry>) {
+) -> (Option<usize>, Option<MicroTreeCarry>, Option<f32>) {
     if ranked.len() < 2 || ranked[0].1.move_type() == MoveType::EndTurn {
-        return (None, None);
+        return (None, None, None);
     }
     if carry.is_some() {
         MICRO_CARRY_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     let top_n = ranked.len().min(params.k.max(4));
     let scores: Vec<f32> = ranked.iter().take(top_n).map(|(s, _)| *s).collect();
-    let priors = softmax_priors(&scores);
+    let mut priors = softmax_priors(&scores);
+    // EXP_ELO_124-family: blend in a net-derived prior over the same top_n
+    // candidates. Goal painted here is the ply's own COMMITTED macro goal --
+    // the exact convention real training rows already use (`game.rs`'s
+    // `feat_goal`), so this carries none of macro's root-painting-mismatch
+    // risk. The four decomposed heads this reads are already behavior-cloned
+    // on macro-mcts's own committed picks (`brain.rs`).
+    if params.net_prior_w > 0.0 {
+        if let Some(raw) = crate::ai::features::state_to_cpu_features_goal(&view.state, pov, None, Some(goal))
+            .ok()
+            .and_then(|f| evaluator.evaluate(vec![f]).into_iter().next().map(|r| r.2))
+        {
+            let top_n_moves: Vec<Box<dyn Move>> = ranked
+                .iter()
+                .take(top_n)
+                .map(|(_, mv)| dyn_clone::clone_box(mv.as_ref()))
+                .collect();
+            let map_size = view.state.settings.size as usize;
+            let net_priors = crate::ai::search::policy_composer::compute_move_priors_raw(
+                &raw,
+                &top_n_moves,
+                map_size,
+                false,
+            );
+            let net_sum: f32 = net_priors.iter().sum();
+            if net_sum > 0.0 && net_priors.len() == priors.len() {
+                let w = params.net_prior_w;
+                for (p, np) in priors.iter_mut().zip(net_priors.iter()) {
+                    *p = (1.0 - w) * *p + w * (np / net_sum);
+                }
+                let renorm: f32 = priors.iter().sum();
+                if renorm > 0.0 {
+                    for p in priors.iter_mut() {
+                        *p /= renorm;
+                    }
+                }
+            }
+        }
+    }
     // The carry's own `mv_key` is the move that was just played -- already
     // consumed, and can't reappear here. What can reappear (and is worth
     // matching) is the set of options already explored one ply below it.
@@ -409,11 +464,16 @@ pub fn micro_search_pick(
     if best_idx != 0 {
         MICRO_MCTS_OVERRIDES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
+    let picked_q = root.children[best_idx]
+        .node
+        .as_ref()
+        .filter(|n| n.visits > 0)
+        .map(|n| n.q().clamp(-1.0, 1.0));
     let mv_key = root.children[best_idx].mv.serialize();
     let grandchildren = root.children[best_idx].node.take().map(|node| node.children).unwrap_or_default();
     let next_carry =
         if grandchildren.is_empty() { None } else { Some(MicroTreeCarry { mv_key, children: grandchildren }) };
-    (Some(best_idx), next_carry)
+    (Some(best_idx), next_carry, picked_q)
 }
 
 #[cfg(test)]
@@ -438,7 +498,7 @@ mod tests {
     #[test]
     fn measures_own_emergent_depth_at_production_params() {
         let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-        let params = MicroParams { sims: 64, depth: 64, k: 4, c_puct: 1.5 };
+        let params = MicroParams { sims: 64, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0 };
 
         for seed in 0..6i64 {
             let mut game = Game::new();

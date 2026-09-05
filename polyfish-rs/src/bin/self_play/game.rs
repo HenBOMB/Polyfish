@@ -23,9 +23,29 @@ use std::io::Write;
 use std::sync::atomic::AtomicUsize;
 
 use crate::crutches::{HEURISTIC_PRIOR_DECAY, HEURISTIC_PRIOR_W0, decay_crutch};
+
+/// EXP_ELO_124: fall back to micro-mcts's own per-ply root Q (`tree(V_net)`)
+/// as the TD bootstrap target whenever the macro leaf reports none (the
+/// heuristic-leaf case, which is ~100% of current generation). Calibrated
+/// 2026-09-04, n=20,328 decision points (60 games, heuristic macro leaf,
+/// generation defaults): r2=0.483 vs `final_outcome`, beating `evaluate_state`
+/// (0.386), `score_ratio` (0.344) and the once-per-turn `macro_root_q`
+/// (0.300) on the identical rows, already on-scale (OLS slope 0.998,
+/// intercept -0.052 -- no rescale needed unlike the `Heur` fallback). Opt-in
+/// pending a matched-pair arena validation, same discipline as
+/// `MissingBootstrap::Heur`. See hypothesis_driven_improvements.md EXP_ELO_124.
+fn use_micro_root_value() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("USE_MICRO_ROOT_VALUE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
+}
 use crate::dumps::{PlanTracker, open_game_jsonl, write_choice_dumps, write_spend_dumps, dump_macro_policy_row, dump_turn_state, update_plans};
 use crate::labels::{POLICY_TARGET_Q_RAMP_ITERS, final_ground_truth,
-                    macro_ballot_for_history_step, eco_ceiling_for_history_step, enemy_unit_grid};
+                    macro_ballot_for_history_step, eco_ceiling_for_history_step, enemy_unit_grid,
+                    rollout_value_for_history_step, calibrated_heur};
 use crate::result::{DecomposedPolicyData, GameResult, HistoryStep, decompose_visits,
                     group_recap};
 use crate::stats::{Adjudication, adjudicate, is_net_seat, score_hubs, record_spt_at_turn_start, t2c_turn, turn_milestones};
@@ -177,6 +197,10 @@ pub(crate) fn play_single_game(
     // Horizon-compression Stage 1a (EXP_ELO_120): same shape, gates
     // ceiling_for_goal to once per (turn, pov).
     let mut last_eco_ceiling_key: Option<(i32, PlayerId)> = None;
+    // EXP_ELO_125 (piece 4): same shape, gates the rollout-value label to
+    // once per (turn, pov) -- own key, must fire regardless of which agent
+    // is running, unlike `last_macro_ballot_key`.
+    let mut last_rollout_value_key: Option<(i32, PlayerId)> = None;
 
     // --dump-city-rewards: one JSONL file per game, one record per city
     // level-up reward choice — (turn, player, city level pre-choice, tribe
@@ -443,7 +467,12 @@ pub(crate) fn play_single_game(
         // The search that just ran was for the CURRENT (pre-move) state, so
         // this is that state's own root value — the TD bootstrap target for
         // whichever earlier step's label lands here as its "next decision".
-        let root_value = current_agent.last_root_value();
+        let micro_root_value = current_agent.micro_root_q();
+        let root_value = if use_micro_root_value() {
+            current_agent.last_root_value().or(micro_root_value)
+        } else {
+            current_agent.last_root_value()
+        };
         let root_own_value = current_agent.last_root_own_value();
 
         // State tensor for the training sample. Encoded AFTER the search:
@@ -752,6 +781,14 @@ pub(crate) fn play_single_game(
                     ]
                 }),
             );
+            let heur_value_now = polyfish::ai::evaluate_state(&game.state, pov);
+            // EXP_ELO_125 (piece 4): priority-resolved rollout-value label
+            // -- prefer the two already-on-scale sources (dense per-ply
+            // micro_root_value, or the leaf-scored root_value) over the
+            // calibrated raw-heuristic fallback.
+            let rollout_value_raw = micro_root_value
+                .or(root_value)
+                .or(Some(calibrated_heur(heur_value_now)));
             game_history.push(HistoryStep {
                 features: state_t,
                 policy: policy_data,
@@ -761,10 +798,18 @@ pub(crate) fn play_single_game(
                 turn: game.state.settings.turn,
                 root_value,
                 root_own_value,
+                heur_value: heur_value_now,
+                macro_root_q: current_agent.macro_root_q(),
+                micro_root_q: micro_root_value,
                 macro_ballot: macro_ballot_for_history_step(
                     (game.state.settings.turn, pov),
                     &mut last_macro_ballot_key,
                     current_agent.macro_root_ballot(),
+                ),
+                rollout_value_label: rollout_value_for_history_step(
+                    (game.state.settings.turn, pov),
+                    &mut last_rollout_value_key,
+                    rollout_value_raw,
                 ),
                 eco_ceiling,
                 enemy_units: enemy_unit_grid(&game.state, pov, features::MAP_SIZE * features::MAP_SIZE),

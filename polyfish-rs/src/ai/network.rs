@@ -186,6 +186,14 @@ pub struct PolyZeroNet {
     /// because a goal's orders are non-exclusive across kinds and across
     /// same-kind targets (see EXP_ELO_061's overnight ballot analysis).
     pi_macro_order: Option<Conv2d>,
+
+    /// EXP_ELO_125 (piece 4): cheap rollout-value estimator, mirrored into
+    /// Rust for the same reason as `aux_fog`/`pi_macro_stance` — consumed at
+    /// inference (macro-mcts's depth-gated frozen-edge shortcut), not just
+    /// during training. Off the value trunk (`v_latent`), tanh-bounded like
+    /// `v_win`. Optional: no checkpoint carries this until piece 4's
+    /// training run lands.
+    pi_rollout_value: Option<Linear>,
 }
 
 impl PolyZeroNet {
@@ -276,6 +284,13 @@ impl PolyZeroNet {
             None
         };
 
+        // EXP_ELO_125 (piece 4): off the value trunk, single scalar output.
+        let pi_rollout_value = if vs.contains_tensor("pi_rollout_value.weight") {
+            Some(candle_nn::linear(filters, 1, vs.pp("pi_rollout_value"))?)
+        } else {
+            None
+        };
+
         Ok(Self {
             conv1,
             bn1,
@@ -296,6 +311,7 @@ impl PolyZeroNet {
             aux_fog,
             pi_macro_stance,
             pi_macro_order,
+            pi_rollout_value,
         })
     }
 
@@ -313,6 +329,12 @@ impl PolyZeroNet {
     /// threaded through `EvalResult`, not yet done as of this head's landing.
     pub fn has_macro_policy_head(&self) -> bool {
         self.pi_macro_stance.is_some() && self.pi_macro_order.is_some()
+    }
+
+    /// True when this checkpoint carries the mirrored rollout-value head
+    /// (EXP_ELO_125). Same silent-zero caveat as `has_fog_head`.
+    pub fn has_rollout_value_head(&self) -> bool {
+        self.pi_rollout_value.is_some()
     }
 
     pub fn forward_t(
@@ -404,6 +426,12 @@ impl PolyZeroNet {
             None => None,
         };
 
+        // EXP_ELO_125 (piece 4): off the value trunk, like pi_macro_stance.
+        let rollout_value = match &self.pi_rollout_value {
+            Some(head) => Some(head.forward(&v_latent)?.tanh()?),
+            None => None,
+        };
+
         Ok((
             policy_output,
             ValueOutput {
@@ -412,6 +440,7 @@ impl PolyZeroNet {
                 fog_probs,
                 macro_stance_probs,
                 macro_order_maps,
+                rollout_value,
             },
         ))
     }
@@ -457,6 +486,9 @@ pub struct ValueOutput {
     /// spatial softmax (orders are non-exclusive). `None` until a
     /// checkpoint carries this head.
     pub macro_order_maps: Option<Tensor>,
+    /// EXP_ELO_125 (piece 4): cheap rollout-value estimator, [B, 1],
+    /// already tanh-bounded. `None` until a checkpoint carries this head.
+    pub rollout_value: Option<Tensor>,
 }
 
 /// Device-free policy output for a single leaf: one row of each decomposed
@@ -478,13 +510,18 @@ pub struct RawPolicyOutput {
     /// 0.0 on the tch and Metal paths; that trap is not repeated here).
     pub fog: Option<Vec<f32>>,
     /// EXP_ELO_061: macro-mcts root prior, stance half. 4 long, already
-    /// softmaxed. Mirrored on candle and Metal (the production eval
-    /// backend); tch is NOT wired (stays `None` there always, like
-    /// `progress` — a documented, lower-priority gap, not a silent one).
+    /// softmaxed. Mirrored on all three backends (candle, Metal, tch —
+    /// `tch_network.rs`'s `has_macro_policy`/`pi_macro_stance`). Only
+    /// `progress` is candle-only project-wide.
     pub macro_stance: Option<Vec<f32>>,
     /// EXP_ELO_061: macro-mcts root prior, order half. 3*H*W long, already
     /// sigmoided. Same backend coverage as `macro_stance`.
     pub macro_order: Option<Vec<f32>>,
+    /// EXP_ELO_125 (piece 4): cheap rollout-value estimator, a single
+    /// tanh-bounded scalar, already through the head. `None` when the
+    /// checkpoint or backend cannot produce it -- callers must fall back to
+    /// full `execute_turn` simulation, same convention as `fog`/`macro_*`.
+    pub rollout_value: Option<f32>,
 }
 
 impl PolicyOutput {
@@ -496,6 +533,7 @@ impl PolicyOutput {
         fog: Option<&Tensor>,
         macro_stance: Option<&Tensor>,
         macro_order: Option<&Tensor>,
+        rollout_value: Option<&Tensor>,
     ) -> Result<Vec<RawPolicyOutput>> {
         let action_type = self.action_type.to_vec2::<f32>()?;
         let source_spatial = self.source_spatial.to_vec2::<f32>()?;
@@ -514,6 +552,10 @@ impl PolicyOutput {
             Some(t) => Some(t.to_vec2::<f32>()?),
             None => None,
         };
+        let rollout_value_rows = match rollout_value {
+            Some(t) => Some(t.flatten_all()?.to_vec1::<f32>()?),
+            None => None,
+        };
 
         let batch = action_type.len();
         let mut rows = Vec::with_capacity(batch);
@@ -526,6 +568,7 @@ impl PolicyOutput {
                 fog: fog_rows.as_ref().map(|f| f[i].clone()),
                 macro_stance: stance_rows.as_ref().map(|f| f[i].clone()),
                 macro_order: order_rows.as_ref().map(|f| f[i].clone()),
+                rollout_value: rollout_value_rows.as_ref().map(|f| f[i]),
             });
         }
         Ok(rows)

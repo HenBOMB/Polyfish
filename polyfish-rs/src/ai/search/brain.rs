@@ -594,6 +594,23 @@ impl<'a> Brain<'a> {
         }
     }
 
+    /// This turn's macro root Q, ungated by leaf kind (telemetry).
+    pub fn macro_root_q(&self) -> Option<f32> {
+        match &self.agent {
+            Some(SearchAgent::MacroMcts(a)) => a.last_root_q_raw(),
+            _ => None,
+        }
+    }
+
+    /// This ply's micro-mcts root Q (`tree(V_net)`), ungated and fresh every
+    /// ply. Telemetry only for now -- see `MacroMctsAgent::micro_root_q`.
+    pub fn micro_root_q(&self) -> Option<f32> {
+        match &self.agent {
+            Some(SearchAgent::MacroMcts(a)) => a.micro_root_q(),
+            _ => None,
+        }
+    }
+
     /// Retrieve the trace captured by the most recent `think_decomposed`
     /// call, if `request_trace` was called beforehand and search actually
     /// reached a final selection.

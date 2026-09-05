@@ -32,6 +32,16 @@ pub(crate) struct HistoryStep {
     pub(crate) root_value: Option<f32>,
     /// Raw NN root value (tanh-bounded, pre-search) — value-head calibration only.
     pub(crate) root_own_value: Option<f32>,
+    /// `evaluate_state` at decision time, on its own score-differential scale.
+    /// Recorded so its usability as a TD bootstrap can be calibrated offline.
+    pub(crate) heur_value: f32,
+    /// Macro root Q ungated by leaf kind — the value `last_root_value`
+    /// suppresses under the heuristic leaf. Telemetry only, never a label.
+    pub(crate) macro_root_q: Option<f32>,
+    /// This ply's micro-mcts root Q (`tree(V_net)`) — fresh every ply,
+    /// available under every macro leaf kind, `None` when micro-mcts didn't
+    /// run this ply. Telemetry only, never a label (see `Brain::micro_root_q`).
+    pub(crate) micro_root_q: Option<f32>,
     /// Ground-truth (unfogged) non-invisible enemy-unit occupancy at decision
     /// time, POV-relative — the aux_fog_units target.
     pub(crate) enemy_units: Vec<f32>,
@@ -68,6 +78,13 @@ pub(crate) struct HistoryStep {
     /// on every ply after the first within a turn, or when the planner finds
     /// no feasible plan (no city, or every scenario infeasible).
     pub(crate) eco_ceiling: Option<[f32; 4]>,
+    /// EXP_ELO_125 (piece 4): label for the cheap rollout-value estimator —
+    /// `micro_root_value.or(root_value).or(calibrated_heur(heur_value))`,
+    /// captured once per (turn, pov) via `rollout_value_for_history_step`
+    /// (the only point where "pre-execution state + the goal about to run"
+    /// matches real data, unlike every later ply in the same turn). `None`
+    /// after the first ply within a turn.
+    pub(crate) rollout_value_label: Option<f32>,
 }
 
 /// Result from a single game - contains all data needed for training

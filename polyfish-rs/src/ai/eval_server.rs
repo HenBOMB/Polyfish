@@ -287,6 +287,7 @@ impl InferenceBackend {
                 value_out.fog_probs.as_ref(),
                 value_out.macro_stance_probs.as_ref(),
                 value_out.macro_order_maps.as_ref(),
+                value_out.rollout_value.as_ref(),
             )
                     .expect("BUG: failed to read policy batch to CPU");
                 (values, progress, policy_rows)
@@ -915,6 +916,7 @@ impl InlineEvalHandle {
                 value_out.fog_probs.as_ref(),
                 value_out.macro_stance_probs.as_ref(),
                 value_out.macro_order_maps.as_ref(),
+                value_out.rollout_value.as_ref(),
             )
             .expect("BUG: failed to read policy batch to CPU");
 
@@ -983,6 +985,7 @@ impl DummyEvalHandle {
                 fog: None,
                 macro_stance: None,
                 macro_order: None,
+                rollout_value: None,
                 action_type: vec![0.0; 11],
                 source_spatial: vec![0.0; spatial],
                 target_spatial: vec![0.0; spatial],
@@ -1005,6 +1008,16 @@ impl DummyEvalHandle {
                 cv: Condvar::new(),
             })
         });
+        self
+    }
+
+    /// EXP_ELO_125 (piece 4 test seam): report a fixed `rollout_value` from
+    /// every `evaluate` call, so the frozen-edge sign convention can be
+    /// pinned without a real trained checkpoint.
+    pub fn with_rollout_value(mut self, v: f32) -> Self {
+        let mut row = (*self.uniform).clone();
+        row.rollout_value = Some(v);
+        self.uniform = Arc::new(row);
         self
     }
 

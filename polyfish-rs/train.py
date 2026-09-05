@@ -78,6 +78,12 @@ AUX_DIMS = {'aux_ownership': 121, 'aux_fog_units': 121, 'aux_spt': 2, 'aux_opp_t
 # unaffected until explicitly turned on.
 MACRO_STANCE_W = float(os.environ.get("MACRO_STANCE_W", "0.0"))
 MACRO_ORDER_W = float(os.environ.get("MACRO_ORDER_W", "0.0"))
+# EXP_ELO_125 (piece 4): cheap rollout-value estimator. Same treatment as
+# the macro policy head above -- mirrored into Rust (network.rs's
+# pi_rollout_value), consumed at inference (macro-mcts's depth-gated
+# frozen-edge shortcut), row-masked (aux_rollout_value_mask), not in
+# AUX_DIMS. Default 0.0: existing training unaffected until turned on.
+ROLLOUT_VALUE_W = float(os.environ.get("ROLLOUT_VALUE_W", "0.0"))
 # EXP_ELO_066: every macro_stance/macro_order training row's spatial input
 # is painted with the search's own COMMITTED (already-chosen) goal -- the
 # label is that same search's visit-mass marginalization, so the head could
@@ -301,6 +307,18 @@ class PolyZeroNet(nn.Module):
         self.pi_macro_stance = nn.Linear(self.filters, 4)
         self.pi_macro_order = nn.Conv2d(self.filters, 3, 1)
 
+        # --- Rollout-value head (EXP_ELO_125, piece 4) ---
+        # Same mirrored-into-Rust treatment as the macro policy head above
+        # (network.rs's pi_rollout_value) -- off v_latent like pi_macro_stance
+        # (this is semantically a value prediction, not a policy one), a
+        # single tanh-bounded scalar. Unlike macro_stance/order, its training
+        # rows are NOT root-uncommitted (see labels.rs's
+        # rollout_value_for_history_step doc) -- painted with the goal that
+        # ply's search actually ran under, matching the head's own inference-
+        # time painting convention, so this does NOT need the blind_spatial
+        # goal-blind forward macro_stance/order requires.
+        self.pi_rollout_value = nn.Linear(self.filters, 1)
+
     def forward(self, spatial_map, player_state):
         batch_size = spatial_map.size(0)
         
@@ -362,6 +380,11 @@ class PolyZeroNet(nn.Module):
         values['macro_stance'] = torch.softmax(self.pi_macro_stance(stance_input), dim=1)
         values['macro_order'] = torch.sigmoid(self.pi_macro_order(order_input).flatten(1))
 
+        # EXP_ELO_125 (piece 4): same detach gate as macro_stance/order --
+        # shares the capacity-competition risk DETACH_MACRO_HEADS exists for.
+        rollout_value_input = v_latent.detach() if DETACH_MACRO_HEADS else v_latent
+        values['rollout_value'] = torch.tanh(self.pi_rollout_value(rollout_value_input))
+
         return policy, values, aux
 
 def city_masked_mse(pred, target):
@@ -390,7 +413,8 @@ def city_masked_mse(pred, target):
 def compute_loss(policy_pred, values_pred, policy_targets, value_target,
                  aux_pred=None, aux_targets=None, aux_mask=None,
                  ref_policy_pred=None, kl_ref_weight=0.0,
-                 macro_stance_target=None, macro_order_target=None, macro_mask=None):
+                 macro_stance_target=None, macro_order_target=None, macro_mask=None,
+                 rollout_value_target=None, rollout_value_mask=None):
     """
     Compute multi-head loss using decomposed targets.
     policy_targets is a dict containing the 7 target tensors.
@@ -507,6 +531,23 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target,
             l = (per_sample * mask).sum() / denom
             macro_losses['macro_order'] = l
             total_loss = total_loss + MACRO_ORDER_W * l
+
+    # EXP_ELO_125 (piece 4): rollout-value head, same per-row-mask shape as
+    # macro_stance/order (not the aux heads' per-file convention) -- see
+    # labels.rs's rollout_value_for_history_step doc. Already tanh-bounded
+    # like values_pred['win'], so plain MSE, not a from-logits loss.
+    if (
+        ROLLOUT_VALUE_W > 0.0
+        and rollout_value_target is not None
+        and rollout_value_mask is not None
+        and 'rollout_value' in values_pred
+    ):
+        mask = rollout_value_mask.squeeze(-1) if rollout_value_mask.dim() > 1 else rollout_value_mask
+        denom = mask.sum().clamp(min=1.0)
+        per_sample = ((values_pred['rollout_value'] - rollout_value_target) ** 2).mean(dim=1)
+        l = (per_sample * mask).sum() / denom
+        macro_losses['rollout_value'] = l
+        total_loss = total_loss + ROLLOUT_VALUE_W * l
 
     # loss_win returned raw (unweighted, no aux terms) — value_r2 needs it;
     # value_loss alone can't be unweighted once loss_progress is mixed in.
@@ -690,6 +731,12 @@ def train():
         c_macro_stance = []
         c_macro_order = []
         c_macro_mask = []
+        # EXP_ELO_125 (piece 4): rollout-value target, same per-row-mask
+        # shape as macro_stance/order above -- own dedicated mask, not
+        # AUX_DIMS's per-file convention (presence varies per row, once per
+        # (turn, pov), same shape as macro_ballot).
+        c_rollout_value = []
+        c_rollout_value_mask = []
 
         for f in chunk_files:
             try:
@@ -770,6 +817,14 @@ def train():
                     c_macro_order.append(torch.zeros(n, order_dim))
                     c_macro_mask.append(torch.zeros(n, 1))
 
+                # EXP_ELO_125 (piece 4): rollout-value target, same shape.
+                if "aux_rollout_value" in data and "aux_rollout_value_mask" in data:
+                    c_rollout_value.append(data["aux_rollout_value"].float())
+                    c_rollout_value_mask.append(data["aux_rollout_value_mask"].float())
+                else:
+                    c_rollout_value.append(torch.zeros(n, 1))
+                    c_rollout_value_mask.append(torch.zeros(n, 1))
+
             except Exception as e:
                 print(f"Error loading {f}: {e}")
                 continue
@@ -808,6 +863,8 @@ def train():
             target_macro_stance = torch.cat(c_macro_stance)
             target_macro_order = torch.cat(c_macro_order)
             macro_mask = torch.cat(c_macro_mask)
+            target_rollout_value = torch.cat(c_rollout_value)
+            rollout_value_mask = torch.cat(c_rollout_value_mask)
 
         except RuntimeError as e:
             print(f"OOM loading chunk: {e}")
@@ -816,6 +873,7 @@ def train():
         # Cleanup lists
         del c_spatial, c_player, c_win, c_progress, c_aux, c_aux_mask
         del c_macro_stance, c_macro_order, c_macro_mask
+        del c_rollout_value, c_rollout_value_mask
         gc.collect()
 
         dataset_size = len(spatial_maps)
@@ -832,6 +890,8 @@ def train():
             "target_macro_stance": target_macro_stance,
             "target_macro_order": target_macro_order,
             "macro_mask": macro_mask,
+            "target_rollout_value": target_rollout_value,
+            "rollout_value_mask": rollout_value_mask,
             "dataset_size": dataset_size,
             "chunk_idx": chunk_idx,
         }
@@ -986,8 +1046,8 @@ def train():
         total_aux_t = {k: torch.zeros((), device=DEVICE) for k in AUX_DIMS}
         total_aux_n_t = {k: torch.zeros((), device=DEVICE) for k in AUX_DIMS}
         total_kl_t = torch.zeros((), device=DEVICE)
-        total_macro_t = {'macro_stance': torch.zeros((), device=DEVICE), 'macro_order': torch.zeros((), device=DEVICE)}
-        total_macro_n_t = {'macro_stance': torch.zeros((), device=DEVICE), 'macro_order': torch.zeros((), device=DEVICE)}
+        total_macro_t = {'macro_stance': torch.zeros((), device=DEVICE), 'macro_order': torch.zeros((), device=DEVICE), 'rollout_value': torch.zeros((), device=DEVICE)}
+        total_macro_n_t = {'macro_stance': torch.zeros((), device=DEVICE), 'macro_order': torch.zeros((), device=DEVICE), 'rollout_value': torch.zeros((), device=DEVICE)}
 
         print(f"\n=== Epoch {epoch+1}/{EPOCHS} ===")
 
@@ -1002,6 +1062,8 @@ def train():
             target_macro_stance = chunk["target_macro_stance"]
             target_macro_order = chunk["target_macro_order"]
             macro_mask = chunk["macro_mask"]
+            target_rollout_value = chunk["target_rollout_value"]
+            rollout_value_mask = chunk["rollout_value_mask"]
             dataset_size = chunk["dataset_size"]
             chunk_idx = chunk["chunk_idx"]
 
@@ -1032,6 +1094,8 @@ def train():
                 batch_macro_stance = target_macro_stance[batch_idx].to(DEVICE)
                 batch_macro_order = target_macro_order[batch_idx].to(DEVICE)
                 batch_macro_mask = macro_mask[batch_idx].to(DEVICE)
+                batch_rollout_value = target_rollout_value[batch_idx].to(DEVICE)
+                batch_rollout_value_mask = rollout_value_mask[batch_idx].to(DEVICE)
 
                 # Reshape spatial to (B, C, H, W)
                 batch_spatial = batch_spatial.view(-1, SPATIAL_CHANNELS, MAP_SIZE, MAP_SIZE)
@@ -1106,7 +1170,8 @@ def train():
                     policy_pred, values_pred, batch_targets, batch_values,
                     aux_pred, batch_aux, batch_aux_mask,
                     ref_policy_pred, KL_REF_WEIGHT,
-                    batch_macro_stance, batch_macro_order, batch_macro_mask)
+                    batch_macro_stance, batch_macro_order, batch_macro_mask,
+                    batch_rollout_value, batch_rollout_value_mask)
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -1129,10 +1194,21 @@ def train():
                 if kl_losses:
                     total_kl_t += sum(kl_losses.values()).detach()
                 if macro_losses:
-                    n_macro = batch_macro_mask.sum().detach()
+                    # EXP_ELO_125: each key's own mask count, not a single
+                    # shared `n_macro` -- rollout_value's mask (once-per-
+                    # (turn,pov) label capture) tracks a different thing than
+                    # macro_stance/order's (whether a macro-mcts ballot ran
+                    # this row), and reusing one count for both would
+                    # silently mis-weight whichever key doesn't own it.
+                    macro_mask_by_key = {
+                        'macro_stance': batch_macro_mask,
+                        'macro_order': batch_macro_mask,
+                        'rollout_value': batch_rollout_value_mask,
+                    }
                     for k, l in macro_losses.items():
-                        total_macro_n_t[k] += n_macro
-                        total_macro_t[k] += l.detach() * n_macro
+                        n_k = macro_mask_by_key[k].sum().detach()
+                        total_macro_n_t[k] += n_k
+                        total_macro_t[k] += l.detach() * n_k
 
                 global_batch_num = total_batches
                 if global_batch_num in report_batch_indices:
@@ -1207,13 +1283,18 @@ def train():
     total_macro_n = {k: v.item() for k, v in total_macro_n_t.items()}
     final_macro = {
         k: (total_macro_t[k].item() / total_macro_n[k] if total_macro_n.get(k, 0) > 0 else 0.0)
-        for k in ('macro_stance', 'macro_order')
+        for k in ('macro_stance', 'macro_order', 'rollout_value')
     }
     if MACRO_STANCE_W > 0.0 or MACRO_ORDER_W > 0.0:
         print(
             f"  macro_stance_loss={final_macro['macro_stance']:.4f} "
             f"macro_order_loss={final_macro['macro_order']:.4f} "
             f"(supervised rows: {int(total_macro_n['macro_stance'])}/{target_n})"
+        )
+    if ROLLOUT_VALUE_W > 0.0:
+        print(
+            f"  rollout_value_loss={final_macro['rollout_value']:.4f} "
+            f"(supervised rows: {int(total_macro_n['rollout_value'])}/{target_n})"
         )
 
     # R^2 of the win head against the LAST epoch's own target distribution:

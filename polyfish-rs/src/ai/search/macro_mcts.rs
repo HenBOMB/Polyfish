@@ -336,6 +336,13 @@ struct Node {
     /// node and for the root when the weight is 0.0 (the default) — in both
     /// cases `select_edge` runs the original plain-UCT path unchanged.
     edge_prior: Vec<f32>,
+    /// EXP_ELO_125 (piece 4): cached `pi_rollout_value` estimate for an edge
+    /// that was frozen (never got a real child `Node` / never called
+    /// `execute_turn`) — populated the first time `rollout_nn_w` freezes
+    /// that edge, so a re-visit reuses the cached value instead of paying a
+    /// fresh eval-server round trip. `None` for every edge with a real
+    /// child, and for every edge before it's ever been frozen.
+    edge_frozen: Vec<Option<f32>>,
 }
 
 impl Node {
@@ -389,6 +396,7 @@ impl Node {
             frozen_value,
             from,
             edge_prior: Vec::new(),
+            edge_frozen: vec![None; n],
         }
     }
 
@@ -564,6 +572,37 @@ fn leaf_value(
     crate::ai::evaluate_state(state, player)
 }
 
+/// EXP_ELO_125 (piece 4): cheap NN estimate of a candidate directive's
+/// post-turn value, WITHOUT executing it (no `execute_turn`/`rank_plies`
+/// call) — reads the `pi_rollout_value` head off the PARENT's pre-execution
+/// state with the candidate's own goal painted. `None` when the checkpoint
+/// predates this head or the active backend doesn't produce it; caller must
+/// fall back to full simulation in that case, same convention as
+/// `RawPolicyOutput::fog`/`macro_stance`.
+///
+/// Returns the value in `player`'s OWN perspective (matching the label this
+/// head is trained on: real per-ply rows where `pov` = the mover) — the
+/// caller must negate once to match `leaf_value`'s convention for a real
+/// child (`cn.player` = `other(player)`); see the sign-convention test.
+fn rollout_nn_value(
+    eval: &crate::ai::eval_server::Evaluator,
+    state: &crate::states::GameState,
+    player: PlayerId,
+    goal: &MacroGoal,
+) -> Option<f32> {
+    let feats = crate::ai::features::state_to_cpu_features_goal(state, player, None, Some(goal)).ok()?;
+    let raw = eval.evaluate(vec![feats]).into_iter().next()?.2;
+    raw.rollout_value
+}
+
+/// Outcome of `MacroMctsSearch::expand`: either a real child node (full
+/// `execute_turn` simulation ran) or a frozen edge (the cheap NN estimator
+/// scored it directly, no child `Node`/`GameState` exists for it).
+enum ExpandOutcome {
+    Node(usize),
+    Frozen(f32),
+}
+
 impl<'a> MacroMctsSearch<'a> {
     /// Run `sims` simulations from `root_game` (the acting player's fogged
     /// view) and return the winning root directive index. Root candidate 0
@@ -622,6 +661,7 @@ impl<'a> MacroMctsSearch<'a> {
         root.edge_visits = vec![0.0; n];
         root.edge_values = vec![0.0; n];
         root.edge_shape = vec![0.0; n];
+        root.edge_frozen = vec![None; n];
 
         // War-room item 3: inject the macro policy head as a PUCT-style
         // prior at the root only, one eval call per real turn decision (not
@@ -769,18 +809,33 @@ impl<'a> MacroMctsSearch<'a> {
                 idx = child;
                 continue;
             }
-            let child = self.expand(idx, e, root_turn, params);
-            let cn = &self.nodes[child];
-            value = cn.frozen_value.unwrap_or_else(|| {
-                leaf_value(
-                    self.eval,
-                    self.leaf,
-                    &cn.game.state,
-                    cn.player,
-                    cn.counters[seat(cn.player)].tier3_bought,
-                    cn.from.as_ref().map(|(p, g)| (*p, g)),
-                )
-            });
+            // EXP_ELO_125 (piece 4): an edge frozen by the cheap NN
+            // estimator on a previous visit -- reuse the cached value
+            // instead of re-querying the eval server every time.
+            if let Some(v) = self.nodes[idx].edge_frozen[e] {
+                value = v;
+                break;
+            }
+            let depth = path.len();
+            match self.expand(idx, e, root_turn, params, depth) {
+                ExpandOutcome::Node(child) => {
+                    let cn = &self.nodes[child];
+                    value = cn.frozen_value.unwrap_or_else(|| {
+                        leaf_value(
+                            self.eval,
+                            self.leaf,
+                            &cn.game.state,
+                            cn.player,
+                            cn.counters[seat(cn.player)].tier3_bought,
+                            cn.from.as_ref().map(|(p, g)| (*p, g)),
+                        )
+                    });
+                }
+                ExpandOutcome::Frozen(v) => {
+                    self.nodes[idx].edge_frozen[e] = Some(v);
+                    value = v;
+                }
+            }
             // The child's value is from the child's perspective; the edge we
             // just descended belongs to the parent, so negate once here and
             // once per level in the unwind below.
@@ -800,7 +855,7 @@ impl<'a> MacroMctsSearch<'a> {
         self.stats.max_depth = self.stats.max_depth.max(path.len());
     }
 
-    fn expand(&mut self, parent: usize, edge: usize, root_turn: i32, params: &MacroParams) -> usize {
+    fn expand(&mut self, parent: usize, edge: usize, root_turn: i32, params: &MacroParams, depth: usize) -> ExpandOutcome {
         let (mut game, player, mut counters, mut lane_states, goal) = {
             let p = &self.nodes[parent];
             (
@@ -811,6 +866,18 @@ impl<'a> MacroMctsSearch<'a> {
                 p.candidates[edge].clone(),
             )
         };
+        // EXP_ELO_125 (piece 4): depth-gated cheap rollout estimator. A
+        // variance/importance control, NOT a fix for the root-painting-
+        // mismatch risk (a candidate's goal is exactly as "uncommitted" at
+        // this depth as at the root) -- root-adjacent edges (depth <=
+        // rollout_nn_min_depth) always get full execute_turn simulation,
+        // since root-level accuracy directly determines the real per-turn
+        // commit and piece 3's own root prior already covers the root.
+        if params.rollout_nn_w > 0.0 && depth > params.rollout_nn_min_depth {
+            if let Some(raw_value) = rollout_nn_value(self.eval, &game.state, player, &goal) {
+                return ExpandOutcome::Frozen(-raw_value);
+            }
+        }
         let s = seat(player);
         // EXP_ELO_036b: pre-move potential of THIS edge's directive, with one
         // GoalAux for both sides of the difference (the executor's
@@ -885,7 +952,7 @@ impl<'a> MacroMctsSearch<'a> {
                 child_state,
             );
         }
-        child_idx
+        ExpandOutcome::Node(child_idx)
     }
 }
 
@@ -940,6 +1007,11 @@ pub struct MacroMctsAgent<'a> {
     /// predicted move didn't end up executed; otherwise carried ply to ply
     /// within the same turn so a search's unused depth isn't discarded.
     micro_carry: Option<crate::ai::search::micro_mcts::MicroTreeCarry>,
+    /// This ply's micro-mcts root Q (`tree(V_net)`, the picked child's own
+    /// backed-up value) -- telemetry only for now (see `micro_root_q`).
+    /// `None` whenever micro-mcts didn't run this ply (too few candidates,
+    /// disabled via `POLYFISH_MICRO_MCTS_SIMS=0`, or a lone EndTurn).
+    last_micro_root_q: Option<f32>,
 }
 
 /// EXP_ELO_038: how many recent picked directives stay on the ballot.
@@ -1155,6 +1227,7 @@ impl<'a> MacroMctsAgent<'a> {
             intra_strips: 0,
             unit_goals: crate::ai::search::unit_goals::UnitGoalStore::default(),
             micro_carry: None,
+            last_micro_root_q: None,
         }
     }
 
@@ -1188,6 +1261,22 @@ impl<'a> MacroMctsAgent<'a> {
             }
             MacroLeaf::Heuristic => None,
         }
+    }
+
+    /// `root_q` with no leaf gate — the tree's backed-up value of the winning
+    /// root edge whatever scored the leaves. Telemetry only: `last_root_value`
+    /// stays the TD-label path.
+    pub fn last_root_q_raw(&self) -> Option<f32> {
+        self.last_stats.root_q
+    }
+
+    /// This ply's micro-mcts root Q (`tree(V_net)`) -- see
+    /// `last_micro_root_q`'s field doc. Fresh every ply (unlike
+    /// `last_root_q_raw`, which only updates once per turn), and available
+    /// under every macro leaf kind since it is computed independently of
+    /// which evaluator scores the macro tree's own leaves.
+    pub fn micro_root_q(&self) -> Option<f32> {
+        self.last_micro_root_q
     }
 
     /// The current turn's root ballot: candidate directives and the tree's
@@ -1374,6 +1463,7 @@ impl<'a> MacroMctsAgent<'a> {
             serde_json::Value,
             crate::ai::search::micro_mcts::MicroTreeCarry,
         )> = None;
+        self.last_micro_root_q = None;
         if let Some(micro_params) = crate::ai::search::micro_mcts::micro_mcts_params() {
             let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
             let aux = crate::ai::search::goal_aux::compute_goal_aux(
@@ -1384,7 +1474,7 @@ impl<'a> MacroMctsAgent<'a> {
                 self.counters.tier3_bought,
                 Some(&self.lane_state),
             );
-            let (pick, next_carry) = crate::ai::search::micro_mcts::micro_search_pick(
+            let (pick, next_carry, picked_q) = crate::ai::search::micro_mcts::micro_search_pick(
                 &view,
                 pov,
                 &goal,
@@ -1395,6 +1485,7 @@ impl<'a> MacroMctsAgent<'a> {
                 &micro_params,
                 self.micro_carry.take(),
             );
+            self.last_micro_root_q = picked_q;
             if let Some(idx) = pick {
                 let predicted_key = ranked[idx].1.serialize();
                 ranked.swap(0, idx);
@@ -1517,6 +1608,7 @@ mod tests {
             n.edge_visits = vec![0.0];
             n.edge_values = vec![0.0];
             n.edge_shape = vec![shape];
+            n.edge_frozen = vec![None];
             n.frozen_value = frozen;
             n
         };
@@ -1955,6 +2047,7 @@ mod tests {
         n.children = vec![None; candidates];
         n.edge_visits = vec![0.0; candidates];
         n.edge_values = vec![0.0; candidates];
+        n.edge_frozen = vec![None; candidates];
         n
     }
 
@@ -2004,5 +2097,62 @@ mod tests {
 
         n.edge_prior = vec![0.0, 5.0]; // large weight, all on edge 1
         assert_eq!(n.select_edge(), 1, "a strong prior should be able to flip the pick");
+    }
+
+    /// EXP_ELO_125 (piece 4): the frozen-edge sign convention. The new head
+    /// is trained on real per-ply rows where `pov` = the mover, so its raw
+    /// output is already in the ROOT's own player's perspective -- `expand`
+    /// must negate it once before returning, to match what a real child's
+    /// `leaf_value` read would be (`cn.player` = `other(player)`), so the
+    /// existing negamax unwind in `simulate` applies uniformly. Getting the
+    /// sign wrong here silently inverts every frozen edge's contribution
+    /// without any panic or type error to catch it.
+    #[test]
+    fn frozen_edge_matches_real_child_sign_convention() {
+        let game = generated_game(5);
+        let root_turn = game.state.settings.turn;
+        let mut params = MacroParams::default();
+        params.rollout_nn_w = 1.0;
+        params.rollout_nn_min_depth = 0; // freeze fires at depth 1 (root's own edges)
+        let rollout_value = 0.7f32;
+        let evaluator =
+            Evaluator::Dummy(DummyEvalHandle::new().with_rollout_value(rollout_value));
+
+        let root = bare_node(&game, root_turn, 1);
+        let mut search = MacroMctsSearch {
+            nodes: vec![root],
+            pov: 1,
+            eval: &evaluator,
+            leaf: crate::ai::macro_agent::MacroLeaf::Heuristic,
+            stats: MacroMctsStats::default(),
+        };
+        search.simulate(0, root_turn, &params);
+
+        // No real child was ever created -- the edge must stay frozen, not
+        // expanded, and the cached value must be reusable on a second visit
+        // without changing (proves the cache actually fires, not just that
+        // the sign is right on the first pass).
+        assert!(search.nodes[0].children[0].is_none(), "a frozen edge must not get a real child Node");
+        assert_eq!(search.nodes[0].edge_frozen[0], Some(-rollout_value));
+
+        // The unwind's own negation must exactly cancel the one `expand`
+        // applies, so a root-adjacent frozen edge's Q equals the head's raw
+        // output -- getting the sign wrong here would flip this to -0.7.
+        let got = search.nodes[0].edge_values[0];
+        assert!(
+            (got - rollout_value).abs() < 1e-6,
+            "frozen-edge Q {got} != raw rollout_value {rollout_value} -- sign convention broken"
+        );
+
+        // Re-simulate: must reuse the cached value (same Q delta), not
+        // silently re-freeze or fall through to a real expansion.
+        search.simulate(0, root_turn, &params);
+        assert!(search.nodes[0].children[0].is_none());
+        let got2 = search.nodes[0].edge_values[0];
+        assert!(
+            (got2 - 2.0 * rollout_value).abs() < 1e-6,
+            "second visit should add the SAME cached value again: {got2} != {}",
+            2.0 * rollout_value
+        );
     }
 }

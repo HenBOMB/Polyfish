@@ -125,6 +125,8 @@ fn main() -> anyhow::Result<()> {
         belief_mode: BeliefMode::Off,
         shape_w: 0.0,
         root_prior_w: 0.0,
+        rollout_nn_w: 0.0,
+        rollout_nn_min_depth: usize::MAX,
     };
     let macro_params1 = MacroParams {
         sims: args.macro_sims1.unwrap_or(args.macro_sims),
@@ -132,6 +134,8 @@ fn main() -> anyhow::Result<()> {
         belief_mode: belief_mode1,
         shape_w: args.macro_shape_w1,
         root_prior_w: args.macro_root_prior_w1,
+        rollout_nn_w: args.macro_rollout_nn_w1,
+        rollout_nn_min_depth: args.macro_rollout_nn_min_depth1,
         leaf: args.macro_leaf1.unwrap_or(args.macro_leaf),
         ..base_params
     };
@@ -141,6 +145,8 @@ fn main() -> anyhow::Result<()> {
         belief_mode: belief_mode2,
         shape_w: args.macro_shape_w2,
         root_prior_w: args.macro_root_prior_w2,
+        rollout_nn_w: args.macro_rollout_nn_w2,
+        rollout_nn_min_depth: args.macro_rollout_nn_min_depth2,
         leaf: args.macro_leaf2.unwrap_or(args.macro_leaf),
         ..base_params
     };

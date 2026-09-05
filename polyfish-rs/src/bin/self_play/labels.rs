@@ -49,6 +49,9 @@ pub(crate) struct LabelStep {
     pub(crate) my_score: f32,
     pub(crate) opp_score: f32,
     pub(crate) root_value: Option<f32>,
+    /// `evaluate_state` at this decision, on its own score-differential
+    /// scale -- the `MissingBootstrap::Heur` fallback's raw material.
+    pub(crate) heur_value: f32,
 }
 
 impl From<&HistoryStep> for LabelStep {
@@ -59,6 +62,7 @@ impl From<&HistoryStep> for LabelStep {
             my_score: s.my_score,
             opp_score: s.opp_score,
             root_value: s.root_value,
+            heur_value: s.heur_value,
         }
     }
 }
@@ -72,6 +76,7 @@ pub(crate) struct Checkpoint {
     pub(crate) my: f32,
     pub(crate) opp: f32,
     pub(crate) root_value: Option<f32>,
+    pub(crate) heur_value: f32,
 }
 
 pub(crate) fn checkpoints_by_player(history: &[LabelStep]) -> HashMap<PlayerId, Vec<Checkpoint>> {
@@ -84,6 +89,7 @@ pub(crate) fn checkpoints_by_player(history: &[LabelStep]) -> HashMap<PlayerId, 
                     c.my = step.my_score;
                     c.opp = step.opp_score;
                     c.root_value = step.root_value;
+                    c.heur_value = step.heur_value;
                 }
             }
             _ => list.push(Checkpoint {
@@ -91,6 +97,7 @@ pub(crate) fn checkpoints_by_player(history: &[LabelStep]) -> HashMap<PlayerId, 
                 my: step.my_score,
                 opp: step.opp_score,
                 root_value: step.root_value,
+                heur_value: step.heur_value,
             }),
         }
     }
@@ -111,6 +118,32 @@ pub(crate) enum MissingBootstrap {
     /// back to the Monte-Carlo (λ=1) return over that region instead of
     /// being pulled toward zero.
     Mc,
+    /// Bootstrap with a calibrated `evaluate_state` reading instead of
+    /// carrying to full-MC. Motivation: under the heuristic macro leaf
+    /// `root_value` is always None (Mc is the only fallback), so the value
+    /// target collapses to the (variance ~0.6) final-outcome return even
+    /// though a low-variance per-decision anchor is available for free.
+    /// Calibration measured 2026-09-03, n=22,813 decision points (60 games,
+    /// heuristic macro leaf, generation defaults): `evaluate_state` vs
+    /// `final_outcome` r²=0.372 (beats `score_ratio`'s r²=0.338 on the same
+    /// rows), near-zero-bias linear fit `HEUR_TO_OUTCOME_SLOPE/INTERCEPT`
+    /// below. See hypothesis_driven_improvements.md.
+    Heur,
+}
+
+/// Linear map from `evaluate_state`'s own scale to the outcome scale
+/// `td_lambda_labels` bootstraps in, fit by OLS against `final_outcome`
+/// (see `MissingBootstrap::Heur`). `evaluate_state`'s natural range in the
+/// calibration sample was [-0.82, 0.85] — narrower than [-1,1] — so a raw
+/// plug-in would under-scale the bootstrap by more than 2x.
+const HEUR_TO_OUTCOME_SLOPE: f32 = 2.3479;
+const HEUR_TO_OUTCOME_INTERCEPT: f32 = -0.0092;
+
+/// `pub(crate)`: also reused by `game.rs` for the EXP_ELO_125 (piece 4)
+/// rollout-value label's fallback tier when neither `micro_root_value` nor
+/// `root_value` is available.
+pub(crate) fn calibrated_heur(v: f32) -> f32 {
+    (HEUR_TO_OUTCOME_SLOPE * v + HEUR_TO_OUTCOME_INTERCEPT).clamp(-1.0, 1.0)
 }
 
 pub(crate) fn td_lambda_labels(
@@ -153,13 +186,18 @@ pub(crate) fn td_lambda_labels(
             let mut acc = 0.0f32;
             let mut remaining_weight = 1.0f32;
             for cp in &ahead[start..] {
-                if missing == MissingBootstrap::Mc && cp.root_value.is_none() {
-                    continue; // weight carries forward to the terminal return
-                }
+                let bootstrap = match cp.root_value {
+                    Some(v) => v,
+                    None => match missing {
+                        MissingBootstrap::Zero => 0.0,
+                        MissingBootstrap::Mc => continue, // weight carries forward to the terminal return
+                        MissingBootstrap::Heur => calibrated_heur(cp.heur_value),
+                    },
+                };
                 // Outcome space carries no per-window reward and no discount —
                 // a γ<1 here would deflate early-game labels toward 0 by depth.
                 let n_step_return = if wl_z.is_some() {
-                    cp.root_value.unwrap_or(0.0)
+                    bootstrap
                 } else {
                     let r = reward::normalized_reward_wf(
                         step.my_score,
@@ -169,7 +207,7 @@ pub(crate) fn td_lambda_labels(
                         label_rel_w,
                     );
                     let dt = (cp.turn - step.turn).max(0);
-                    r + reward::GAMMA_TURN.powi(dt) * cp.root_value.unwrap_or(0.0)
+                    r + reward::GAMMA_TURN.powi(dt) * bootstrap
                 };
 
                 let w = remaining_weight * (1.0 - lambda);
@@ -507,6 +545,31 @@ pub(crate) fn eco_ceiling_for_history_step(
     }
     *last_key = Some(key);
     ceiling
+}
+
+/// EXP_ELO_125 (piece 4): label capture for the cheap rollout-value
+/// estimator. Same once-per-(turn,pov) dedup shape as
+/// `eco_ceiling_for_history_step` — the only point where "pre-execution
+/// state + the goal about to run" genuinely exists in real data is the
+/// FIRST ply of a turn (later plies reflect partial execution of that same
+/// turn, a different regime the new head is never asked about at
+/// inference). Own dedicated `last_key`, not `macro_ballot`'s or
+/// `eco_ceiling`'s -- this must fire regardless of which agent is running,
+/// not gated to macro-seat rows only.
+///
+/// `value` should already be the priority-resolved label
+/// (`micro_root_value.or(root_value).or(Some(calibrated_heur(heur_value)))`)
+/// — this function only handles the dedup, not the source priority.
+pub(crate) fn rollout_value_for_history_step(
+    key: (i32, PlayerId),
+    last_key: &mut Option<(i32, PlayerId)>,
+    value: Option<f32>,
+) -> Option<f32> {
+    if *last_key == Some(key) {
+        return None;
+    }
+    *last_key = Some(key);
+    value
 }
 
 /// End-of-episode ground truth for the aux heads: per-tile owner ids,

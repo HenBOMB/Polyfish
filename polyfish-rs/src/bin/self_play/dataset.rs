@@ -63,6 +63,11 @@ pub(crate) struct ShardBuffers {
     // this mask instead of the blanket per-file one.
     collected_aux_eco_ceiling: Vec<Vec<f32>>,
     collected_eco_ceiling_mask: Vec<f32>,
+    // EXP_ELO_125 (piece 4): rollout-value estimator label. Row-masked like
+    // eco_ceiling (once per (turn, pov), not every row) -- scalar per row,
+    // not a 4-vec.
+    collected_rollout_value: Vec<f32>,
+    collected_rollout_value_mask: Vec<f32>,
     // Horizon-compression Stage 2 (EXP_ELO_120): plain per-file AUX_DIMS
     // convention, no row mask needed -- unlike eco_ceiling, siege_opens is
     // always computable post-game, for every row.
@@ -111,6 +116,8 @@ impl ShardBuffers {
             collected_aux_territory1: Vec::new(),
             collected_aux_eco_ceiling: Vec::new(),
             collected_eco_ceiling_mask: Vec::new(),
+            collected_rollout_value: Vec::new(),
+            collected_rollout_value_mask: Vec::new(),
             collected_aux_pressure: Vec::new(),
             collected_aux_army5: Vec::new(),
             collected_aux_tech: Vec::new(),
@@ -151,6 +158,8 @@ impl ShardBuffers {
             collected_aux_territory1,
             collected_aux_eco_ceiling,
             collected_eco_ceiling_mask,
+            collected_rollout_value,
+            collected_rollout_value_mask,
             collected_aux_pressure,
             collected_aux_army5,
             collected_aux_tech,
@@ -243,8 +252,12 @@ impl ShardBuffers {
                 opp_score: step_opp_score,
                 root_value: step_root_value,
                 root_own_value: step_root_own_value,
+                heur_value: step_heur_value,
+                macro_root_q: step_macro_root_q,
+                micro_root_q: step_micro_root_q,
                 macro_ballot,
                 eco_ceiling,
+                rollout_value_label,
                 my_territory: step_my_territory,
                 opp_territory: step_opp_territory,
                 ..
@@ -329,12 +342,19 @@ impl ShardBuffers {
 
             // Value-head calibration: NN prediction vs current-score-ratio vs
             // the actual final outcome, for net seats that ran a real search.
-            if let (Some(f), Some(rv)) = (value_calib_file.as_mut(), step_root_value) {
+            if let Some(f) = value_calib_file.as_mut() {
                 if is_net_seat(result.roles, p_id) {
-                    let raw = step_root_own_value.unwrap_or(rv);
+                    // `root_value` is None under the heuristic macro leaf, which is
+                    // exactly the config this dump must cover — emit JSON null there
+                    // rather than dropping the row.
+                    let js = |v: Option<f32>| v.map_or("null".to_string(), |x| x.to_string());
+                    let rv = js(step_root_value);
+                    let raw = js(step_root_own_value.or(step_root_value));
+                    let mrq = js(step_macro_root_q);
+                    let mcq = js(step_micro_root_q);
                     let _ = writeln!(
                         f,
-                        "{{\"turn\":{turn},\"my\":{step_my_score},\"opp\":{step_opp_score},\"root_value\":{rv},\"raw_value\":{raw},\"final_outcome\":{final_outcome},\"value_target\":{value}}}"
+                        "{{\"turn\":{turn},\"p\":{p_id},\"my\":{step_my_score},\"opp\":{step_opp_score},\"root_value\":{rv},\"raw_value\":{raw},\"heur_value\":{step_heur_value},\"macro_root_q\":{mrq},\"micro_root_q\":{mcq},\"final_outcome\":{final_outcome},\"value_target\":{value}}}"
                     );
                 }
             }
@@ -406,6 +426,13 @@ impl ShardBuffers {
                 collected_aux_eco_ceiling.push(vec![0.0; 4]);
                 collected_eco_ceiling_mask.push(0.0);
             }
+            if let Some(v) = rollout_value_label {
+                collected_rollout_value.push(v);
+                collected_rollout_value_mask.push(1.0);
+            } else {
+                collected_rollout_value.push(0.0);
+                collected_rollout_value_mask.push(0.0);
+            }
             collected_aux_pressure.push(siege_pressure_target(&result.siege_opens, turn, opp_id));
             let (army_my, army_opp) = army_target(
                 army_cp.get(&p_id),
@@ -456,6 +483,8 @@ impl ShardBuffers {
             std::mem::take(&mut self.collected_aux_territory1),
             std::mem::take(&mut self.collected_aux_eco_ceiling),
             std::mem::take(&mut self.collected_eco_ceiling_mask),
+            std::mem::take(&mut self.collected_rollout_value),
+            std::mem::take(&mut self.collected_rollout_value_mask),
             std::mem::take(&mut self.collected_aux_pressure),
             std::mem::take(&mut self.collected_aux_army5),
             std::mem::take(&mut self.collected_aux_pursuit),
@@ -500,6 +529,8 @@ impl ShardBuffers {
             std::mem::take(&mut self.collected_aux_territory1),
             std::mem::take(&mut self.collected_aux_eco_ceiling),
             std::mem::take(&mut self.collected_eco_ceiling_mask),
+            std::mem::take(&mut self.collected_rollout_value),
+            std::mem::take(&mut self.collected_rollout_value_mask),
             std::mem::take(&mut self.collected_aux_pressure),
             std::mem::take(&mut self.collected_aux_army5),
             std::mem::take(&mut self.collected_aux_pursuit),

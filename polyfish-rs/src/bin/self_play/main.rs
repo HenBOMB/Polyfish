@@ -121,13 +121,15 @@ fn main() -> anyhow::Result<()> {
         );
     }
     if !is_macro_backend
-        && (args.macro_leaf != MacroLeaf::Heuristic
+        && (args.macro_leaf != MacroLeaf::NetAsym
             || args.macro_sims != 32
             || args.macro_k != 4
             || args.macro_lambda != 1.0
             || args.macro_rollout_lambda.is_some()
             || args.macro_shape_w != 0.0
-            || args.macro_root_prior_w != 0.0)
+            || args.macro_root_prior_w != 0.05
+            || args.macro_rollout_nn_w != 1.0
+            || args.macro_rollout_nn_min_depth != 1)
     {
         anyhow::bail!("--macro-* flags require --search-backend macro-mcts");
     }
@@ -139,6 +141,8 @@ fn main() -> anyhow::Result<()> {
         sims: args.macro_sims,
         shape_w: args.macro_shape_w,
         root_prior_w: args.macro_root_prior_w,
+        rollout_nn_w: args.macro_rollout_nn_w,
+        rollout_nn_min_depth: args.macro_rollout_nn_min_depth,
         ..MacroParams::default()
     };
 

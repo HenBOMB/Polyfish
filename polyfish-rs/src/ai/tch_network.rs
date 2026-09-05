@@ -222,6 +222,12 @@ impl TchPolyZeroNet {
         let macro_order = has_macro_policy
             .then(|| self.conv2d(&x, "pi_macro_order", 0).flatten(1, 3).sigmoid());
 
+        // EXP_ELO_125 (piece 4): cheap rollout-value estimator, off the
+        // value trunk like pi_macro_stance -- same mirroring rationale.
+        let has_rollout_value = self.w.contains_key("pi_rollout_value.weight");
+        let rollout_value =
+            has_rollout_value.then(|| self.linear(&v_latent, "pi_rollout_value").tanh());
+
         // Read value + 4 policy heads back to CPU in a SINGLE device->CPU
         // copy. Each .to_device(Cpu) on MPS forces a commit +
         // waitUntilCompleted, so per-head readbacks stall the stream ~5x per
@@ -236,13 +242,15 @@ impl TchPolyZeroNet {
         const FG: usize = SPATIAL as usize; // 121, only when the head exists
         const MST: usize = 4; // macro_stance, only when the head exists
         const MOR: usize = 3 * SPATIAL as usize; // macro_order, only when the head exists
+        const RV: usize = 1; // rollout_value, only when the head exists
         let row_len: usize = V
             + AT
             + SS
             + TS
             + MO
             + if has_fog { FG } else { 0 }
-            + if has_macro_policy { MST + MOR } else { 0 };
+            + if has_macro_policy { MST + MOR } else { 0 }
+            + if has_rollout_value { RV } else { 0 };
 
         let mut parts: Vec<&Tensor> =
             vec![&win, &action_type, &source_spatial, &target_spatial, &move_option];
@@ -254,6 +262,9 @@ impl TchPolyZeroNet {
         }
         if let Some(o) = macro_order.as_ref() {
             parts.push(o);
+        }
+        if let Some(r) = rollout_value.as_ref() {
+            parts.push(r);
         }
         let row = Tensor::cat(&parts, 1); // [B, row_len], on-device
         let flat: Vec<f32> = row
@@ -281,6 +292,8 @@ impl TchPolyZeroNet {
             let macro_stance = has_macro_policy.then(|| flat[ms_off..ms_off + MST].to_vec());
             let mor_off = ms_off + MST;
             let macro_order = has_macro_policy.then(|| flat[mor_off..mor_off + MOR].to_vec());
+            let rv_off = mor_off + if has_macro_policy { MOR } else { 0 };
+            let rollout_value = has_rollout_value.then(|| flat[rv_off]);
             policy.push(RawPolicyOutput {
                 action_type,
                 source_spatial,
@@ -289,6 +302,7 @@ impl TchPolyZeroNet {
                 fog,
                 macro_stance,
                 macro_order,
+                rollout_value,
             });
         }
         (values, policy)

@@ -9,12 +9,24 @@ use polyfish::states::{TechnologyState, TribeState, UnitState};
 use polyfish::types::{TechnologyType, UnitEffect};
 
     fn step(player_id: PlayerId, turn: i32, my: i32, opp: i32, rv: Option<f32>) -> LabelStep {
+        step_h(player_id, turn, my, opp, rv, 0.0)
+    }
+
+    fn step_h(
+        player_id: PlayerId,
+        turn: i32,
+        my: i32,
+        opp: i32,
+        rv: Option<f32>,
+        heur_value: f32,
+    ) -> LabelStep {
         LabelStep {
             player_id,
             turn,
             my_score: my as f32,
             opp_score: opp as f32,
             root_value: rv,
+            heur_value,
         }
     }
 
@@ -45,6 +57,41 @@ use polyfish::types::{TechnologyType, UnitEffect};
         assert!(
             (zero[0] - expected).abs() > 1e-6,
             "zero-bootstrap must still truncate (legacy semantics pinned elsewhere)"
+        );
+    }
+
+    /// `Heur` must not skip a missing-root checkpoint (unlike `Mc`) and must
+    /// not zero it (unlike `Zero`) -- it substitutes a calibrated
+    /// `evaluate_state` reading as the bootstrap, at lambda=0 so exactly one
+    /// checkpoint is exercised and the arithmetic is checkable by hand.
+    #[test]
+    fn heur_fallback_bootstraps_on_calibrated_evaluate_state_not_mc_or_zero() {
+        let history = vec![
+            step_h(1, 5, 1000, 800, None, 0.1), // i (heur_value unused: not a checkpoint bootstrap source here)
+            step_h(1, 6, 1100, 800, None, 0.3), // checkpoint n=1, root_value missing
+        ];
+        let final_scores = finals(&[(1, 5000), (2, 800)]);
+
+        let heur = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Heur);
+        let mc = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Mc);
+        let zero = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero);
+
+        let r = reward::normalized_reward(1000, 800, 1100, 800);
+        let bootstrap = (HEUR_TO_OUTCOME_SLOPE * 0.3 + HEUR_TO_OUTCOME_INTERCEPT).clamp(-1.0, 1.0);
+        let expected = (r + reward::GAMMA_TURN.powi(1) * bootstrap).clamp(-1.0, 1.0);
+
+        assert!(
+            (heur[0] - expected).abs() < 1e-6,
+            "heur label {} should bootstrap on the calibrated evaluate_state reading {expected}",
+            heur[0]
+        );
+        assert!(
+            (heur[0] - mc[0]).abs() > 1e-6,
+            "heur must not degrade to mc's full-terminal-return skip"
+        );
+        assert!(
+            (heur[0] - zero[0]).abs() > 1e-6,
+            "heur must not degrade to zero's truncated-to-0.0 bootstrap"
         );
     }
 

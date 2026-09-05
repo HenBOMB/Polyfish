@@ -352,6 +352,68 @@ mod tests {
         );
     }
 
+    /// EXP_ELO_125 (piece 4): same discipline as
+    /// `macro_policy_head_agrees_across_backends`, for the rollout-value
+    /// head. Uses `checkpoints/rollout_value_head_ref.safetensors`
+    /// (gitignored, generate once piece 4's own validation training
+    /// produces a real checkpoint carrying `pi_rollout_value` -- until then
+    /// this returns early, same as the fog/macro-policy tests did before
+    /// their own fixtures existed).
+    #[test]
+    fn rollout_value_head_agrees_across_backends() {
+        let path = "checkpoints/rollout_value_head_ref.safetensors";
+        if !std::path::Path::new(path).exists() {
+            return;
+        }
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f32 / (1u64 << 53) as f32
+        };
+        let batch = 2usize;
+        let spatial: Vec<f32> = (0..batch * super::NUM_CHANNELS * super::SPATIAL)
+            .map(|_| next())
+            .collect();
+        let player: Vec<f32> = (0..batch * super::PLAYER_DIM).map(|_| next()).collect();
+
+        let metal = match super::MetalPolyZeroNet::load(path) {
+            Ok(n) => n,
+            Err(_) => return,
+        };
+        let (_, metal_rows) = metal.forward_batch(&spatial, &player, batch);
+        let Some(metal_rv) = metal_rows[0].rollout_value else {
+            panic!("fixture carries pi_rollout_value; the Metal graph must emit it");
+        };
+        assert!((-1.0..=1.0).contains(&metal_rv), "rollout_value must be tanh-bounded, got {metal_rv}");
+
+        use candle_core::{DType, Device, Tensor as CTensor};
+        let vb = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(
+                &[std::path::Path::new(path)],
+                DType::F32,
+                &Device::Cpu,
+            )
+        };
+        let Ok(vb) = vb else { return };
+        let Ok(cnet) = crate::ai::network::PolyZeroNet::new(vb) else { return };
+        let cmap = CTensor::from_vec(
+            spatial.clone(),
+            (batch, super::NUM_CHANNELS, super::MAP_SIZE, super::MAP_SIZE),
+            &Device::Cpu,
+        )
+        .unwrap();
+        let cplayer =
+            CTensor::from_vec(player.clone(), (batch, super::PLAYER_DIM), &Device::Cpu).unwrap();
+        let (_, cval) = cnet.forward(&cmap, &cplayer).unwrap();
+        let crv = cval.rollout_value.expect("candle must emit rollout_value");
+        let crv0 = crv.get(0).unwrap().to_vec1::<f32>().unwrap()[0];
+
+        let d = (metal_rv - crv0).abs();
+        assert!(d < 2e-3, "Metal and candle rollout_value disagree by {d} (metal {metal_rv} candle {crv0})");
+    }
+
 }
 
 /// PolyZeroNet inference via a hand-composed MPSGraph. Holds the raw weight
@@ -371,6 +433,9 @@ pub struct MetalPolyZeroNet {
     /// together — one flag, not two, matching how they're always
     /// trained/saved as a pair).
     has_macro_policy: bool,
+    /// EXP_ELO_125 (piece 4): whether this checkpoint carries the mirrored
+    /// rollout-value head. Same fixed-at-load rationale as `has_macro_policy`.
+    has_rollout_value: bool,
     device: MetalDevice,
     queue: CommandQueue,
     /// Shared descriptor for async submission (`waitUntilCompleted = false`);
@@ -459,6 +524,7 @@ impl MetalPolyZeroNet {
         Ok(Self {
             has_fog: weights.contains_key("aux_fog.weight"),
             has_macro_policy: weights.contains_key("pi_macro_stance.weight"),
+            has_rollout_value: weights.contains_key("pi_rollout_value.weight"),
             weights,
             device,
             queue,
@@ -840,6 +906,17 @@ impl MetalPolyZeroNet {
                 .expect("forward: flatten pi_macro_order")
         });
 
+        // EXP_ELO_125 (piece 4): cheap rollout-value estimator, off v_latent
+        // like win. Tanh IS available in the Metal bindings (unlike
+        // softmax/sigmoid), so this applies the activation in-graph, same as
+        // `win`, rather than deferring to `slice_outputs`.
+        let rollout_value_raw = self.has_rollout_value.then(|| {
+            let lin = self.linear(&graph, &v_latent, "pi_rollout_value");
+            graph
+                .unary_arithmetic(UnaryArithmeticOp::Tanh, &lin, None)
+                .expect("forward: tanh rollout_value")
+        });
+
         // Compile for this fixed batch size. The `Executable` is
         // self-contained; `graph` and its intermediate `Tensor`s (including
         // the placeholders) are dropped when this function returns.
@@ -857,10 +934,10 @@ impl MetalPolyZeroNet {
         ];
         // Output order is a fixed convention shared by build_and_compile,
         // submit_set, and slice_outputs: win, action, source, target,
-        // option, [fog], [macro_stance], [macro_order] — each optional slot
-        // present iff its has_X flag is true. The three sites MUST check in
-        // this same order or the positional indices in slice_outputs drift
-        // out of sync with what was actually compiled.
+        // option, [fog], [macro_stance], [macro_order], [rollout_value] —
+        // each optional slot present iff its has_X flag is true. The three
+        // sites MUST check in this same order or the positional indices in
+        // slice_outputs drift out of sync with what was actually compiled.
         let mut targets: Vec<&Tensor> =
             vec![&win, &action_type, &source_spatial, &target_spatial, &move_option];
         if let Some(f) = fog_spatial.as_ref() {
@@ -871,6 +948,9 @@ impl MetalPolyZeroNet {
         }
         if let Some(o) = macro_order_spatial.as_ref() {
             targets.push(o);
+        }
+        if let Some(r) = rollout_value_raw.as_ref() {
+            targets.push(r);
         }
         let executable = graph
             .compile(&self.device, &feed_descs, &targets)
@@ -920,7 +1000,7 @@ impl MetalPolyZeroNet {
             .run(&self.queue, &[&spatial_data, &player_data])
             .expect("mpsgraph: executable.run failed");
 
-        slice_outputs(&results, batch, self.has_fog, self.has_macro_policy)
+        slice_outputs(&results, batch, self.has_fog, self.has_macro_policy, self.has_rollout_value)
     }
 
     /// Allocate a fresh buffer set sized for `capacity_rows` rows.
@@ -942,6 +1022,7 @@ impl MetalPolyZeroNet {
             fog: f32_buf(capacity_rows * SPATIAL),
             macro_stance: f32_buf(capacity_rows * MACRO_STANCE_DIM),
             macro_order: f32_buf(capacity_rows * MACRO_ORDER_DIM),
+            rollout_value: f32_buf(capacity_rows),
         }
     }
 
@@ -988,6 +1069,9 @@ impl MetalPolyZeroNet {
             outputs.push(td(&set.macro_stance, &[batch, MACRO_STANCE_DIM]));
             outputs.push(td(&set.macro_order, &[batch, MACRO_ORDER_DIM]));
         }
+        if self.has_rollout_value {
+            outputs.push(td(&set.rollout_value, &[batch, 1]));
+        }
         let output_refs: Vec<&TensorData> = outputs.iter().collect();
 
         let mut executables = self.executables.borrow_mut();
@@ -1018,6 +1102,7 @@ impl MetalPolyZeroNet {
             pool: Rc::clone(&self.pool),
             has_fog: self.has_fog,
             has_macro_policy: self.has_macro_policy,
+            has_rollout_value: self.has_rollout_value,
         }
     }
 
@@ -1078,6 +1163,7 @@ struct BufferSet {
     fog: MetalBuffer,
     macro_stance: MetalBuffer,
     macro_order: MetalBuffer,
+    rollout_value: MetalBuffer,
 }
 
 /// Copy an f32 slice into a shared-storage Metal buffer.
@@ -1107,6 +1193,7 @@ pub struct InFlightForward {
     /// independent optional heads.
     has_fog: bool,
     has_macro_policy: bool,
+    has_rollout_value: bool,
 }
 
 impl InFlightForward {
@@ -1120,7 +1207,7 @@ impl InFlightForward {
     /// Read the outputs back to CPU floats and return the buffer set to the
     /// pool. Only valid after [`wait`](Self::wait).
     pub fn readback(mut self) -> (Vec<f32>, Vec<RawPolicyOutput>) {
-        let out = slice_outputs(&self.outputs, self.batch, self.has_fog, self.has_macro_policy);
+        let out = slice_outputs(&self.outputs, self.batch, self.has_fog, self.has_macro_policy, self.has_rollout_value);
         if let Some(set) = self.set.take() {
             self.pool.borrow_mut().push(set);
         }
@@ -1133,21 +1220,23 @@ impl InFlightForward {
 /// `(value, RawPolicyOutput)` CPU data. Shared by the sync and async paths
 /// so both produce byte-identical results.
 ///
-/// `has_fog`/`has_macro_policy` MUST match what `build_and_compile`
-/// actually compiled into the executable that produced `results` — passed
-/// explicitly (not inferred from `results.len()`) because two independent
-/// optional heads make length ambiguous on its own (fog contributes 1 slot,
-/// macro_policy contributes 2 — several `(has_fog, has_macro_policy)`
-/// combinations are still uniquely decodable by length, but inferring that
-/// silently is exactly the kind of positional bug this comment exists to
-/// prevent). The read order below — fog, then macro_stance, then
-/// macro_order — MUST match the push order in `build_and_compile`'s
-/// `targets` and `submit_set`'s `outputs`.
+/// `has_fog`/`has_macro_policy`/`has_rollout_value` MUST match what
+/// `build_and_compile` actually compiled into the executable that produced
+/// `results` — passed explicitly (not inferred from `results.len()`)
+/// because independent optional heads make length ambiguous on its own
+/// (fog contributes 1 slot, macro_policy contributes 2, rollout_value
+/// contributes 1 — several combinations are still uniquely decodable by
+/// length, but inferring that silently is exactly the kind of positional
+/// bug this comment exists to prevent). The read order below — fog, then
+/// macro_stance, then macro_order, then rollout_value — MUST match the
+/// push order in `build_and_compile`'s `targets` and `submit_set`'s
+/// `outputs`.
 fn slice_outputs(
     results: &[TensorData],
     batch: usize,
     has_fog: bool,
     has_macro_policy: bool,
+    has_rollout_value: bool,
 ) -> (Vec<f32>, Vec<RawPolicyOutput>) {
     let win_v = results[0].read_f32().expect("forward: read win");
     let action_v = results[1].read_f32().expect("forward: read action");
@@ -1168,6 +1257,11 @@ fn slice_outputs(
     });
     let order_v = has_macro_policy.then(|| {
         let v = results[next].read_f32().expect("forward: read macro_order");
+        next += 1;
+        v
+    });
+    let rollout_value_v = has_rollout_value.then(|| {
+        let v = results[next].read_f32().expect("forward: read rollout_value");
         next += 1;
         v
     });
@@ -1209,6 +1303,9 @@ fn slice_outputs(
                     .map(|z| 1.0 / (1.0 + (-z).exp()))
                     .collect()
             }),
+            // Already tanh'd in-graph (see build_and_compile) -- no CPU
+            // activation needed, unlike fog/macro_stance/macro_order.
+            rollout_value: rollout_value_v.as_ref().map(|f| f[i]),
         });
     }
     (values, policy)

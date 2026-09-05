@@ -61,15 +61,51 @@ pub struct MacroParams {
     /// tree (pov's own edges only; 0.0 = off, byte-identical to pre-036b).
     pub shape_w: f32,
     /// War-room item 3: weight on the macro policy head's PUCT-style prior
-    /// at the search root (0.0 = off, byte-identical plain UCT — the
-    /// default, since this requires an eval-server call the heuristic path
-    /// otherwise never makes). See `select_edge`'s doc comment for the
-    /// formula and `decode_macro_prior` for how (stance, order) predictions
-    /// become a per-candidate score.
+    /// at the search root (0.0 = off, byte-identical plain UCT — this
+    /// struct's own default, kept for evaluator-free callers; see the
+    /// `Default` impl below). Production entry points default this to
+    /// 0.05 as of EXP_ELO_125 piece 3's 2026-09-05 validation (goal-blind
+    /// fix confirmed active, mechanically safe, flat win-rate). Requires
+    /// an eval-server call the heuristic path otherwise never makes. See
+    /// `select_edge`'s doc comment for the formula and `decode_macro_prior`
+    /// for how (stance, order) predictions become a per-candidate score.
     pub root_prior_w: f32,
+    /// EXP_ELO_125 (piece 4): weight on the cheap `pi_rollout_value` NN
+    /// estimator, used to freeze an edge (skip `execute_turn` entirely)
+    /// instead of fully simulating it. 0.0 = off, this struct's own
+    /// default (see the `Default` impl below). Production entry points
+    /// default this to 1.0 as of the 2026-09-05 validation: 50.0%/50.0%
+    /// win rate with a confirmed ~3.0x per-move speedup. See
+    /// `rollout_nn_min_depth` and `select_edge`'s sibling doc; this is a
+    /// variance/importance control, not a fix for the root-painting-
+    /// mismatch risk documented on `expand`.
+    pub rollout_nn_w: f32,
+    /// Minimum tree depth (1 = the root's own edges) at which
+    /// `rollout_nn_w` may freeze an edge. Root-adjacent edges (`depth <=`
+    /// this value) always get full `execute_turn` simulation, since
+    /// root-level accuracy directly determines the real per-turn commit.
+    /// Defaults to `usize::MAX` so freezing never fires until explicitly
+    /// enabled alongside `rollout_nn_w`.
+    pub rollout_nn_min_depth: usize,
 }
 
 impl Default for MacroParams {
+    /// `leaf`, `root_prior_w`, and `rollout_nn_w`/`rollout_nn_min_depth`
+    /// deliberately stay at their pre-net-driven-search values (`Heuristic`,
+    /// `0.0`, `0.0`/`usize::MAX`) even though the production entry points
+    /// (`self_play/main.rs` via CLI defaults, `arena/main.rs` via explicit
+    /// per-config args, `src/main.rs`'s `play_macro_params`) now default
+    /// `leaf` to `NetAsym`, `root_prior_w` to `0.05` (EXP_ELO_125 piece 3),
+    /// and `rollout_nn_w`/`_min_depth` to `1.0`/`1` (piece 4) -- this struct
+    /// default is what `macro_mcts.rs`'s own unit tests and several other
+    /// `..Default::default()` call sites (benchmark.rs, stats.rs, etc.) get
+    /// when constructed without a live evaluator or without opting into
+    /// search-tree-only mechanisms. Flipping it would silently change
+    /// evaluator-free tests. The real defaults live in each entry point's
+    /// own wiring; `arena`'s own CLI defaults for these three also stay off
+    /// deliberately, since arena is the instrument that measures each
+    /// mechanism and a bare invocation should compare a known baseline, not
+    /// silently diff the new default against itself.
     fn default() -> Self {
         Self {
             k: 4,
@@ -81,6 +117,8 @@ impl Default for MacroParams {
             belief_mode: BeliefMode::Off,
             shape_w: 0.0,
             root_prior_w: 0.0,
+            rollout_nn_w: 0.0,
+            rollout_nn_min_depth: usize::MAX,
         }
     }
 }

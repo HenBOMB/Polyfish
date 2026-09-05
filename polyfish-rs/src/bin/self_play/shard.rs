@@ -33,6 +33,8 @@ pub(crate) fn flush_shard(
     collected_aux_territory1: Vec<f32>,
     collected_aux_eco_ceiling: Vec<Vec<f32>>,
     collected_eco_ceiling_mask: Vec<f32>,
+    collected_rollout_value: Vec<f32>,
+    collected_rollout_value_mask: Vec<f32>,
     collected_aux_pressure: Vec<f32>,
     collected_aux_army5: Vec<f32>,
     collected_aux_pursuit: Vec<f32>,
@@ -108,6 +110,10 @@ pub(crate) fn flush_shard(
     )?;
     let eco_ceiling_mask_tensor =
         Tensor::from_vec(collected_eco_ceiling_mask, (total_steps, 1), device)?;
+    let rollout_value_tensor =
+        Tensor::from_vec(collected_rollout_value, (total_steps, 1), device)?;
+    let rollout_value_mask_tensor =
+        Tensor::from_vec(collected_rollout_value_mask, (total_steps, 1), device)?;
     let aux_pressure_tensor =
         Tensor::from_vec(collected_aux_pressure, (total_steps, 1), device)?;
     let aux_army5_tensor = Tensor::from_vec(collected_aux_army5, (total_steps, 2), device)?;
@@ -155,6 +161,8 @@ pub(crate) fn flush_shard(
     tensors.insert("aux_territory1".to_string(), aux_territory1_tensor);
     tensors.insert("aux_eco_ceiling".to_string(), aux_eco_ceiling_tensor);
     tensors.insert("aux_eco_ceiling_mask".to_string(), eco_ceiling_mask_tensor);
+    tensors.insert("aux_rollout_value".to_string(), rollout_value_tensor);
+    tensors.insert("aux_rollout_value_mask".to_string(), rollout_value_mask_tensor);
     tensors.insert("aux_pressure".to_string(), aux_pressure_tensor);
     tensors.insert("aux_army5".to_string(), aux_army5_tensor);
     tensors.insert("aux_opp_tech".to_string(), aux_tech_tensor);

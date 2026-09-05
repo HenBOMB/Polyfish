@@ -63,16 +63,25 @@ struct GoalSeat {
 const GOAL_W_TREE: f32 = 1.0;
 
 /// Stage-3 macro-mcts settings, matching `run_training_loop.sh`'s MACRO_GEN
-/// argv (`--macro-sims 64 --macro-k 6`, heuristic leaf). The net leaf and the
-/// root prior are both deliberately left off: the loop's own comment gates the
-/// net leaf behind a registered paired A/B, and the root prior needs the
-/// goal-blind retrained macro head. Micro-mcts rides along on its own default
-/// (EXP_ELO_119, sims=8), tunable only via `POLYFISH_MICRO_MCTS_*` at launch.
+/// argv (`--macro-sims 64 --macro-k 6`). Net-driven leaf as of the
+/// net-driven-search-everywhere push: `net-asym` measures 51.5-52.0% vs the
+/// heuristic leaf on the standard eval_seeds harness (EXP_ELO_123/124) — a
+/// bet on future self-improvement at today's parity, not a proven-now win.
+/// `root_prior_w`/`rollout_nn_w`/`rollout_nn_min_depth` match `self_play`'s
+/// own CLI defaults as of EXP_ELO_125's 2026-09-05 validation: the
+/// goal-blind fix is confirmed active and the root prior is mechanically
+/// safe (flat win-rate, 49.0% vs 51.0%); the rollout estimator is a clean
+/// win (50.0%/50.0%, ~3.0x speedup). Micro-mcts rides along on its own
+/// default (EXP_ELO_119, sims=8), tunable only via `POLYFISH_MICRO_MCTS_*`
+/// at launch.
 fn play_macro_params() -> MacroParams {
     MacroParams {
         sims: 64,
         k: 6,
-        leaf: polyfish::ai::macro_agent::MacroLeaf::Heuristic,
+        leaf: polyfish::ai::macro_agent::MacroLeaf::NetAsym,
+        root_prior_w: 0.05,
+        rollout_nn_w: 1.0,
+        rollout_nn_min_depth: 1,
         ..MacroParams::default()
     }
 }

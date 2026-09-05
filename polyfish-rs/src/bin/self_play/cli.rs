@@ -215,9 +215,11 @@ pub(crate) struct Args {
     pub(crate) search_backend: SearchBackendArg,
 
     /// macro-mcts leaf evaluator. `heuristic` = `evaluate_state`;
-    /// `net` consults the network (EXP_ELO_039). Until this existed the
-    /// backend silently ran the heuristic leaf in every MACRO_GEN round.
-    #[arg(long, value_enum, default_value_t = MacroLeaf::Heuristic)]
+    /// `net`/`net-asym` consult the network (EXP_ELO_039). Default is
+    /// `net-asym` as of the net-driven-search push: measures 51.5-52.0% vs
+    /// the heuristic leaf on eval_seeds (EXP_ELO_123/124) -- parity today,
+    /// a bet on the self-improvement loop going forward.
+    #[arg(long, value_enum, default_value_t = MacroLeaf::NetAsym)]
     pub(crate) macro_leaf: MacroLeaf,
 
     /// macro-mcts: simulations per turn-level search.
@@ -253,12 +255,36 @@ pub(crate) struct Args {
     pub(crate) macro_shape_w: f32,
 
     /// War-room item 3: weight on the macro policy head's PUCT-style
-    /// prior at the search root (0 = off, plain UCT — the default).
-    /// Costs one eval-server call per real turn decision (not per
-    /// rollout) when nonzero; the heuristic path otherwise never
-    /// touches the eval server at all.
-    #[arg(long, default_value_t = 0.0)]
+    /// prior at the search root (0 = off, plain UCT). Costs one
+    /// eval-server call per real turn decision (not per rollout) when
+    /// nonzero; the heuristic path otherwise never touches the eval
+    /// server at all. Default 0.05 as of EXP_ELO_125 piece 3's
+    /// 2026-09-05 validation (matched-pair + 200-game eval_seeds:
+    /// mechanically safe -- the pre-fix -18.75pp collapse is fully
+    /// resolved -- flat win-rate at this weight/budget, 49.0% vs
+    /// 51.0%) and Verdi's explicit "make it default ON" instruction.
+    #[arg(long, default_value_t = 0.05)]
     pub(crate) macro_root_prior_w: f32,
+
+    /// EXP_ELO_125 (piece 4): weight on the cheap `pi_rollout_value` NN
+    /// estimator. When nonzero, edges deeper than
+    /// `--macro-rollout-nn-min-depth` freeze on the estimator's value
+    /// instead of running full `execute_turn` simulation. Default 1.0
+    /// as of the 2026-09-05 matched-pair + arena validation: 50.0%/
+    /// 50.0% win rate (zero measured cost) with a confirmed ~3.0x
+    /// per-move speedup -- ships as default per the pre-registered
+    /// "ship regardless of arena outcome, as long as mechanically
+    /// correct" bar, which this result exceeded rather than merely met.
+    #[arg(long, default_value_t = 1.0)]
+    pub(crate) macro_rollout_nn_w: f32,
+
+    /// EXP_ELO_125 (piece 4): minimum tree depth (1 = the root's own edges)
+    /// at which `--macro-rollout-nn-w` may freeze an edge. Root-adjacent
+    /// edges always get full simulation regardless of this setting.
+    /// Default 1 (never freeze the root's own edges) -- the validated
+    /// config, see `macro_rollout_nn_w`.
+    #[arg(long, default_value_t = 1)]
+    pub(crate) macro_rollout_nn_min_depth: usize,
 
     /// What an n-step return does when its checkpoint reports no root
     /// value. `zero` bootstraps with 0.0 (legacy); `mc` carries the

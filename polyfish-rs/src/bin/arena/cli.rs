@@ -282,4 +282,22 @@ pub(crate) struct Args {
     /// Same as --macro-root-prior-w1, for config 2.
     #[arg(long, default_value_t = 0.0)]
     pub(crate) macro_root_prior_w2: f32,
+
+    /// EXP_ELO_125 (piece 4): weight on the cheap `pi_rollout_value` NN
+    /// estimator, config 1 (0 = off, the default).
+    #[arg(long, default_value_t = 0.0)]
+    pub(crate) macro_rollout_nn_w1: f32,
+
+    /// Same as --macro-rollout-nn-w1, for config 2.
+    #[arg(long, default_value_t = 0.0)]
+    pub(crate) macro_rollout_nn_w2: f32,
+
+    /// EXP_ELO_125 (piece 4): minimum tree depth at which
+    /// --macro-rollout-nn-w1 may freeze an edge, config 1.
+    #[arg(long, default_value_t = usize::MAX)]
+    pub(crate) macro_rollout_nn_min_depth1: usize,
+
+    /// Same as --macro-rollout-nn-min-depth1, for config 2.
+    #[arg(long, default_value_t = usize::MAX)]
+    pub(crate) macro_rollout_nn_min_depth2: usize,
 }
