@@ -159,6 +159,7 @@ pub(crate) fn run_games(
                     let game_tribes = vec![t1, t2];
 
                     // Ensure panicking game doesnt kill the whole run
+                    let game_wall_start = std::time::Instant::now();
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         play_single_game(
                             p1_net,
@@ -211,6 +212,9 @@ pub(crate) fn run_games(
                     });
 
                     if let Some(result) = result {
+                        crate::stats::record_game_duration_ms(
+                            game_wall_start.elapsed().as_millis() as u64,
+                        );
                         if progress_mode == ProgressMode::SampledFinish {
                             let done = games_completed.fetch_add(1, Ordering::Relaxed) + 1;
                             if finish_milestones.contains(&done) {

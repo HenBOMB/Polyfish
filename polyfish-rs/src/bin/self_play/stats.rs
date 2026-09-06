@@ -23,6 +23,48 @@ pub(crate) fn turn_milestones(max_turns: i32) -> Vec<i32> {
 pub(crate) fn finish_milestones(num_games: usize) -> Vec<usize> {
     (1..=5).map(|i| num_games * i / 5).collect()
 }
+
+/// EXP_ELO_127 diagnostic: raw wall-clock samples for throughput reads that
+/// need a distribution (median/p90), not just a run-wide mean -- `moves/sec`
+/// and `EVAL_SERVER_STATS_AGG` already give a single run-wide scalar, but
+/// neither says how *spread out* per-game or per-turn latency actually is.
+/// Process-local, diagnostic-only: never persisted, never read by training.
+static GAME_DURATIONS_MS: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+static TURN_DURATIONS_MS: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+
+pub(crate) fn record_game_duration_ms(ms: u64) {
+    GAME_DURATIONS_MS.lock().unwrap().push(ms);
+}
+
+/// A "turn" here is one player's own ply sequence for one round -- see the
+/// `(turn, pov)` boundary detection in `game.rs`'s main loop.
+pub(crate) fn record_turn_duration_ms(ms: u64) {
+    TURN_DURATIONS_MS.lock().unwrap().push(ms);
+}
+
+/// `p` in `[0.0, 1.0]`. Nearest-rank on a sorted copy -- fine for a
+/// diagnostic read, not claiming interpolation-grade precision.
+fn percentile_ms(mut samples: Vec<u64>, p: f64) -> Option<u64> {
+    if samples.is_empty() {
+        return None;
+    }
+    samples.sort_unstable();
+    let idx = ((samples.len() as f64 - 1.0) * p).round() as usize;
+    Some(samples[idx.min(samples.len() - 1)])
+}
+
+/// `(count, median_ms, p90_ms)` for every game timed so far this process.
+pub(crate) fn game_duration_stats() -> (usize, Option<u64>, Option<u64>) {
+    let samples = GAME_DURATIONS_MS.lock().unwrap().clone();
+    (samples.len(), percentile_ms(samples.clone(), 0.5), percentile_ms(samples, 0.9))
+}
+
+/// `(count, median_ms, p90_ms)` for every (turn, pov) timed so far this
+/// process.
+pub(crate) fn turn_duration_stats() -> (usize, Option<u64>, Option<u64>) {
+    let samples = TURN_DURATIONS_MS.lock().unwrap().clone();
+    (samples.len(), percentile_ms(samples.clone(), 0.5), percentile_ms(samples, 0.9))
+}
 pub(crate) const SPT_MILESTONES: [i32; 7] = [0, 5, 10, 15, 20, 25, 30];
 
 /// True when `pid`'s seat is controlled by the training net ("model" /

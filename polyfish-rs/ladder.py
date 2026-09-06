@@ -15,6 +15,13 @@ from datetime import datetime, timezone
 
 LADDER_FILE = os.environ.get("LADDER_FILE", "ladder.json")
 FREEZE_WR = 0.80
+# EXP_ELO_127 (Verdi, 2026-09-06): "for the time being" the ladder should
+# stay pinned on greedy rather than graduating to a frozen net anchor once
+# beaten 80%+ -- our win rate vs greedy is still low, so a fixed, permanent
+# reference makes "are we generally improving" and the plateau-stop signal
+# both more legible. NOT a removal: unset (or set to "0") to restore the
+# original graduate-past-greedy behavior once greedy is saturated (~99%).
+FREEZE_DISABLED = os.environ.get("LADDER_FREEZE_DISABLED", "0") == "1"
 PLATEAU_WINDOW = 8  # gauge readings vs the same anchor (= 80 iters at interval 10)
 PLATEAU_STRIKES = 2  # consecutive flagged readings before the loop stops
 
@@ -214,7 +221,7 @@ def cmd_record(args):
 
     action = "continue"
     if args.kind == "gauge":
-        if reading["win_rate"] >= FREEZE_WR:
+        if not FREEZE_DISABLED and reading["win_rate"] >= FREEZE_WR:
             action = "freeze"
             data["plateau_strikes"] = 0
         elif _plateau(_gauge_series(data, args.run_id)):

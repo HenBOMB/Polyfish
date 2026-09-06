@@ -336,6 +336,13 @@ pub(crate) fn play_single_game(
     // Per-player tempo tracking: turn-start samples + move-diff unit counters.
     let mut tempo: HashMap<PlayerId, TempoTrack> = HashMap::new();
     let mut last_tempo_key: Option<(i32, PlayerId)> = None;
+    // EXP_ELO_127 diagnostic: wall-clock time to fully play out one
+    // player's own turn (their ply sequence, turn-start to the next
+    // (turn, pov) boundary or game end). Independent of `last_tempo_key`
+    // -- a separate concern sharing the same turn/pov boundary detection,
+    // not derived from tempo's own state to avoid an ordering coupling.
+    let mut last_turn_key: Option<(i32, PlayerId)> = None;
+    let mut turn_wall_start: Option<std::time::Instant> = None;
     let mut prev_tally = unit_tally(&game.state);
     let mut move_count = 0;
     let mut net_moves = 0; // net-seat plies only (excludes Greedy/opponent seats)
@@ -404,6 +411,16 @@ pub(crate) fn play_single_game(
                 track.samples.push(s);
             }
             last_tempo_key = Some(tempo_key);
+        }
+
+        // EXP_ELO_127 diagnostic: close out the PREVIOUS (turn, pov)'s wall
+        // time the moment a new one is seen -- see `turn_wall_start`'s doc.
+        if last_turn_key != Some(tempo_key) {
+            if let Some(start) = turn_wall_start.take() {
+                crate::stats::record_turn_duration_ms(start.elapsed().as_millis() as u64);
+            }
+            turn_wall_start = Some(std::time::Instant::now());
+            last_turn_key = Some(tempo_key);
         }
 
 
@@ -982,6 +999,11 @@ pub(crate) fn play_single_game(
             break;
         }
         move_count += 1;
+    }
+    // EXP_ELO_127 diagnostic: the last (turn, pov) in the game never sees a
+    // "next turn" boundary to close it out -- flush it here.
+    if let Some(start) = turn_wall_start.take() {
+        crate::stats::record_turn_duration_ms(start.elapsed().as_millis() as u64);
     }
 
     // Final tempo sample per player from the end state (a capture on the last

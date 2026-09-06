@@ -130,6 +130,10 @@ LEAGUE_INTERVAL=10
 # NB: ladder.py's plateau rule counts READINGS, not iterations, so halving this
 # also halves the iteration span of its 8-reading windows.
 GAUGE_INTERVAL="${GAUGE_INTERVAL:-5}"
+# EXP_ELO_127 (Verdi, 2026-09-06): pin the ladder on greedy "for the time
+# being" -- see ladder.py's own comment. Override to 0 to restore the
+# original graduate-past-greedy-at-80%+ behavior.
+export LADDER_FREEZE_DISABLED="${LADDER_FREEZE_DISABLED:-1}"
 # Exported (like MCTS_ITERS) so arena inherits the run's search budget rather
 # than carrying its own default — a reading at a different (mcts, k) is not
 # comparable to the ladder.
@@ -749,16 +753,21 @@ do
         # GAUGE_MCTS to keep the ladder on one rung while training budget varies.
         GAUGE_MCTS_EFF="${GAUGE_MCTS:-$MCTS_ITERS}"
 
+        # EXP_ELO_127 (Verdi, 2026-09-06): the gauge used to run on the Gumbel
+        # backend regardless of what self_play/the live server actually
+        # deploy (macro-mcts, net-asym leaf, by default since the net-driven-
+        # search push) — it was measuring a search process nobody ships
+        # anymore. It also used random/incrementing seeds, whose map-
+        # generation variance swamps small behavioral effects (EXP_GATE_001).
+        # Both fixed at once: mirror self_play's exact production recipe for
+        # config 1, and read from eval_seeds.json (deterministic, no Gumbel
+        # RNG, ~1-2pp resolution) instead of random seeds.
+        # ⚠️ Readings before this date used a different backend AND a
+        # different seed source — do not compare across this boundary.
         # $1 = opponent model path ("" = greedy backend), $2 = seeds (games x2),
         # $3 = per-turn stats dump dir (optional; summarized into the reading)
-        # Gauge the policy we would DEPLOY, not the one that generates training
-        # data. GUMBEL_SCALE defaults to 1.0 = self-play exploration, and
-        # `argmax(logit + Gumbel)` is exactly a SAMPLE from softmax(prior) — so
-        # a noisy gauge measures a sampled policy, worth a measured -9..-13pp
-        # (60.6% vs 51.6% at n=256, same weights, Jul 27). It also halves
-        # ms/move and cuts reading variance, since only map sampling remains.
-        # ⚠️ Readings before Jul 27 2026 are noisy-policy and NOT comparable.
-        GAUGE_SCALE="${GAUGE_GUMBEL_SCALE:-0}"
+        GAUGE_MACRO_FLAGS="--macro-leaf1 net-asym --macro-sims1 ${GAUGE_MCTS_EFF} --macro-k1 6 \
+                --macro-root-prior-w1 0.05 --macro-rollout-nn-w1 1.0 --macro-rollout-nn-min-depth1 1"
 
         run_gauge_match () {
             GAUGE_STATS_DIR="$3"
@@ -767,14 +776,17 @@ do
                 DUMP_FLAG="--dump-stats-dir $GAUGE_STATS_DIR"
             fi
             if [ -z "$1" ]; then
-                GUMBEL_SCALE="$GAUGE_SCALE" "$ARENA_BIN" --model1 model.safetensors --model2 model.safetensors \
-                    --backend1 gumbel --backend2 greedy $GOAL_ARENA_FLAG \
-                    --mcts "$GAUGE_MCTS_EFF" --gumbel-k "$GUMBEL_K" $DUMP_FLAG \
+                "$ARENA_BIN" --model1 model.safetensors --model2 model.safetensors \
+                    --backend1 macro-mcts $GAUGE_MACRO_FLAGS --backend2 greedy \
+                    --mcts "$GAUGE_MCTS_EFF" --seed-file eval_seeds.json $DUMP_FLAG \
                     --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
             else
-                GUMBEL_SCALE="$GAUGE_SCALE" "$ARENA_BIN" --model1 model.safetensors --model2 "$1" \
-                    --backend1 gumbel --backend2 gumbel $GOAL_ARENA_FLAG \
-                    --mcts "$GAUGE_MCTS_EFF" --gumbel-k "$GUMBEL_K" $DUMP_FLAG \
+                "$ARENA_BIN" --model1 model.safetensors --model2 "$1" \
+                    --backend1 macro-mcts $GAUGE_MACRO_FLAGS \
+                    --backend2 macro-mcts --macro-leaf2 net-asym --macro-sims2 "${GAUGE_MCTS_EFF}" \
+                    --macro-k2 6 --macro-root-prior-w2 0.05 --macro-rollout-nn-w2 1.0 \
+                    --macro-rollout-nn-min-depth2 1 \
+                    --mcts "$GAUGE_MCTS_EFF" --seed-file eval_seeds.json $DUMP_FLAG \
                     --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
             fi
             GAUGE_W=$(sed -n 's/^Config 1 Wins: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
