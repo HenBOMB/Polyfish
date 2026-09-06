@@ -17683,3 +17683,121 @@ process. Both findings and both pieces of reasoning are recorded here
 precisely so this can be picked up and finished with real numbers once
 Verdi is back and the machine's memory situation can be assessed with
 them present.
+
+## EXP_ELO_130 — CPU cost reduction: adjacency precompute, scoped unit
+index, tiles IndexMap->Vec (pre-registration, 2026-09-06)
+
+CONTEXT: EXP_ELO_129 found the main self-play phase is ~94% CPU-
+saturated at just 32 actors (14 physical cores), not GPU-bound --
+Verdi's ask shifted from raising busy_frac to reducing per-decision
+CPU cost directly, targeting >=90% of CPU time as "irreducible" MCTS
+traversal work. A fresh `sample` profile (32 actors, 96 games, same
+production macro-mcts/net-asym recipe) of ~650K top-of-stack samples,
+54% legitimately idle (actors parked on eval-server replies), ~296K
+"real work" samples broke down as: malloc/free/memset churn ~15%,
+HashMap/IndexMap lookup+hash+rehash ~21% (IndexMap::get alone ~13%),
+`get_unit_at`/`get_enemy_at`'s O(units) linear scan (no spatial index
+exists anywhere, 65 call sites) ~10%, `get_adjacent_indices`
+recomputing+allocating every call despite fixed-per-game map size ~5%,
+`eco_plan` (city_build_on/enumerate_empire) ~12% (out of scope --
+already-optimized ground-truth planner, correctness-verification risk
+disproportionate to share). The call tree traces the dominant cost to
+ONE concentrated chain, not scattered: `rank_plies` ->
+`goal_potential_inner` -> `city_risks_with_threats` ->
+`can_attack_tile` -> `reach_search_turns` -> `is_terminal` ->
+`get_enemy_at`/`get_adjacent_indices`/tile lookups -- each of these
+6 functions has only 2-11 call sites total, making a scoped fix
+tractable without touching the other ~45 cold call sites of
+get_unit_at/get_enemy_at elsewhere in the engine.
+
+PRIOR ART, RESPECTED: EXP_ELO_063 (Aug 21 2026, commit 7eac8459) put a
+global `OnceLock<RwLock<HashMap>>` cache in `get_adjacent_indices` and
+it caused a ~40x actor-side slowdown under 128-actor concurrency (a
+shared reader-count atomic gets cache-line-contended across cores at
+this call frequency, distinct from lock blocking) -- reverted in favor
+of the current pre-sized-Vec-allocation approach. Any new caching here
+MUST avoid a runtime-shared lock entirely.
+
+HYPOTHESES:
+1. `get_adjacent_indices`: precompute a `LazyLock`-built, read-only
+(never mutated after first touch) table for every standard `MapSize`
+x range 1..=6, indexed by (size, range, idx). LazyLock's one-time
+init is a plain atomic load on the steady-state read path (no shared
+mutable counter), avoiding EXP_063's pathology by construction, not
+by luck. A size/range combo outside the table falls back to the
+existing uncached compute, so correctness never depends on the table.
+Expect: ~5%+ direct win, done first as the lowest-risk fix.
+2. `get_unit_at`/`get_enemy_at` in the `rank_plies` hot chain: `game.
+simulate_move` applies each candidate (apply-score-undo), so a unit-
+position index CANNOT be built once at the top of the loop -- it must
+be rebuilt from the mutated state once per candidate, after simulate_
+move, before phi_post scoring (confirmed by reading rank_plies's loop
+body). Thread an `Option<&UnitIndex>` (owned FxHashMap<tile_idx,
+(PlayerId, unit_vec_idx)>, rebuilt with one O(units) pass per
+candidate) through is_terminal/reach_search_turns/can_attack_tile/
+city_risks_with_threats/goal_potential_inner -- cold callers pass
+`None` and keep the linear-scan fallback untouched. Expect: turns K
+per-candidate O(units) scans (K = calls inside city_risks_with_
+threats's scoring) into 1 O(units) rebuild + K O(1) lookups per
+candidate -- a large win despite the rebuild-per-candidate concession
+forced by mutation.
+3. `GameState.tiles: IndexMap<i32, TileState, FxBuild>` -> `Vec
+<TileState>` (dense, tile indices are 0..map_size^2). Biggest lever,
+biggest blast radius -- gated on 4 pre-checks before committing to the
+rewrite: (a) states.rs's custom deserializer handles missing/sparse
+tiles from live_game.json/replays or assumes dense; (b) every
+`tiles.insert(` construction path inserts 0..n in index order (Vec
+iteration must match IndexMap iteration, or downstream order-sensitive
+code silently changes behavior -- EXP_ELO_091's same-seed fix was
+exactly an iteration-order bug); (c) `tiles.remove/entry/keys/
+contains_key(` usage count, since these don't map cleanly to Vec; (d)
+whether hash.rs's state hashing iterates tiles order-sensitively.
+
+EXPECTED: net effect across all three, ~80-85% of CPU time becomes
+"irreducible" MCTS/game-logic work, not the ~90% floor Verdi asked
+for -- eco_plan (~12%) is explicitly out of scope and some residual
+allocation/hashing overhead will remain. Verify per-fix against a
+paired-seed before/after (`git stash`), not the combined guess.
+
+PROCESS: one fix at a time, each verified (equivalence test where
+applicable + paired 32-game A/B via git stash) and committed before
+starting the next, per the standing hypothesis-driven-loop rule --
+not stacked uncommitted. Actual/verdict per fix recorded below as each
+lands.
+
+### Fix 1 (adjacency precompute) -- SHIPPED, verified
+
+`get_adjacent_indices` (`functions.rs`) now looks up a `LazyLock`-built
+table (every standard `MapSize` x range 1..=6, built once, eagerly,
+never mutated again) instead of recomputing coordinate math and
+heap-allocating a fresh `Vec` on every call; a size/range combo outside
+the table falls through to the original uncached compute unchanged. A
+sibling `get_adjacent_indices_static` returns a borrowed `Cow` for the
+one call site (Fix 2, not yet wired) hot enough that even the `to_vec()`
+clone matters. New `adjacency_table_tests` module exhaustively asserts
+the table matches the uncached compute for every (size, range, idx) it
+covers, plus fallback and cached-vs-static-agreement cases. Full suite
+green (388 lib tests incl. 3 new + all self_play/integration tests).
+
+VALIDATION -- paired 32-game/32-actor benchmark (`git stash`
+isolation, identical seed-file, identical production macro-mcts/net-
+asym config):
+
+| Metric | Before | After | Change |
+|---|---|---|---|
+| Game generation wall-clock | 1483.29s | 1445.21s | -2.6% |
+| Throughput (moves/sec) | 10.30 | 10.57 | +2.6% |
+| Game duration median | 161.07s | 156.12s | -3.1% |
+| Game duration p90 | 426.50s | 412.96s | -3.2% |
+| Turn duration median | 1701ms | 1639ms | -3.6% |
+| Turn duration p90 | 13627ms | 13387ms | -1.8% |
+| busy_frac | 0.166 | 0.161 | -1.5pp (expected -- cheaper work per row, not a regression signal on its own) |
+
+Total moves played identical (15271 both runs) and turn count identical
+(n=1477 both) -- same games, same decisions, confirming the fix is
+behavior-preserving under EXP_ELO_091's same-seed determinism
+guarantee, not just "close enough." Modest but real and consistent
+across every wall-clock metric, no regressions anywhere. Smaller in
+magnitude than EXP_ELO_128's ~5% (expected -- this function was ~5%
+of the profile vs. the settings tables' larger share). Proceeding to
+Fix 2 (scoped unit index in the `rank_plies` hot chain) next.

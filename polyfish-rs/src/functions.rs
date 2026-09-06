@@ -114,14 +114,9 @@ pub fn get_squared_euclidean_distance(a: i32, b: i32, size: i32) -> i32 {
     dx * dx + dy * dy
 }
 
-/// Get adjacent tile indices in a (2*range+1)x(2*range+1) square, excluding
-/// the center. Pure geometry -- a global RwLock<HashMap> cache sat here
-/// (Aug 2026, meant to dodge Vec realloc churn) but under 128 self-play
-/// actors it became a lock-contention bottleneck (~40x actor-side slowdown,
-/// confirmed via `sample`: this frame alone dominated the profile) for a
-/// problem the pre-sized capacity below already solves without a cache.
-pub fn get_adjacent_indices(state: &GameState, idx: i32, range: i32) -> Vec<i32> {
-    let size = state.settings.size;
+/// Raw geometry, no caching: every neighbor index in a
+/// (2*range+1)x(2*range+1) square around `idx`, excluding the center.
+fn adjacency_uncached(size: i32, idx: i32, range: i32) -> Vec<i32> {
     let coords = Coords::from_index(idx, size);
     let cap = ((2 * range + 1) * (2 * range + 1) - 1).max(0) as usize;
     let mut result = Vec::with_capacity(cap);
@@ -140,6 +135,79 @@ pub fn get_adjacent_indices(state: &GameState, idx: i32, range: i32) -> Vec<i32>
     }
 
     result
+}
+
+/// Every standard `MapSize` (see `types.rs`), for the eager table build
+/// below. A size outside this list (a test/tool-constructed map) just
+/// falls through to `adjacency_uncached` in both accessors below --
+/// correctness never depends on being in this table.
+const ADJACENCY_TABLE_SIZES: [i32; 6] = [11, 14, 16, 18, 20, 30];
+/// Highest `range` this repo passes to `get_adjacent_indices` today is 4
+/// (see call sites); this leaves headroom without materially growing the
+/// table (worst case ~30x30 tiles x range 6 is still a low-single-digit-ms
+/// one-time build).
+const ADJACENCY_TABLE_MAX_RANGE: i32 = 6;
+
+/// Precomputed, read-only adjacency tables for every standard map size x
+/// range 1..=ADJACENCY_TABLE_MAX_RANGE, keyed by (size, range) ->
+/// per-tile-index neighbor list. Pure geometry, so a result never changes
+/// for the life of the process once built.
+///
+/// A global `OnceLock<RwLock<HashMap>>` cache sat in this function once
+/// before (Aug 2026, EXP_ELO_063) and caused a ~40x actor-side slowdown
+/// under 128 self-play actors -- NOT lock blocking, but the RwLock's
+/// shared reader-count atomic getting cache-line-contended across cores at
+/// this call frequency. `LazyLock`'s steady-state read is a single atomic
+/// load of an "already initialized" flag with no per-read shared *write*,
+/// so it doesn't hit that pathology: this table is built COMPLETELY,
+/// eagerly, the one time any thread first touches it, and is never
+/// mutated again -- there is no write path for concurrent readers to
+/// contend on.
+static ADJACENCY_TABLE: std::sync::LazyLock<
+    rustc_hash::FxHashMap<(i32, i32), Vec<Vec<i32>>>,
+> = std::sync::LazyLock::new(|| {
+    let mut table = rustc_hash::FxHashMap::default();
+    for &size in &ADJACENCY_TABLE_SIZES {
+        for range in 1..=ADJACENCY_TABLE_MAX_RANGE {
+            let per_tile = (0..size * size)
+                .map(|idx| adjacency_uncached(size, idx, range))
+                .collect();
+            table.insert((size, range), per_tile);
+        }
+    }
+    table
+});
+
+fn adjacency_table_lookup(size: i32, idx: i32, range: i32) -> Option<&'static [i32]> {
+    ADJACENCY_TABLE
+        .get(&(size, range))
+        .and_then(|per_tile| per_tile.get(idx as usize))
+        .map(|v| v.as_slice())
+}
+
+/// Get adjacent tile indices in a (2*range+1)x(2*range+1) square, excluding
+/// the center. See `ADJACENCY_TABLE`'s doc for why this is safe to
+/// precompute (unlike the RwLock cache EXP_ELO_063 removed from here).
+pub fn get_adjacent_indices(state: &GameState, idx: i32, range: i32) -> Vec<i32> {
+    let size = state.settings.size;
+    match adjacency_table_lookup(size, idx, range) {
+        Some(cached) => cached.to_vec(),
+        None => adjacency_uncached(size, idx, range),
+    }
+}
+
+/// Same as `get_adjacent_indices`, but returns a borrow into the
+/// precomputed table with no allocation when the (size, range, idx) combo
+/// is covered -- for call sites hot enough that even the `to_vec()` clone
+/// above matters (e.g. `rank_plies`'s threat-scoring chain). Falls back to
+/// an owned, freshly-computed `Vec` (via `Cow`) otherwise, so callers get
+/// a uniform slice either way.
+pub fn get_adjacent_indices_static(state: &GameState, idx: i32, range: i32) -> std::borrow::Cow<'static, [i32]> {
+    let size = state.settings.size;
+    match adjacency_table_lookup(size, idx, range) {
+        Some(cached) => std::borrow::Cow::Borrowed(cached),
+        None => std::borrow::Cow::Owned(adjacency_uncached(size, idx, range)),
+    }
 }
 
 /// Get adjacent tiles
@@ -1547,5 +1615,61 @@ mod market_tests {
         }
         state.tiles.get_mut(&39).unwrap().owner = 2;
         assert_eq!(hub_level(&state, 50, StructureType::Sawmill, 1), 2);
+    }
+}
+
+#[cfg(test)]
+mod adjacency_table_tests {
+    use super::*;
+
+    /// EXP_ELO_130: the precomputed table must match the uncached compute
+    /// for every (size, range, idx) it covers -- a mismatch here would
+    /// silently corrupt every hot-path caller (threat scoring, movement)
+    /// that reads through `get_adjacent_indices`/`_static`.
+    #[test]
+    fn table_matches_uncached_for_every_covered_size_and_range() {
+        for &size in &ADJACENCY_TABLE_SIZES {
+            for range in 1..=ADJACENCY_TABLE_MAX_RANGE {
+                for idx in 0..size * size {
+                    let want = adjacency_uncached(size, idx, range);
+                    let got = adjacency_table_lookup(size, idx, range)
+                        .unwrap_or_else(|| panic!("missing table entry for size={size} range={range} idx={idx}"));
+                    assert_eq!(
+                        got, want.as_slice(),
+                        "size={size} range={range} idx={idx}: table entry diverges from uncached compute"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A size/range combo outside the table must still be correct, just
+    /// uncached -- e.g. a custom map size a test constructs, or range 0.
+    #[test]
+    fn falls_back_correctly_outside_the_table() {
+        let mut state = GameState::default();
+        state.settings.size = 13; // not in ADJACENCY_TABLE_SIZES
+        let want = adjacency_uncached(13, 20, 2);
+        assert_eq!(get_adjacent_indices(&state, 20, 2), want);
+        assert_eq!(get_adjacent_indices_static(&state, 20, 2).as_ref(), want.as_slice());
+
+        state.settings.size = 11;
+        let want0 = adjacency_uncached(11, 20, 0);
+        assert_eq!(get_adjacent_indices(&state, 20, 0), want0);
+    }
+
+    /// `get_adjacent_indices` and `_static` must agree for a covered combo.
+    #[test]
+    fn cached_and_static_accessors_agree() {
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        for range in 1..=4 {
+            for idx in [0, 5, 60, 110, 120] {
+                assert_eq!(
+                    get_adjacent_indices(&state, idx, range),
+                    get_adjacent_indices_static(&state, idx, range).into_owned()
+                );
+            }
+        }
     }
 }
