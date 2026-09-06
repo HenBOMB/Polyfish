@@ -8,7 +8,7 @@
 
 use crate::functions::{
     get_chebyshev_distance, get_defense_bonus, get_true_unit_at, get_unit_attack,
-    get_unit_defense, get_unit_max_health, get_unit_movement, has_skill,
+    get_unit_defense, get_unit_max_health, get_unit_movement, has_skill, UnitIndex,
 };
 use crate::settings::units::get_unit_setting;
 use crate::states::{GameState, UnitState};
@@ -84,7 +84,10 @@ fn hypo_damage(state: &GameState, attacker: &UnitState, defender: &UnitState, de
 /// Hot path: inside `movement + range` plain distance decides (small
 /// overestimate through blockers, acceptable); the exact road-aware search
 /// only runs in the band beyond it, where roads are what make it true.
-fn can_attack_tile(state: &GameState, unit: &UnitState, target_tile: i32) -> bool {
+/// EXP_ELO_130: `unit_index`, see `functions::UnitIndex`'s doc -- speeds up
+/// the Dash-only reach-search branch below when given; `None` (every caller
+/// outside `city_risks_with_threats`) preserves the original behavior.
+fn can_attack_tile(state: &GameState, unit: &UnitState, target_tile: i32, unit_index: Option<&UnitIndex>) -> bool {
     let size = state.settings.size;
     let range = get_unit_setting(unit.unit_type).range;
     let d = get_chebyshev_distance(unit.coords.idx, target_tile, size);
@@ -107,8 +110,13 @@ fn can_attack_tile(state: &GameState, unit: &UnitState, target_tile: i32) -> boo
         Some(&|t: i32| {
             t != target_tile
                 && get_chebyshev_distance(t, target_tile, size) <= range
-                && (t == unit.coords.idx || get_true_unit_at(state, t).is_none())
+                && (t == unit.coords.idx
+                    || match unit_index {
+                        Some(index) => index.unit_at(t).is_none(),
+                        None => get_true_unit_at(state, t).is_none(),
+                    })
         }),
+        unit_index,
     )
     .1
 }
@@ -257,7 +265,7 @@ impl CityRisk {
 /// banding as `can_attack_tile`: plain distance inside one move, the exact
 /// road-aware search only in the band beyond it.
 fn can_reach_tile(state: &GameState, unit: &UnitState, target_tile: i32) -> bool {
-    turns_to_reach(state, unit, target_tile, 1).is_some()
+    turns_to_reach(state, unit, target_tile, 1, None).is_some()
 }
 
 /// EXP_ELO_051: how many enemy turns until `unit` could STAND on
@@ -279,14 +287,16 @@ pub fn turns_to_reach_debug(
     target_tile: i32,
     max_turns: i32,
 ) -> Option<i32> {
-    turns_to_reach(state, unit, target_tile, max_turns)
+    turns_to_reach(state, unit, target_tile, max_turns, None)
 }
 
+/// EXP_ELO_130: `unit_index`, see `functions::UnitIndex`'s doc.
 fn turns_to_reach(
     state: &GameState,
     unit: &UnitState,
     target_tile: i32,
     max_turns: i32,
+    unit_index: Option<&UnitIndex>,
 ) -> Option<i32> {
     let size = state.settings.size;
     let m = get_unit_movement(state, unit).max(1);
@@ -303,7 +313,7 @@ fn turns_to_reach(
         return Some(1);
     }
     let budget = max_turns * if per_turn > m { 2 } else { 1 };
-    let (costs, _) = crate::moves::reach_search_turns(state, unit, budget, None);
+    let (costs, _) = crate::moves::reach_search_turns(state, unit, budget, None, unit_index);
     // The city tile is usually blocked by its own garrison, and "could you
     // stand here if it were empty" is the whole question — so price the
     // step-in from a neighbour, not a landing the current occupant forbids.
@@ -402,7 +412,7 @@ pub fn lethal_threat_weight(state: &GameState, unit: &UnitState, threats: &[(Uni
         .iter()
         .filter(|(t, _)| {
             get_true_unit_at(state, t.coords.idx).is_some_and(|live| live.owner == t.owner)
-                && can_attack_tile(state, &probe(t), unit.coords.idx)
+                && can_attack_tile(state, &probe(t), unit.coords.idx, None)
                 && hypo_damage(state, &probe(t), unit, unit.coords.idx) >= unit.health
         })
         .map(|(_, w)| *w)
@@ -479,6 +489,13 @@ pub static DEFEND_HOLD_PARTIAL: std::sync::atomic::AtomicU64 = std::sync::atomic
 /// candidate. Profiling (EXP_ELO_061 throughput investigation, Aug 2026)
 /// found `city_risks`'s per-candidate re-scan was 64-86% of actor CPU time
 /// under macro-mcts — this split is the fix.
+/// EXP_ELO_130: builds a `UnitIndex` once (see its doc) and threads it
+/// through every `get_true_unit_at`/`can_attack_tile`/`turns_to_reach` call
+/// below -- this function borrows `state` immutably for its whole duration
+/// (never mutates), so the index stays valid throughout. Measured as ~64%
+/// of all non-idle self-play CPU time (this function's own subtree, via
+/// `rank_plies` -> `goal_potential_inner`), dominated by exactly these
+/// O(units) linear scans repeated per (city, threat) pair.
 pub fn city_risks_with_threats(
     state: &GameState,
     player: PlayerId,
@@ -490,6 +507,8 @@ pub fn city_risks_with_threats(
     if threats.is_empty() {
         return Vec::new();
     }
+    let unit_index = UnitIndex::build(state);
+    let unit_index = Some(&unit_index);
 
     // Pass 1: everything that does NOT depend on cross-city information --
     // occupancy, the broader multi-turn `enterers` set, and the RAW
@@ -507,7 +526,7 @@ pub fn city_risks_with_threats(
     let mut pre: Vec<Pre> = Vec::with_capacity(tribe.cities.len());
     for city in &tribe.cities {
         let idx = city.idx;
-        let occupant = get_true_unit_at(state, idx);
+        let occupant = unit_index.and_then(|i| i.unit_at(idx));
         let sieged = occupant.map_or(false, |u| u.owner != player);
         let open = occupant.is_none();
 
@@ -517,7 +536,7 @@ pub fn city_risks_with_threats(
             threats
                 .iter()
                 .filter_map(|(e, trust)| {
-                    turns_to_reach(state, e, idx, THREAT_HORIZON).map(|turns| Enterer {
+                    turns_to_reach(state, e, idx, THREAT_HORIZON, unit_index).map(|turns| Enterer {
                         tile: e.coords.idx,
                         turns: turns.max(1),
                         trust: *trust,
@@ -532,7 +551,7 @@ pub fn city_risks_with_threats(
         // tile), so downstream damage math never has to re-resolve it live.
         let attackers: Vec<(UnitState, f32)> = threats
             .iter()
-            .filter(|(e, trust)| *trust >= 1.0 && can_attack_tile(state, e, idx))
+            .filter(|(e, trust)| *trust >= 1.0 && can_attack_tile(state, e, idx, unit_index))
             .map(|(e, _)| (e.clone(), attack_weight(state, e, idx)))
             .collect();
 
@@ -541,7 +560,7 @@ pub fn city_risks_with_threats(
         } else {
             enterers
                 .iter()
-                .filter_map(|e| get_true_unit_at(state, e.tile))
+                .filter_map(|e| unit_index.and_then(|i| i.unit_at(e.tile)))
                 .max_by(|a, b| {
                     get_unit_max_health(a)
                         .partial_cmp(&get_unit_max_health(b))
@@ -553,7 +572,7 @@ pub fn city_risks_with_threats(
             Some(t) => {
                 let mut dmg = 0.0;
                 for u in tribe.units.iter().filter(|u| u.coords.idx != idx) {
-                    if can_attack_tile(state, &probe(u), idx) {
+                    if can_attack_tile(state, &probe(u), idx, unit_index) {
                         dmg += hypo_damage(state, &probe(u), t, idx);
                     }
                 }
@@ -786,7 +805,7 @@ pub fn attack_committed(
 /// Can `unit` strike a unit standing on `target` next turn (fresh flags)?
 /// Public wrapper for the press pricing in `reward.rs`.
 pub fn unit_covers_threat(state: &GameState, unit: &UnitState, target: i32) -> bool {
-    can_attack_tile(state, &probe(unit), target)
+    can_attack_tile(state, &probe(unit), target, None)
 }
 
 /// Min-diversion cover assignment for one threatened city: closest units
@@ -933,7 +952,7 @@ fn defend_plan_impl(
                     pu.health = pu.health.max(h);
                 }
             }
-            let sat = if is_garrison || can_attack_tile(state, &pu, threat.city) {
+            let sat = if is_garrison || can_attack_tile(state, &pu, threat.city, None) {
                 1.0
             } else if d <= 2 * m {
                 0.5

@@ -368,6 +368,59 @@ pub fn get_true_enemy_at<'a>(
     get_true_unit_at(state, idx).filter(|u| is_enemy(state, not_owner, u.owner))
 }
 
+/// O(1) tile -> unit lookup, built once (one O(total units) pass) and
+/// reused across many `get_unit_at`/`get_enemy_at`-style queries against
+/// the SAME, unmutated `GameState` -- e.g. `city_risks_with_threats`
+/// scoring several cities x threats against one fixed board. Each lookup
+/// after `build` is a plain array index, no hashing, no per-call scan.
+///
+/// MUST be rebuilt (never reused) after any state mutation -- it borrows
+/// `UnitState`s as of the moment `build` ran. Safe to build at the top of
+/// any function that takes `&GameState` (not `&mut`) for its whole
+/// duration, since Rust's borrow checker enforces that nothing can mutate
+/// through an immutable borrow while the index (and its borrows) are
+/// alive.
+pub struct UnitIndex<'a> {
+    by_tile: Vec<Option<&'a UnitState>>,
+}
+
+impl<'a> UnitIndex<'a> {
+    pub fn build(state: &'a GameState) -> Self {
+        let size = state.settings.size.max(0) as usize;
+        let mut by_tile: Vec<Option<&'a UnitState>> = vec![None; size * size];
+        for tribe in state.tribes.values() {
+            for unit in &tribe.units {
+                let idx = unit.coords.idx;
+                if idx < 0 {
+                    continue;
+                }
+                if let Some(slot) = by_tile.get_mut(idx as usize) {
+                    // First-wins, matching get_unit_at/get_true_unit_at's
+                    // own linear-scan semantics if two units ever share a
+                    // tile (should not happen, but the fallback and the
+                    // index must agree if it somehow does).
+                    if slot.is_none() {
+                        *slot = Some(unit);
+                    }
+                }
+            }
+        }
+        UnitIndex { by_tile }
+    }
+
+    pub fn unit_at(&self, idx: i32) -> Option<&'a UnitState> {
+        if idx < 0 {
+            return None;
+        }
+        self.by_tile.get(idx as usize).copied().flatten()
+    }
+
+    pub fn enemy_at(&self, state: &GameState, idx: i32, not_owner: PlayerId) -> Option<&'a UnitState> {
+        self.unit_at(idx)
+            .filter(|u| is_enemy(state, not_owner, u.owner) && !u.effects.contains(&UnitEffect::Invisible))
+    }
+}
+
 /// Check if a unit has an effect
 pub fn has_effect(unit: &UnitState, effect: UnitEffect) -> bool {
     unit.effects.contains(&effect)
@@ -1671,5 +1724,91 @@ mod adjacency_table_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod unit_index_tests {
+    use super::*;
+    use crate::game::Game;
+
+    fn real_game_at_seed(seed: i64) -> Game {
+        let mut game = Game::new();
+        game.state = crate::mapgen::generate(crate::mapgen::MapGenSettings {
+            size: crate::types::MapSize::Tiny,
+            map_type: crate::types::MapType::Drylands,
+            tribes: vec![crate::types::TribeType::Imperius, crate::types::TribeType::Bardur],
+            seed,
+            version: 115,
+        });
+        game.post_load();
+        game
+    }
+
+    /// EXP_ELO_130: the direct property `UnitIndex` must have -- for every
+    /// tile on a real, mapgen'd board (multiple tribes, real starting
+    /// units), the index's O(1) answer must match the O(units) linear scan
+    /// it replaces. A mismatch here would silently corrupt threat/combat
+    /// scoring wherever `city_risks_with_threats` and its callees read
+    /// through the index instead of `get_true_unit_at`/`get_unit_at`.
+    #[test]
+    fn matches_linear_scan_for_every_tile_across_several_seeds() {
+        let mut checked_any_occupied = false;
+        for seed in 0..8i64 {
+            let game = real_game_at_seed(seed);
+            let state = &game.state;
+            let size = state.settings.size;
+            let index = UnitIndex::build(state);
+            for idx in 0..size * size {
+                let want = get_true_unit_at(state, idx);
+                let got = index.unit_at(idx);
+                assert_eq!(
+                    got, want,
+                    "seed {seed} idx {idx}: UnitIndex diverges from the linear scan"
+                );
+                if want.is_some() {
+                    checked_any_occupied = true;
+                }
+            }
+        }
+        assert!(
+            checked_any_occupied,
+            "no seed produced any occupied tile -- test setup isn't exercising real units"
+        );
+    }
+
+    /// Same property for `enemy_at` vs `get_enemy_at` specifically, since
+    /// that path additionally filters by ownership and invisibility.
+    #[test]
+    fn enemy_at_matches_get_enemy_at() {
+        for seed in 0..8i64 {
+            let game = real_game_at_seed(seed);
+            let state = &game.state;
+            let size = state.settings.size;
+            let index = UnitIndex::build(state);
+            for pov in [1, 2] {
+                for idx in 0..size * size {
+                    assert_eq!(
+                        index.enemy_at(state, idx, pov),
+                        get_enemy_at(state, idx, pov),
+                        "seed {seed} idx {idx} pov {pov}: enemy_at diverges from get_enemy_at"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Out-of-bounds and negative indices must return `None`, not panic --
+    /// several callers probe tiles derived from arithmetic that can go
+    /// negative or past the board edge before being range-checked.
+    #[test]
+    fn out_of_range_indices_return_none() {
+        let game = real_game_at_seed(0);
+        let index = UnitIndex::build(&game.state);
+        assert_eq!(index.unit_at(-1), None);
+        assert_eq!(index.unit_at(-1000), None);
+        let size = game.state.settings.size;
+        assert_eq!(index.unit_at(size * size), None);
+        assert_eq!(index.unit_at(size * size + 1000), None);
     }
 }

@@ -17801,3 +17801,75 @@ across every wall-clock metric, no regressions anywhere. Smaller in
 magnitude than EXP_ELO_128's ~5% (expected -- this function was ~5%
 of the profile vs. the settings tables' larger share). Proceeding to
 Fix 2 (scoped unit index in the `rank_plies` hot chain) next.
+
+### Fix 2 (scoped unit index) -- SHIPPED, verified
+
+New `UnitIndex` (`functions.rs`): an O(1) tile -> unit lookup
+(`Vec<Option<&UnitState>>` sized `size*size`, first-wins fill order
+matching `get_unit_at`/`get_true_unit_at`'s own linear-scan semantics
+exactly) built with one O(total units) pass. Explicitly NOT a
+persistent field on `GameState` -- that would need correct incremental
+updates across the ~42 unit-position/lifecycle mutation sites spread
+over 14 files, real bug surface for an engine whose whole point is
+never being silently wrong. Instead it's built ONCE at the top of
+`city_risks_with_threats` (`combat.rs`), which borrows `&GameState`
+immutably for its entire duration (confirmed by reading its body, not
+assumed) -- the index and every reference it hands out stay valid for
+exactly as long as the function runs, enforced by the borrow checker
+itself, not by convention.
+
+Threaded as `Option<&UnitIndex>` through the whole hot chain the Sep 6
+`sample` profile traced: `can_attack_tile`, `combat::turns_to_reach`,
+`moves::reach_search`/`reach_search_turns`, `is_terminal`,
+`is_steppable`, `is_adjacent_to_enemy` -- each now takes the new
+parameter and uses an O(1) `index.unit_at`/`index.enemy_at` lookup when
+given, falling back to the original `get_unit_at`/`get_true_unit_at`/
+`get_enemy_at` linear scan when `None`. Every one of these functions'
+OTHER callers (move generation's `compute_shortest_path`, `defend_plan`
+and other combat-module call sites unrelated to `city_risks_with_
+threats` -- roughly 15 sites across `combat.rs`/`moves/mod.rs`) passes
+`None` explicitly, preserving their exact prior behavior byte-for-byte.
+The Rust compiler enforced completeness here: every one of these sites
+had to be touched or the crate does not build, so nothing was silently
+missed the way an incremental-mutation-tracking design could be.
+
+`city_risks_with_threats`'s own external signature is UNCHANGED -- its
+5 external callers (2 wrapper functions, 2 tests, `goal_potential.rs`'s
+real production call) needed zero edits, since the index is built and
+consumed entirely inside the function body.
+
+CORRECTNESS VERIFICATION: 3 new `unit_index_tests` (`functions.rs`)
+against real mapgen'd boards (8 seeds, two-tribe Tiny maps, real
+starting units) -- `UnitIndex::build(&state).unit_at(idx)` matches
+`get_true_unit_at(&state, idx)` for EVERY tile on every seed;
+`enemy_at` matches `get_enemy_at` the same way across both POVs; and
+out-of-range/negative indices return `None` rather than panicking.
+Full suite green (391 lib tests incl. 6 new across both fixes + all
+self_play/integration tests, 0 failures).
+
+VALIDATION -- paired 32-game/32-actor benchmark (`git stash`
+isolation, identical seed-file, identical production macro-mcts/net-
+asym config, same harness as Fix 1):
+
+| Metric | Before | After | Change |
+|---|---|---|---|
+| Game generation wall-clock | 1505.22s | 1342.63s | -10.8% |
+| Throughput (moves/sec) | 10.15 | 11.37 | +12.0% |
+| Game duration median | 160.47s | 149.05s | -7.1% |
+| Game duration p90 | 423.14s | 391.71s | -7.4% |
+| Turn duration median | 1685ms | 1589ms | -5.7% |
+| Turn duration p90 | 13692ms | 12463ms | -9.0% |
+| busy_frac | 0.157 | 0.183 | +16.6% relative (expected -- same GPU work now fits in a smaller wall-clock) |
+
+Total moves played identical (15271 both runs) and turn count
+identical (n=1477 both) -- same games, same decisions, confirming
+determinism held exactly. A much bigger, cleaner win than Fix 1
+(~11% vs ~3% wall-clock), consistent with the profile: `get_unit_at`/
+`get_enemy_at`'s linear scan alone was ~10% of real CPU work, and this
+fix also cheapens everything downstream that was paying for repeated
+scans (`is_terminal`, `is_steppable`, `reach_search_turns`,
+`can_attack_tile`). Proceeding to re-profile (fresh `sample` capture)
+before deciding Fix 3's scope, per the standing plan -- Fix 3
+(`GameState.tiles` IndexMap -> Vec) has the largest blast radius of
+the three and should be sized against what's ACTUALLY still hot after
+Fixes 1+2, not the original pre-fix profile.

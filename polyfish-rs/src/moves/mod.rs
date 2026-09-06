@@ -31,6 +31,7 @@ pub use upgrade::UpgradeMove;
 use crate::actions::UndoCallback;
 use crate::functions::{
     get_adjacent_indices, get_enemy_at, get_structure_at, get_structure_type_at, get_unit_at,
+    UnitIndex,
 };
 use crate::settings::resources::get_resource_setting;
 use crate::settings::{get_unit_setting, has_skill};
@@ -432,18 +433,20 @@ pub(crate) fn compute_reachable_tiles(
     state: &GameState,
     unit: &UnitState,
 ) -> std::collections::HashMap<i32, f32> {
-    reach_search(state, unit, None).0
+    reach_search(state, unit, None, None).0
 }
 
 /// EXP_ELO_040 (defense hot path): same search with an early exit — returns
 /// as soon as a newly reached tile satisfies `stop`. The start tile is
 /// tested too (cost 0). Avoids materializing the full map per probe.
+/// EXP_ELO_130: `unit_index`, see `is_adjacent_to_enemy`'s doc.
 pub(crate) fn reach_search(
     state: &GameState,
     unit: &UnitState,
     stop: Option<&dyn Fn(i32) -> bool>,
+    unit_index: Option<&UnitIndex>,
 ) -> (std::collections::HashMap<i32, f32>, bool) {
-    reach_search_turns(state, unit, 1, stop)
+    reach_search_turns(state, unit, 1, stop, unit_index)
 }
 
 /// EXP_ELO_051: the same search over a `turns`-turn movement budget, so a
@@ -451,11 +454,14 @@ pub(crate) fn reach_search(
 /// instead of only "could it get here now". Costs are the engine's own
 /// (roads, terrain), so a road network shortens the answer exactly as it
 /// does in play. `turns == 1` is `reach_search`.
+/// EXP_ELO_130: `unit_index`, see `is_adjacent_to_enemy`'s doc -- threaded
+/// into each neighbor's `is_steppable`/`is_terminal` check below.
 pub(crate) fn reach_search_turns(
     state: &GameState,
     unit: &UnitState,
     turns: i32,
     stop: Option<&dyn Fn(i32) -> bool>,
+    unit_index: Option<&UnitIndex>,
 ) -> (std::collections::HashMap<i32, f32>, bool) {
     let mut effective_movement =
         crate::functions::get_unit_movement(state, unit) as f32 * turns.max(1) as f32;
@@ -505,7 +511,7 @@ pub(crate) fn reach_search_turns(
                 continue;
             }
 
-            if !is_steppable(state, unit, n_idx, false) {
+            if !is_steppable(state, unit, n_idx, false, unit_index) {
                 continue;
             }
 
@@ -519,7 +525,7 @@ pub(crate) fn reach_search_turns(
             // "Rounding up" rule: We allow the move even if new_cost > effective_movement,
             // provided current.cost < effective_movement (checked above).
 
-            let terminal = is_terminal(state, unit, n_idx);
+            let terminal = is_terminal(state, unit, n_idx, unit_index);
 
             let existing_cost = reachable.get(&n_idx);
             if existing_cost.is_none() || new_cost < *existing_cost.unwrap() {
@@ -599,7 +605,7 @@ pub fn compute_shortest_path(
                 continue;
             }
 
-            if !is_steppable(state, unit, n_idx, true) {
+            if !is_steppable(state, unit, n_idx, true, None) {
                 continue;
             }
 
@@ -610,7 +616,7 @@ pub fn compute_shortest_path(
 
             let new_cost = current.cost + move_cost;
 
-            let terminal = is_terminal(state, unit, n_idx);
+            let terminal = is_terminal(state, unit, n_idx, None);
 
             let existing_cost = reachable.get(&n_idx);
             if existing_cost.is_none() || new_cost < *existing_cost.unwrap() {
@@ -678,7 +684,9 @@ fn compute_movement_cost(state: &GameState, unit: &UnitState, from_idx: i32, to_
     cost
 }
 
-fn is_terminal(state: &GameState, unit: &UnitState, tile_idx: i32) -> bool {
+/// EXP_ELO_130: see `is_adjacent_to_enemy`'s doc -- `unit_index` speeds up
+/// the ZOC check below when given, `None` preserves the original behavior.
+fn is_terminal(state: &GameState, unit: &UnitState, tile_idx: i32, unit_index: Option<&UnitIndex>) -> bool {
     let settings = get_unit_setting(unit.unit_type);
     if settings.skills.contains(&SkillType::Fly) {
         return false;
@@ -705,7 +713,7 @@ fn is_terminal(state: &GameState, unit: &UnitState, tile_idx: i32) -> bool {
     }
 
     // Zone of Control (ZOC)
-    if is_adjacent_to_enemy(state, tile_idx, unit.owner) {
+    if is_adjacent_to_enemy(state, tile_idx, unit.owner, unit_index) {
         let ignores_zoc = settings.skills.contains(&SkillType::Infiltrate)
             || settings.skills.contains(&SkillType::Creep)
             || settings.skills.contains(&SkillType::Sneak)
@@ -796,9 +804,22 @@ fn is_naval_unit(unit_type: UnitType) -> bool {
         .contains(&SkillType::Carry)
 }
 
-fn is_adjacent_to_enemy(state: &GameState, idx: i32, owner: PlayerId) -> bool {
+/// EXP_ELO_130: `unit_index`, when given, replaces the O(units) linear scan
+/// inside `get_enemy_at` with an O(1) lookup -- see `UnitIndex`'s doc. `None`
+/// (every caller outside `city_risks_with_threats`'s chain) is byte-for-byte
+/// the original linear-scan behavior.
+fn is_adjacent_to_enemy(
+    state: &GameState,
+    idx: i32,
+    owner: PlayerId,
+    unit_index: Option<&UnitIndex>,
+) -> bool {
     for n_idx in get_adjacent_indices(state, idx, 1) {
-        if let Some(enemy) = get_enemy_at(state, n_idx, owner) {
+        let enemy = match unit_index {
+            Some(index) => index.enemy_at(state, n_idx, owner),
+            None => get_enemy_at(state, n_idx, owner),
+        };
+        if let Some(enemy) = enemy {
             if !enemy.effects.contains(&UnitEffect::Invisible) {
                 return true;
             }
@@ -856,7 +877,16 @@ fn get_tiles_in_range(state: &GameState, idx: i32, range: i32) -> Vec<i32> {
     crate::functions::get_adjacent_indices(state, idx, range)
 }
 
-fn is_steppable(state: &GameState, unit: &UnitState, idx: i32, strict: bool) -> bool {
+/// EXP_ELO_130: see `is_adjacent_to_enemy`'s doc -- `unit_index` speeds up
+/// the occupancy check below when given, `None` preserves the original
+/// behavior.
+fn is_steppable(
+    state: &GameState,
+    unit: &UnitState,
+    idx: i32,
+    strict: bool,
+    unit_index: Option<&UnitIndex>,
+) -> bool {
     // Can only step on explored tiles, regardless F
     let is_explored = state
         .tiles
@@ -891,7 +921,11 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32, strict: bool) -> 
     }
 
     // cannot step if the tile is occupied by an enemy (or any unit if strict)
-    if let Some(other) = get_unit_at(state, idx) {
+    let other = match unit_index {
+        Some(index) => index.unit_at(idx),
+        None => get_unit_at(state, idx),
+    };
+    if let Some(other) = other {
         if strict || other.owner != unit.owner {
             return false;
         }
