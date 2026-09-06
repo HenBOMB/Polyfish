@@ -3,7 +3,7 @@
 use crate::types::{SkillType, TribeType, UnitType};
 
 /// Unit stat configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UnitSetting {
     pub cost: i32,
     pub attack: f32,
@@ -47,13 +47,28 @@ macro_rules! skills {
 
 /// Get unit settings by type — cached, returns a shared `'static` reference
 /// built once per unit type (no per-call struct/HashSet allocation).
+///
+/// EXP_ELO_128: plain `Vec` indexed by discriminant, not a hash map — this
+/// was the single hottest function in an overnight `sample` profile of
+/// production self-play (called from `is_terminal`/`is_steppable`/
+/// `reach_search_turns`/`compute_movement_cost`, i.e. on every candidate
+/// move in `rank_plies`'s ~65M-candidate-score workload). `UnitType` is a
+/// small dense-ish `#[repr(i8)]` enum (max discriminant well under 100), so
+/// a direct array index replaces hashing + probing with one bounds-checked
+/// load. Gaps (commented-out variants) are filled with `UnitType::None`'s
+/// own settings and never read, since no `UnitType` value can equal a
+/// nonexistent discriminant.
 pub fn get_unit_setting(unit_type: UnitType) -> &'static UnitSetting {
-    static TABLE: std::sync::LazyLock<rustc_hash::FxHashMap<UnitType, UnitSetting>> =
-        std::sync::LazyLock::new(|| {
-            use strum::IntoEnumIterator;
-            UnitType::iter().map(|u| (u, build_unit_setting(u))).collect()
-        });
-    &TABLE[&unit_type]
+    static TABLE: std::sync::LazyLock<Vec<UnitSetting>> = std::sync::LazyLock::new(|| {
+        use strum::IntoEnumIterator;
+        let max = UnitType::iter().map(|u| u as i8 as usize).max().unwrap_or(0);
+        let mut table: Vec<UnitSetting> = (0..=max).map(|_| build_unit_setting(UnitType::None)).collect();
+        for u in UnitType::iter() {
+            table[u as i8 as usize] = build_unit_setting(u);
+        }
+        table
+    });
+    &TABLE[unit_type as i8 as usize]
 }
 
 /// Build the settings for one unit type (called once per type at table init).
@@ -640,5 +655,25 @@ pub fn get_super_unit(tribe_type: TribeType) -> UnitType {
         TribeType::Elyrion => UnitType::DragonEgg,
         TribeType::Cymanti => UnitType::Centipede,
         _ => UnitType::Giant,
+    }
+}
+
+#[cfg(test)]
+mod exp_elo_128_tests {
+    use super::*;
+    use strum::IntoEnumIterator;
+
+    /// EXP_ELO_128: the `Vec`-by-discriminant table must return exactly
+    /// what `build_unit_setting` computes directly, for every real variant
+    /// -- pins the array-indexing rewrite against the function it replaced.
+    /// Real `==`, not Debug-string comparison: `skills` is a `FxHashSet`,
+    /// whose iteration (and so Debug) order depends on the default
+    /// hasher's per-thread random seed -- two independently-built sets
+    /// with identical elements can print in a different order.
+    #[test]
+    fn get_unit_setting_matches_a_fresh_build_for_every_variant() {
+        for u in UnitType::iter() {
+            assert_eq!(*get_unit_setting(u), build_unit_setting(u), "get_unit_setting({u:?}) diverged from a fresh build");
+        }
     }
 }

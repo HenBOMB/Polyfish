@@ -4,7 +4,7 @@ use crate::types::{ResourceType, StructureType, TerrainType, TribeType};
 use std::collections::HashSet;
 
 /// Structure configuration
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct StructureSetting {
     pub cost: Option<i32>,
     pub terrain_types: HashSet<TerrainType>,
@@ -40,15 +40,21 @@ macro_rules! adjacent {
 /// built once per type. Previously this allocated two `HashSet`s on every call,
 /// and `moves/build.rs` calls it inside the per-tile x per-structure loop of
 /// `generate_build_moves`, so every rollout was allocating per candidate tile.
+/// EXP_ELO_128: plain `Vec` indexed by discriminant, not a hash map — see
+/// `get_unit_setting`'s doc comment for why (same profiling finding, same
+/// fix, applied everywhere this settings-table pattern repeats).
 pub fn get_structure_setting(struct_type: StructureType) -> &'static StructureSetting {
-    static TABLE: std::sync::LazyLock<rustc_hash::FxHashMap<StructureType, StructureSetting>> =
-        std::sync::LazyLock::new(|| {
-            use strum::IntoEnumIterator;
-            StructureType::iter()
-                .map(|s| (s, build_structure_setting(s)))
-                .collect()
-        });
-    &TABLE[&struct_type]
+    static TABLE: std::sync::LazyLock<Vec<StructureSetting>> = std::sync::LazyLock::new(|| {
+        use strum::IntoEnumIterator;
+        let max = StructureType::iter().map(|s| s as i8 as usize).max().unwrap_or(0);
+        let mut table: Vec<StructureSetting> =
+            (0..=max).map(|_| build_structure_setting(StructureType::None)).collect();
+        for s in StructureType::iter() {
+            table[s as i8 as usize] = build_structure_setting(s);
+        }
+        table
+    });
+    &TABLE[struct_type as i8 as usize]
 }
 
 /// The 5 vanilla temple types, which level 1-5 via age-based growth
@@ -298,5 +304,28 @@ fn build_structure_setting(struct_type: StructureType) -> StructureSetting {
             terrain_types: terrains![TerrainType::Field, TerrainType::Forest, TerrainType::Water],
             ..Default::default()
         },
+    }
+}
+
+#[cfg(test)]
+mod exp_elo_128_tests {
+    use super::*;
+    use strum::IntoEnumIterator;
+
+    /// EXP_ELO_128: the `Vec`-by-discriminant table must return exactly
+    /// what `build_structure_setting` computes directly, for every real
+    /// variant -- pins the array-indexing rewrite against the function it
+    /// replaced. Real `==`, not Debug-string comparison: `terrain_types`/
+    /// `adjacent_types` are `HashSet`s, whose iteration (and so Debug)
+    /// order depends on the default hasher's per-thread random seed.
+    #[test]
+    fn get_structure_setting_matches_a_fresh_build_for_every_variant() {
+        for s in StructureType::iter() {
+            assert_eq!(
+                *get_structure_setting(s),
+                build_structure_setting(s),
+                "get_structure_setting({s:?}) diverged from a fresh build"
+            );
+        }
     }
 }

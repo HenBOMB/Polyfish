@@ -21,16 +21,20 @@ pub struct ResourceSetting {
     pub tribe_type: Option<TribeType>,
 }
 
-/// Get resource settings by type
+/// Get resource settings by type. EXP_ELO_128: plain `Vec` indexed by
+/// discriminant, not a hash map — see `get_unit_setting`'s doc comment.
 pub fn get_resource_setting(resource_type: ResourceType) -> &'static ResourceSetting {
-    static TABLE: std::sync::LazyLock<rustc_hash::FxHashMap<ResourceType, ResourceSetting>> =
-        std::sync::LazyLock::new(|| {
-            use strum::IntoEnumIterator;
-            ResourceType::iter()
-                .map(|r| (r, build_resource_setting(r)))
-                .collect()
-        });
-    &TABLE[&resource_type]
+    static TABLE: std::sync::LazyLock<Vec<ResourceSetting>> = std::sync::LazyLock::new(|| {
+        use strum::IntoEnumIterator;
+        let max = ResourceType::iter().map(|r| r as i8 as usize).max().unwrap_or(0);
+        let mut table: Vec<ResourceSetting> =
+            (0..=max).map(|_| build_resource_setting(ResourceType::None)).collect();
+        for r in ResourceType::iter() {
+            table[r as i8 as usize] = build_resource_setting(r);
+        }
+        table
+    });
+    &TABLE[resource_type as i8 as usize]
 }
 
 /// Build the settings for one resource type (called once per type at table init).
@@ -92,5 +96,26 @@ fn build_resource_setting(resource_type: ResourceType) -> ResourceSetting {
             reward_pop: 2,
             ..Default::default()
         },
+    }
+}
+
+#[cfg(test)]
+mod exp_elo_128_tests {
+    use super::*;
+    use strum::IntoEnumIterator;
+
+    /// EXP_ELO_128: the `Vec`-by-discriminant table must return exactly
+    /// what `build_resource_setting` computes directly, for every real
+    /// variant -- pins the array-indexing rewrite against the function it
+    /// replaced.
+    #[test]
+    fn get_resource_setting_matches_a_fresh_build_for_every_variant() {
+        for r in ResourceType::iter() {
+            assert_eq!(
+                format!("{:?}", get_resource_setting(r)),
+                format!("{:?}", build_resource_setting(r)),
+                "get_resource_setting({r:?}) diverged from a fresh build"
+            );
+        }
     }
 }

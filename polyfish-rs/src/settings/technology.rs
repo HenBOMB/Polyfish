@@ -32,15 +32,37 @@ pub struct TechnologySetting {
     pub unlocks_terrain: Option<TerrainType>,
 }
 
+/// EXP_ELO_128: `TechnologyType` has a negative discriminant
+/// (`BeyondComprehension = -1`), so array-indexing this and
+/// `get_tech_effects`'s tables needs an offset from the enum's own
+/// minimum rather than a raw `as usize` cast (which would wrap around for
+/// -1). Computed once, shared by both tables below.
+fn tech_index(tech_type: TechnologyType) -> usize {
+    static MIN: std::sync::LazyLock<i32> = std::sync::LazyLock::new(|| {
+        use strum::IntoEnumIterator;
+        TechnologyType::iter().map(|t| t as i32).min().unwrap_or(0)
+    });
+    (tech_type as i32 - *MIN) as usize
+}
+
 /// Get technology settings by type — cached, returns a shared `'static`
 /// reference built once per tech type (no per-call struct/Vec allocation).
+///
+/// EXP_ELO_128: plain `Vec` indexed by `tech_index`, not a hash map — see
+/// `get_unit_setting`'s doc comment for why (same profiling finding, same
+/// fix, applied everywhere this settings-table pattern repeats).
 pub fn get_technology_setting(tech_type: TechnologyType) -> &'static TechnologySetting {
-    static TABLE: std::sync::LazyLock<rustc_hash::FxHashMap<TechnologyType, TechnologySetting>> =
-        std::sync::LazyLock::new(|| {
-            use strum::IntoEnumIterator;
-            TechnologyType::iter().map(|t| (t, build_technology_setting(t))).collect()
-        });
-    &TABLE[&tech_type]
+    static TABLE: std::sync::LazyLock<Vec<TechnologySetting>> = std::sync::LazyLock::new(|| {
+        use strum::IntoEnumIterator;
+        let max = TechnologyType::iter().map(tech_index).max().unwrap_or(0);
+        let mut table: Vec<TechnologySetting> =
+            (0..=max).map(|_| build_technology_setting(TechnologyType::Basic)).collect();
+        for t in TechnologyType::iter() {
+            table[tech_index(t)] = build_technology_setting(t);
+        }
+        table
+    });
+    &TABLE[tech_index(tech_type)]
 }
 
 /// Cost/score tier of a technology.
@@ -421,14 +443,19 @@ pub struct TechEffects {
 }
 
 /// Get the derived annotation for a tech — cached `'static` like
-/// `get_technology_setting`.
+/// `get_technology_setting` (EXP_ELO_128: same `Vec`-by-`tech_index` fix).
 pub fn get_tech_effects(tech_type: TechnologyType) -> &'static TechEffects {
-    static TABLE: std::sync::LazyLock<rustc_hash::FxHashMap<TechnologyType, TechEffects>> =
-        std::sync::LazyLock::new(|| {
-            use strum::IntoEnumIterator;
-            TechnologyType::iter().map(|t| (t, build_tech_effects(t))).collect()
-        });
-    &TABLE[&tech_type]
+    static TABLE: std::sync::LazyLock<Vec<TechEffects>> = std::sync::LazyLock::new(|| {
+        use strum::IntoEnumIterator;
+        let max = TechnologyType::iter().map(tech_index).max().unwrap_or(0);
+        let mut table: Vec<TechEffects> =
+            (0..=max).map(|_| build_tech_effects(TechnologyType::Basic)).collect();
+        for t in TechnologyType::iter() {
+            table[tech_index(t)] = build_tech_effects(t);
+        }
+        table
+    });
+    &TABLE[tech_index(tech_type)]
 }
 
 fn build_tech_effects(tech_type: TechnologyType) -> TechEffects {
@@ -835,6 +862,27 @@ mod effects_tests {
                 || e.capital_vision
                 || e.tech_discount;
             assert!(nonempty, "{t:?} has no annotated effects");
+        }
+    }
+
+    /// EXP_ELO_128: `get_technology_setting`/`get_tech_effects`'s `Vec`-by-
+    /// `tech_index` tables must return exactly what a fresh build computes,
+    /// for every real variant -- including `BeyondComprehension`'s negative
+    /// discriminant, the reason this pair needed an offset instead of
+    /// `get_unit_setting`'s plain `as usize` cast.
+    #[test]
+    fn tech_lookups_match_a_fresh_build_for_every_variant() {
+        for t in TechnologyType::iter() {
+            assert_eq!(
+                format!("{:?}", get_technology_setting(t)),
+                format!("{:?}", build_technology_setting(t)),
+                "get_technology_setting({t:?}) diverged from a fresh build"
+            );
+            assert_eq!(
+                format!("{:?}", get_tech_effects(t)),
+                format!("{:?}", build_tech_effects(t)),
+                "get_tech_effects({t:?}) diverged from a fresh build"
+            );
         }
     }
 
