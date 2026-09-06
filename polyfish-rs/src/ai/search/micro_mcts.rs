@@ -55,7 +55,8 @@ pub struct MicroParams {
     /// other search constant (see macro_mcts::EXPLORATION's own history).
     pub c_puct: f32,
     /// Weight on a net-derived root prior, blended with the existing
-    /// `rank_view`/Δφ-score softmax prior (0.0 = off, current behavior).
+    /// `rank_view`/Δφ-score softmax prior (0.0 = off, this struct's own
+    /// default -- see `micro_mcts_params`'s entry-point default below).
     /// Mirrors `MacroParams::root_prior_w`'s convention. The goal painted for
     /// this eval call is the ply's own COMMITTED macro goal -- the same
     /// convention real training rows already use (`game.rs`'s `feat_goal`),
@@ -109,10 +110,16 @@ pub fn micro_mcts_params() -> Option<MicroParams> {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(1.5);
+        // EXP_ELO_125 piece 1 (2026-09-05): on by default at 0.3 -- the one
+        // weight actually smoke-tested (override rate 10.3% -> 21.1% vs the
+        // Δφ-only prior, confirming the blend is genuinely behaviorally
+        // active, not a no-op). Not yet arena-validated for win-rate impact
+        // (see MICRO_MCTS_DEFAULT_SIMS's own doc comment above for the same
+        // caveat pattern) -- Verdi's explicit "make it default ON" call.
         let net_prior_w: f32 = std::env::var("POLYFISH_MICRO_MCTS_NET_PRIOR_W")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(0.0);
+            .unwrap_or(0.3);
         Some(MicroParams { sims, depth, k, c_puct, net_prior_w })
     })
 }
@@ -140,6 +147,19 @@ pub static MICRO_MCTS_MAX_DEPTH_SEEN: std::sync::atomic::AtomicU64 = std::sync::
 pub static MICRO_CARRY_ATTEMPTS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 pub static MICRO_CARRY_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// EXP_ELO_126 diagnostic: the net's own prior used to be computed ONLY
+/// over `rank_view`'s CPU-heuristic top-k, so a move the net actually
+/// preferred could never enter the search if the heuristic ranked it lower
+/// -- the heuristic silently gated what the net-driven layer was allowed to
+/// consider. `WIDENED` counts plies where the net's own top-k candidates
+/// (decoded over the FULL legal-move list) added at least one move outside
+/// the heuristic's own top-k; `WON` counts plies where such a net-only
+/// candidate was the one the search actually picked. Both are 0 whenever
+/// `net_prior_w == 0.0` (the widening is fully gated off in that case).
+pub static MICRO_MCTS_UNION_WIDENED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub static MICRO_MCTS_UNION_WON: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Root-advancement warm start, carried by the caller (`MacroMctsAgent`)
 /// from one real ply to the next. `mv_key` identifies the move this search
@@ -344,10 +364,12 @@ fn select_and_expand(
 }
 
 /// Root children are `rank_view`'s own top candidates (already paid for,
-/// full Δφ fidelity) -- only nodes below the root use `cheap_candidates`.
-/// `carry`, if it matches one of this ply's candidates by move identity, is
-/// spliced in as that child's already-explored subtree (root advancement --
-/// a free warm start instead of discarding a ply's search every ply).
+/// full Δφ fidelity), widened by the net's own top-k when `net_prior_w >
+/// 0.0` (EXP_ELO_126 -- see the union-building block below) -- only nodes
+/// below the root use `cheap_candidates`. `carry`, if it matches one of
+/// this ply's candidates by move identity, is spliced in as that child's
+/// already-explored subtree (root advancement -- a free warm start instead
+/// of discarding a ply's search every ply).
 /// Returns `(index into `ranked` the search prefers, subtree to carry into
 /// the NEXT ply if the caller ends up actually playing that pick, the
 /// picked child's own backed-up Q)`. The index is `None` when there's
@@ -374,43 +396,79 @@ pub fn micro_search_pick(
     if carry.is_some() {
         MICRO_CARRY_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    let top_n = ranked.len().min(params.k.max(4));
-    let scores: Vec<f32> = ranked.iter().take(top_n).map(|(s, _)| *s).collect();
-    let mut priors = softmax_priors(&scores);
-    // EXP_ELO_124-family: blend in a net-derived prior over the same top_n
-    // candidates. Goal painted here is the ply's own COMMITTED macro goal --
-    // the exact convention real training rows already use (`game.rs`'s
-    // `feat_goal`), so this carries none of macro's root-painting-mismatch
-    // risk. The four decomposed heads this reads are already behavior-cloned
-    // on macro-mcts's own committed picks (`brain.rs`).
+    let heur_top = ranked.len().min(params.k.max(4));
+    // `idxs`: the candidate set as indices into `ranked` -- the heuristic's
+    // own top-k first, in order (so `idxs[i] == i` for `i < heur_top`,
+    // which is exactly what makes the net_prior_w == 0.0 path below
+    // byte-identical to this function's pre-EXP_ELO_126 behavior). Any
+    // net-only candidates get appended after.
+    let mut idxs: Vec<usize> = (0..heur_top).collect();
+    // EXP_ELO_126: the net's own prior used to be computed ONLY over this
+    // same heuristic top-k, so a move the net actually preferred could
+    // never even enter the search if the CPU Δφ heuristic ranked it lower
+    // -- the heuristic silently gated what the net-driven layer was
+    // allowed to consider. Fix: decode the net's prior over the FULL
+    // legal-move list instead (the network forward pass already ran once
+    // regardless of candidate count -- `compute_move_priors_raw` is a
+    // cheap per-move readout off that one already-computed tensor, not an
+    // extra network call), take the net's own top-k, and union it into the
+    // candidate set so a net-favored move can never be silently excluded.
+    let mut net_priors_full: Option<Vec<f32>> = None;
     if params.net_prior_w > 0.0 {
         if let Some(raw) = crate::ai::features::state_to_cpu_features_goal(&view.state, pov, None, Some(goal))
             .ok()
             .and_then(|f| evaluator.evaluate(vec![f]).into_iter().next().map(|r| r.2))
         {
-            let top_n_moves: Vec<Box<dyn Move>> = ranked
-                .iter()
-                .take(top_n)
-                .map(|(_, mv)| dyn_clone::clone_box(mv.as_ref()))
-                .collect();
+            let all_moves: Vec<Box<dyn Move>> =
+                ranked.iter().map(|(_, mv)| dyn_clone::clone_box(mv.as_ref())).collect();
             let map_size = view.state.settings.size as usize;
-            let net_priors = crate::ai::search::policy_composer::compute_move_priors_raw(
-                &raw,
-                &top_n_moves,
-                map_size,
-                false,
+            let np = crate::ai::search::policy_composer::compute_move_priors_raw(
+                &raw, &all_moves, map_size, false,
             );
-            let net_sum: f32 = net_priors.iter().sum();
-            if net_sum > 0.0 && net_priors.len() == priors.len() {
-                let w = params.net_prior_w;
-                for (p, np) in priors.iter_mut().zip(net_priors.iter()) {
-                    *p = (1.0 - w) * *p + w * (np / net_sum);
-                }
-                let renorm: f32 = priors.iter().sum();
-                if renorm > 0.0 {
-                    for p in priors.iter_mut() {
-                        *p /= renorm;
+            if np.len() == ranked.len() {
+                // Deterministic tie-break (lower original index wins) --
+                // same-seed reproducibility is a resolved-bug invariant in
+                // this repo (EXP_ELO_091); an unstable sort here would
+                // regress it invisibly.
+                let mut net_order: Vec<usize> = (0..np.len()).collect();
+                net_order.sort_by(|&a, &b| {
+                    np[b].partial_cmp(&np[a]).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b))
+                });
+                let mut widened = false;
+                for &i in net_order.iter().take(heur_top) {
+                    if !idxs.contains(&i) {
+                        idxs.push(i);
+                        widened = true;
                     }
+                }
+                if widened {
+                    MICRO_MCTS_UNION_WIDENED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                net_priors_full = Some(np);
+            }
+        }
+    }
+    let scores: Vec<f32> = idxs.iter().map(|&i| ranked[i].0).collect();
+    let mut priors = softmax_priors(&scores);
+    // EXP_ELO_124-family: blend in a net-derived prior over the (now
+    // possibly widened) candidate set. Goal painted here is the ply's own
+    // COMMITTED macro goal -- the exact convention real training rows
+    // already use (`game.rs`'s `feat_goal`), so this carries none of
+    // macro's root-painting-mismatch risk. The four decomposed heads this
+    // reads are already behavior-cloned on macro-mcts's own committed
+    // picks (`brain.rs`).
+    if let Some(np) = &net_priors_full {
+        let net_sub: Vec<f32> = idxs.iter().map(|&i| np[i]).collect();
+        let net_sum: f32 = net_sub.iter().sum();
+        if net_sum > 0.0 {
+            let w = params.net_prior_w;
+            for (p, snp) in priors.iter_mut().zip(net_sub.iter()) {
+                *p = (1.0 - w) * *p + w * (snp / net_sum);
+            }
+            let renorm: f32 = priors.iter().sum();
+            if renorm > 0.0 {
+                for p in priors.iter_mut() {
+                    *p /= renorm;
                 }
             }
         }
@@ -419,11 +477,11 @@ pub fn micro_search_pick(
     // consumed, and can't reappear here. What can reappear (and is worth
     // matching) is the set of options already explored one ply below it.
     let mut carried_children = carry.map(|c| c.children).unwrap_or_default();
-    let children: Vec<MicroChild> = ranked
+    let children: Vec<MicroChild> = idxs
         .iter()
-        .take(top_n)
         .zip(priors)
-        .map(|((_, mv), prior)| {
+        .map(|(&orig_idx, prior)| {
+            let mv = &ranked[orig_idx].1;
             let key = mv.serialize();
             let node = if let Some(pos) =
                 carried_children.iter().position(|c| c.mv.serialize() == key)
@@ -464,6 +522,19 @@ pub fn micro_search_pick(
     if best_idx != 0 {
         MICRO_MCTS_OVERRIDES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
+    // `idxs[best_idx]`, NOT `best_idx` itself, is the caller's contract:
+    // the caller (macro_mcts.rs's `select_move`) indexes `ranked` with the
+    // returned value directly (`ranked.swap(0, idx)`). Under the union
+    // above, `root.children`'s position no longer equals `ranked`'s
+    // position once a net-only candidate is appended -- returning the raw
+    // `best_idx` here would silently swap the wrong move into position 0
+    // and execute a move the search never actually picked. See
+    // `union_pick_maps_back_to_the_original_ranked_index` for the pinned
+    // regression test.
+    let picked_orig_idx = idxs[best_idx];
+    if picked_orig_idx >= heur_top {
+        MICRO_MCTS_UNION_WON.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     let picked_q = root.children[best_idx]
         .node
         .as_ref()
@@ -473,7 +544,7 @@ pub fn micro_search_pick(
     let grandchildren = root.children[best_idx].node.take().map(|node| node.children).unwrap_or_default();
     let next_carry =
         if grandchildren.is_empty() { None } else { Some(MicroTreeCarry { mv_key, children: grandchildren }) };
-    (Some(best_idx), next_carry, picked_q)
+    (Some(picked_orig_idx), next_carry, picked_q)
 }
 
 #[cfg(test)]
@@ -532,6 +603,181 @@ mod tests {
         );
         // Not a pass/fail assertion on the exact number -- this test's job is
         // to print the real measurement; see the ledger entry for the read.
+    }
+
+    fn tiny_game_at_seed(seed: i64) -> Game {
+        let mut game = Game::new();
+        game.state = crate::mapgen::generate(crate::mapgen::MapGenSettings {
+            size: crate::types::MapSize::Tiny,
+            map_type: crate::types::MapType::Drylands,
+            tribes: vec![crate::types::TribeType::Imperius, crate::types::TribeType::Bardur],
+            seed,
+            version: 115,
+        });
+        game.post_load();
+        game
+    }
+
+    fn uniform_policy(spatial: usize) -> crate::ai::network::RawPolicyOutput {
+        crate::ai::network::RawPolicyOutput {
+            fog: None,
+            macro_stance: None,
+            macro_order: None,
+            rollout_value: None,
+            action_type: vec![0.0; 11],
+            source_spatial: vec![0.0; spatial],
+            target_spatial: vec![0.0; spatial],
+            move_option: vec![0.0; 192],
+        }
+    }
+
+    /// EXP_ELO_126: `net_prior_w == 0.0` must fully gate off the widening
+    /// path -- the whole point of the gate is that this fix is byte-
+    /// identical to the pre-EXP_ELO_126 behavior when the net prior is
+    /// disabled. Checked via the RETURNED PICK, not the shared
+    /// `MICRO_MCTS_UNION_WIDENED` atomic -- that counter is a process-wide
+    /// static and `cargo test` runs tests in parallel by default, so a
+    /// concurrently-running test that deliberately triggers widening (e.g.
+    /// `union_pick_maps_back_to_the_original_ranked_index`) can and does
+    /// increment it mid-run here, producing a false failure. The pick
+    /// itself has no such cross-test interference.
+    #[test]
+    fn union_widening_is_fully_gated_off_at_net_prior_w_zero() {
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+        let params = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0 };
+        let mut ran_any = false;
+        for seed in 0..8i64 {
+            let game = tiny_game_at_seed(seed);
+            let pov = game.state.settings.current_player_turn_id;
+            let mut view = game.clone_for_mcts(pov);
+            let goal = compute_macro_goal(&view.state, pov, 0);
+            let aux = compute_goal_aux(&view.state, pov, &goal, 0, 0, None);
+            let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
+            let ranked = rank_plies(&mut view, pov, &goal, &aux, star_gate, 1.0, None, None);
+            if ranked.len() < 2 {
+                continue;
+            }
+            let heur_top = ranked.len().min(4);
+            ran_any = true;
+            let (picked, _, _) =
+                micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None);
+            if let Some(idx) = picked {
+                assert!(
+                    idx < heur_top,
+                    "seed {seed}: net_prior_w == 0.0 but the pick ({idx}) fell outside the \
+                     heuristic's own top-{heur_top} -- the widening gate is not actually closed"
+                );
+            }
+        }
+        assert!(ran_any, "no seed produced a real search call -- test setup is broken");
+    }
+
+    /// EXP_ELO_126: the core regression this fix exists to prevent. Before
+    /// this fix, `micro_search_pick` returned an index into its OWN
+    /// children vector, which happened to equal the index into `ranked`
+    /// only because children were always exactly `ranked[..top_n]` in
+    /// order. Once the candidate set can be a union that appends net-only
+    /// moves after the heuristic's own top-k, returning the raw
+    /// children-vector position would silently point at the wrong move.
+    /// This finds a real position with legal moves outside the heuristic's
+    /// top-4, crafts a policy that the REAL `compute_move_priors_raw`
+    /// (ground truth, not a hand-derived guess about `mapper.rs`'s
+    /// internals) actually prefers for one of those excluded moves, forces
+    /// a deterministic single-simulation pick of it (`sims: 1` -- PUCT's
+    /// very first selection, with every child unvisited, is exactly
+    /// `argmax(prior)`; `net_prior_w: 1.0` makes prior purely net-driven),
+    /// and asserts the returned index is the move's ORIGINAL position in
+    /// `ranked`, not its position among the union's children.
+    #[test]
+    fn union_pick_maps_back_to_the_original_ranked_index() {
+        for seed in 0..20i64 {
+            let game = tiny_game_at_seed(seed);
+            let pov = game.state.settings.current_player_turn_id;
+            let mut view = game.clone_for_mcts(pov);
+            // Must match `micro_search_pick`'s own `map_size` derivation
+            // exactly -- Tiny maps are NOT the 11x11 feature-space
+            // constant, so hardcoding 11 here silently miscoordinates
+            // every spatial index crafted below against a different grid
+            // width than the real function decodes against.
+            let map_size = view.state.settings.size as usize;
+            let spatial = map_size * map_size;
+            let goal = compute_macro_goal(&view.state, pov, 0);
+            let aux = compute_goal_aux(&view.state, pov, &goal, 0, 0, None);
+            let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
+            let ranked = rank_plies(&mut view, pov, &goal, &aux, star_gate, 1.0, None, None);
+            let heur_top = ranked.len().min(4);
+            if ranked.len() <= heur_top {
+                continue; // nothing outside the heuristic's own top-k here
+            }
+            let all_moves: Vec<Box<dyn Move>> =
+                ranked.iter().map(|(_, mv)| dyn_clone::clone_box(mv.as_ref())).collect();
+
+            // Try biasing one coordinate at a time across all four policy
+            // tensors until the REAL decode function clearly prefers a
+            // move outside the heuristic's top-k.
+            let tensor_lens = [11usize, spatial, spatial, 192];
+            let mut winner: Option<(crate::ai::network::RawPolicyOutput, usize)> = None;
+            'search: for (tensor, &len) in tensor_lens.iter().enumerate() {
+                for i in 0..len {
+                    let mut policy = uniform_policy(spatial);
+                    match tensor {
+                        0 => policy.action_type[i] = 50.0,
+                        1 => policy.source_spatial[i] = 50.0,
+                        2 => policy.target_spatial[i] = 50.0,
+                        _ => policy.move_option[i] = 50.0,
+                    }
+                    let scores = crate::ai::search::policy_composer::compute_move_priors_raw(
+                        &policy, &all_moves, map_size, false,
+                    );
+                    // Lowest-index-wins-ties argmax, matching
+                    // `micro_search_pick`'s own `net_order` sort exactly --
+                    // `Iterator::max_by` breaks ties toward the LAST
+                    // element, the opposite direction, which silently
+                    // picked a different (tied) winner than production
+                    // here during development.
+                    let mut best_i = 0usize;
+                    let mut best_s = scores[0];
+                    for (i, &s) in scores.iter().enumerate().skip(1) {
+                        if s > best_s {
+                            best_s = s;
+                            best_i = i;
+                        }
+                    }
+                    // Require a clean margin over EVERY other candidate
+                    // (not just the heuristic's own top-k) -- a move that
+                    // merely edges out the top-4 while nearly tying some
+                    // OTHER excluded move (e.g. two units able to step onto
+                    // the same tile) is exactly the ambiguous case a
+                    // tie-break-direction mismatch can flip.
+                    let second_best = scores
+                        .iter()
+                        .enumerate()
+                        .filter(|&(i, _)| i != best_i)
+                        .map(|(_, &s)| s)
+                        .fold(f32::MIN, f32::max);
+                    if best_i >= heur_top && best_s > second_best * 2.0 + 1e-6 {
+                        winner = Some((policy, best_i));
+                        break 'search;
+                    }
+                }
+            }
+            let Some((policy, target_idx)) = winner else {
+                continue; // this seed's move set didn't yield a clean case, try another
+            };
+
+            let evaluator = Evaluator::Dummy(DummyEvalHandle::new().with_policy(policy));
+            let params = MicroParams { sims: 1, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 1.0 };
+            let (picked, _, _) =
+                micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None);
+            assert_eq!(
+                picked,
+                Some(target_idx),
+                "seed {seed}: expected the net-only candidate at ranked[{target_idx}] (outside \
+                 the heuristic's top-{heur_top}) to be returned by its ORIGINAL ranked index, got {picked:?}"
+            );
+            return; // one confirmed case is enough to pin the invariant
+        }
+        panic!("no seed across 0..20 produced a usable net-only-candidate scenario -- test setup needs a wider seed range");
     }
 
     /// EXP_ELO_119: pins the fix for EXP_ELO_079's own collapse -- a real

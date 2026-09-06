@@ -1021,6 +1021,15 @@ impl DummyEvalHandle {
         self
     }
 
+    /// EXP_ELO_126 test seam: report an arbitrary caller-supplied
+    /// `RawPolicyOutput` from every `evaluate` call, so tests can craft a
+    /// policy that decodes (via the real `compute_move_priors_raw`) to a
+    /// known move preference without a trained checkpoint.
+    pub fn with_policy(mut self, policy: RawPolicyOutput) -> Self {
+        self.uniform = Arc::new(policy);
+        self
+    }
+
     pub fn stats(&self) -> &DummyStats {
         &self.stats
     }
