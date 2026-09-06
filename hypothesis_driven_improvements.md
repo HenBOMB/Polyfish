@@ -17942,3 +17942,134 @@ work to `IndexMap::get` alone, +~6% more to `HashMap`/`IndexMap`
 hash/rehash on the same tile lookups) -- a real wall-clock number
 should be captured opportunistically (e.g. piggybacked on a future
 run's before/after) rather than blocking on a dedicated benchmark.
+
+## EXP_ELO_131 — ply-distillation retry: listwise ranking + regret metric
+(pre-registered, Sep 6 2026, Verdi-directed after killing the Fix 3
+benchmark loop for time)
+
+CONTEXT: `EXP_ELO_065` (Aug 21) tried distilling `rank_plies`'s per-
+candidate Δφ scoring into a net forward pass and found it inconclusive:
+trained as REGRESSION (Huber loss on raw Δφ, 10 epochs, undertrained),
+evaluated by raw top-1 ARGMAX AGREEMENT — both models scored *below*
+simply ignoring Δφ (score_move alone). That entry's own postmortem named
+the flaw ("classic ranking-vs-regression mismatch") and its own next step
+was a regret metric + per-call score centering, neither of which ran.
+Meanwhile a zero-code-change lever measured 4.52x throughput on the exact
+same rollouts (`--macro-rollout-lambda 0.0`, EXP_ELO_061's flag) with a
+real but moderate quality cost (~6-12% down across score/kills/hubs at
+n=48) — that's the bar a distilled head has to clear, not "beats a
+strawman."
+
+HYPOTHESIS: training the SAME decomposed coordinates the ply-level policy
+head already uses (action_type/source/target/option, exactly what
+`compute_move_priors_raw` already composes for arbitrary legal-move
+lists) with a LISTWISE softmax cross-entropy over each `rank_plies`
+call's real candidate set — not a regressed scalar — will show
+materially lower held-out REGRET (`true_score(true_top) -
+true_score(model_top)`, not hit/miss) than `score_move`-alone's regret,
+particularly on Step (74% of candidate volume) and Research (the one
+move_type `EXP_ELO_065`'s Phase 0a confirmed is GoalAux-load-bearing,
+r=0.854 vs >0.98 everywhere else).
+
+METHOD: reuse the existing `POLYFISH_DPHI_PROBE` instrumentation
+unchanged (verified still functional post-Fix-1/2/3 via a 3-game smoke
+test, 201K rows). Harvest at production config (macro-sims 64/k 6,
+goal-channels, net-asym leaf) targeting >=20K sampled calls (vs 065's
+2000) for real move_type coverage, especially Research (065's held-out
+set had n=19). Offline PyTorch trainer (`train_ply_ranker.py`): small
+conv trunk + the 4 decomposed heads (mirrors network.rs's actual head
+shapes, not the full ResBlock/cross-attention trunk — this is a go/no-go
+gate, not the production head), composed per-candidate score = sum of
+log-softmax pieces across applicable heads (log-domain equivalent of
+`compute_move_priors`'s multiplicative composition), trained to a
+held-out-regret plateau (not a fixed undertrained epoch count), per-call
+score centering before the softmax target (065's flagged-but-never-run
+fix). Reconstructed label: `score_move + lambda*dphi_full` — the same
+sum `rank_plies` ranks on, using the pre-EndTurn-revival candidate set
+(revival is a cheap flat-floor override that stays in Rust regardless).
+
+BAR: proceed to Phase 1 (port into `network.rs` proper, dual-network
+sync, `Option`-gated per the `aux_fog` precedent, eval-server wiring
+through both tch and Metal backends per CLAUDE.md's documented trap)
+only if held-out regret is clearly below `score_move`-alone's regret on
+Step AND Research. Otherwise: ship `--macro-rollout-lambda 0.0` (or a
+swept intermediate value) instead — it's already measured, already
+built, and currently beats every distilled-head number on record.
+
+### ACTUAL (Sep 6, 2026) — bar cleared, decisively
+
+Harvest: 23,019 sampled `rank_plies` calls (11.5x EXP_ELO_065's 2,000),
+21,926 usable after joining features (0 dropped to missing features; 95
+dropped to <2 candidates, i.e. no real choice to rank). Research alone:
+6,877 rows (065's held-out set had n=19 total).
+
+Offline trainer (`train_ply_ranker.py`, small conv trunk mirroring
+`network.rs`'s actual head shapes — 4 ResBlock-free GroupNorm conv
+layers, NOT the full cross-attention PolyZeroNet, since this is a go/
+no-go gate not the production head) trained 40 epochs, listwise softmax
+cross-entropy over each call's real candidate set (per-call centered
+true_score, temperature 50), batched forward passes (one trunk call per
+64-example minibatch, one vectorized gather per example for the 4-head
+composed score — the naive per-candidate-Python-loop version was
+unusably slow, see below). Train loss fell smoothly 2.82 -> 2.17 over
+40 epochs, no divergence.
+
+**Held-out regret, best checkpoint (epoch ~29 of 40), n=4,385 held-out
+calls:**
+
+| move_type | n | model regret | baseline (score_move-alone) regret | model is Nx better |
+|---|---|---|---|---|
+| Step (50% of held-out volume) | 2197 | 55.84 | 152.94 | 2.7x |
+| Attack | 706 | 78.04 | 132.16 | 1.7x |
+| Summon | 436 | 43.13 | 428.92 | 9.9x |
+| Build | 287 | 57.11 | 182.97 | 3.2x |
+| Reward | 208 | 22.96 | 51.97 | 2.3x |
+| Research | 194 | 22.23 | 180.16 | **8.1x** |
+| Ability | 171 | 70.64 | 300.85 | 4.3x |
+| Capture | 101 | 14.87 | 149.42 | 10.0x |
+| Harvest | 85 | 29.95 | 160.66 | 5.4x |
+| **overall** | 4385 | **54.32** | **181.25** | **3.3x** |
+
+The model beats the zero-Δφ baseline on **every single move_type**, most
+by 2-10x, including both bar-setting types: Step (bulk of volume) and
+Research (the type EXP_ELO_065's Phase 0a confirmed is GoalAux-load-
+bearing, r=0.854 vs >0.98 elsewhere). This directly overturns EXP_ELO_
+065's Phase 0c interim finding (both its models scored *below*
+score_move-alone) — confirming that entry's own self-diagnosed flaw
+(regression-then-argmax-judged, undertrained, wrong metric) was the
+actual cause, not a ceiling on what a decomposed head can do here.
+
+**A training-loop performance bug worth recording**: the first working-
+but-unbatched version of this trainer (one forward pass per example, no
+batching) failed to finish a single epoch of 17,541 examples in ~50
+minutes of wall-clock (killed). Batching the trunk forward pass alone
+(64 examples/call) was not enough — the *scoring* step (composed
+per-candidate log-prob) still looped in Python over ~50 candidates per
+example doing individual MPS-dispatched tensor-index reads, which
+dominated cost even worse than the trunk itself (confirmed: 56 CPU-
+minutes burned without finishing epoch 0 even after trunk batching).
+Fix: precompute each call's candidates as numpy index arrays once
+(`action_idx`/`source_idx`/`has_source`/etc.) and score the WHOLE
+candidate set of an example with ~4 vectorized `gather`-style ops
+instead of one Python-loop iteration per candidate. Result: 500-call
+smoke test went from "can't finish one epoch" to 1.7-2.8s/epoch;
+full 17,541-example epochs then ran a consistent ~71-76s. The lesson
+generalizes: in eager PyTorch, per-candidate Python-level tensor
+indexing is not "cheap CPU work" once each op round-trips to an MPS
+device — it needs the same batching discipline as the forward pass
+itself.
+
+**Disposition: bar cleared, proceed to Phase 1** (port into `network.rs`
+proper — new head(s) following the `aux_fog`/`pi_macro_stance` optional-
+load precedent, `train.py` mirror, then the harder half: eval-server
+wiring through BOTH the tch and Metal backends per CLAUDE.md's
+documented "new head silently reads zero on the fast path" trap, since
+this head is genuinely inference-consumed, not training-only). Not
+started this session — Phase 1 is real production wiring (dual-network
+sync + multi-backend inference), materially larger and riskier than the
+offline gate, and deserves its own focused pass rather than being
+rushed onto the end of this one. This offline model itself is NOT the
+production artifact; it proved the APPROACH (decomposed listwise
+ranking beats regression-then-argmax and beats zero-Δφ), not a
+deployable checkpoint — Phase 1's head trains fresh, inside the real
+trunk, on real self-play data, not this harvest.
