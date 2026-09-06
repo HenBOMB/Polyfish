@@ -26,6 +26,24 @@ pub(crate) fn print_run_summary(
         "  - Throughput: {:.2} moves/sec ({} moves)",
         final_moves_per_sec, total_moves
     );
+    // EXP_ELO_127: moves/sec and games_duration are both run-wide means --
+    // neither says how spread out a single game's or a single turn's own
+    // wall-clock actually is. concurrency means these are WALL TIME per
+    // game/turn, not actor-exclusive CPU time -- with N actors sharing the
+    // eval server, one game's wall clock includes time spent queued behind
+    // another actor's batch, same as real deployed latency would.
+    let (n_games_timed, game_p50, game_p90) = crate::stats::game_duration_stats();
+    println!(
+        "  - Game duration: n={n_games_timed} median={} p90={} (wall-clock, concurrent actors)",
+        game_p50.map_or("n/a".to_string(), |v| format!("{:.2}s", v as f64 / 1000.0)),
+        game_p90.map_or("n/a".to_string(), |v| format!("{:.2}s", v as f64 / 1000.0)),
+    );
+    let (n_turns_timed, turn_p50, turn_p90) = crate::stats::turn_duration_stats();
+    println!(
+        "  - Turn duration: n={n_turns_timed} median={} p90={} (one player's own ply sequence, wall-clock)",
+        turn_p50.map_or("n/a".to_string(), |v| format!("{v}ms")),
+        turn_p90.map_or("n/a".to_string(), |v| format!("{v}ms")),
+    );
     // How often search crossed a turn boundary in-tree (simulated EndTurn
     // edges only; real played moves don't count). ~0/move decision means the
     // tree essentially never sees beyond the current turn.
@@ -168,6 +186,17 @@ pub(crate) fn print_run_summary(
         micro_carry_attempts,
         micro_carry_hits,
         micro_carry_hits as f64 / (micro_carry_attempts as f64).max(1.0)
+    );
+    let micro_union_widened = polyfish::ai::search::micro_mcts::MICRO_MCTS_UNION_WIDENED
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let micro_union_won =
+        polyfish::ai::search::micro_mcts::MICRO_MCTS_UNION_WON.load(std::sync::atomic::Ordering::Relaxed);
+    println!(
+        "  - micro-mcts net-prior union (EXP_ELO_126): {} / {} plies widened the candidate set beyond rank_view's top-k ({:.1}%), {} won the pick",
+        micro_union_widened,
+        micro_mcts_calls,
+        micro_union_widened as f64 / (micro_mcts_calls as f64).max(1.0) * 100.0,
+        micro_union_won
     );
     polyfish::ai::search::macro_exec::dphi_probe_flush();
 }

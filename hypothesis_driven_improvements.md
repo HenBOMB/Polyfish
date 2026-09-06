@@ -17221,3 +17221,465 @@ deterministic` (piece 4's earlier resize-bug regression test) and
 parity test). `model.safetensors` untouched, still md5-matches the
 shared tip checkpoint (`ca587e63...`) -- no training was run for this
 change, it is pure default-wiring.
+
+### Piece 1: flipped to genuine production default (2026-09-05)
+
+Verdi: "Let's make root NN prior on micro-mcts on by default pls."
+`micro_mcts.rs`'s `micro_mcts_params()` (the sole entry point -- unlike
+macro's root prior, this mechanism has no CLI flag layer at all, only
+the `POLYFISH_MICRO_MCTS_NET_PRIOR_W` env var, consulted directly from
+inside `macro_mcts.rs`'s ply-execution loop regardless of caller):
+default flipped 0.0 -> **0.3**, the one weight actually smoke-tested
+this session (override rate 10.3% -> 21.1%, confirming the blend is
+genuinely behaviorally active). `MicroParams::default()` (the unrelated
+`impl Default`, dead code -- grepped, it has no callers besides one test
+with an explicit literal) left untouched at 0.0, consistent with the
+struct-vs-entry-point-default split established for macro's `MacroParams`.
+
+**Materially lower risk than the macro/rollout flips**: `micro_mcts_params`/
+`micro_search_pick` have exactly one call site (`macro_mcts.rs`'s own
+ply-execution loop) -- no other backend (Gumbel, Zero) touches this code
+path at all, and there is no CLI-layer guard anywhere that checks this
+value against its old default, so none of the guard-bug class caught
+twice already in this session applies here.
+
+**Honestly flagged, not glossed over**: unlike pieces 3 and 4, this
+default was flipped WITHOUT a matched-pair + eval_seeds arena win-rate
+validation -- only the cheap override-rate smoke test exists. This is a
+bigger leap of faith than pieces 3/4 got before shipping default (both
+had a full 200-game arena read first). The mechanism blends against an
+already-behavior-cloned prior with no root-painting-mismatch risk (goal
+painted matches the ply's own committed goal, per the field's own doc
+comment), so the a priori risk is low, but "low risk" here is reasoned,
+not measured. Full matched-pair + eval_seeds arena validation for this
+piece remains the same open item flagged in the original piece-1 RESULT
+entry above.
+
+VERIFICATION: `cargo build --release --features apple --bin self_play
+--bin arena --bin polyfish` clean. `cargo test --release --features
+apple --lib --bin self_play`: 375 lib + 25 self_play, all green
+(unchanged counts -- this was a one-line default-value change, no new
+tests added or needed).
+
+## EXP_ELO_126 — Role B: micro-mcts's candidate shortlist no longer gates out the net (2026-09-06)
+
+CONTEXT: diagnosed while explaining reward.rs to Verdi -- `micro_search_pick`
+truncated the ply candidate set to `rank_view`'s own top-k (Δφ heuristic,
+default 4) BEFORE the net's own prior was ever computed, and the net's
+prior was then only decoded over that same top-k subset. A move the net
+actually preferred could never enter the search at all if the CPU
+heuristic ranked it 5th or worse -- the heuristic silently gated what the
+net-driven layer was allowed to consider. Verdi: "we should fix B... NN
+capabilities will eventually surpass heuristic quickly enough so it
+shouldn't be bottlenecked by it." Design reviewed with the advisor before
+implementation (index-remap correctness, gating, tie-break determinism,
+scope boundary, validation plan) -- proceeded as advised, no design
+changes needed after review.
+
+CHANGE (`micro_mcts.rs`): the net's prior is now decoded via
+`compute_move_priors_raw` over the FULL legal-move list, not just the
+heuristic's own top-k -- free, since the network forward pass already ran
+once regardless of candidate count; only the per-move tensor readout
+needed to cover more moves. The net's own top-k (by that full-list score,
+deterministic tie-break toward the lower original index) is UNIONED into
+the candidate set alongside the heuristic's top-k, so a net-favored move
+can never be silently excluded. Gated behind `net_prior_w > 0.0` --
+byte-identical to pre-fix behavior when the net prior is off (unchanged
+default 0.3 as of EXP_ELO_125 piece 1). New counters
+`MICRO_MCTS_UNION_WIDENED`/`_WON` (surfaced in self_play's summary
+output) track how often the union actually adds a net-only candidate and
+how often one wins the pick.
+
+BUG CLASS CAUGHT BY THE ADVISOR BEFORE IT SHIPPED: `micro_search_pick`
+returns an index the caller uses directly against `ranked`
+(`ranked.swap(0, idx)`); before this fix, children-vector position and
+`ranked` position were always identical by construction, so returning
+`best_idx` directly worked. Under the union, a net-only addition sits at
+its ORIGINAL `ranked` index (which can be far from its position among
+`root.children`) -- returning the raw children-vector position would
+have silently executed the wrong move with no error anywhere. Fixed by
+keeping `idxs` (the union, in children order) around and returning
+`idxs[best_idx]`.
+
+TESTING: two new unit tests, both caught real test-construction bugs of
+their own during development (not production bugs) before landing green:
+1. `union_widening_is_fully_gated_off_at_net_prior_w_zero` -- originally
+   written against the shared `MICRO_MCTS_UNION_WIDENED` atomic's exact
+   before/after delta; failed spuriously because `cargo test` runs tests
+   in parallel in one process and a concurrently-running test that
+   deliberately triggers widening polluted the shared counter. Rewritten
+   to assert on the RETURNED PICK instead (always `< heur_top` when the
+   gate is closed) -- no cross-test interference possible.
+2. `union_pick_maps_back_to_the_original_ranked_index` -- pins the
+   index-remap invariant above by finding a real position with candidates
+   outside the heuristic's top-4, using the REAL `compute_move_priors_raw`
+   (ground truth, not a hand-derived guess about `mapper.rs`'s internals)
+   to find a policy bias it clearly prefers for an excluded move, and
+   checking the full pipeline returns that move's ORIGINAL `ranked`
+   index. Two of my own bugs found and fixed before this test passed
+   validly: (a) an initial no-op "fix" that assumed `MapSize::Tiny` might
+   not be 11x11 (it is -- 11x11 confirmed in `types.rs`; the real
+   remaining bug was elsewhere), (b) a tie-break MISMATCH between the
+   test's own discovery loop (`Iterator::max_by`, which breaks ties
+   toward the LAST element) and the production code's `net_order.sort_by`
+   (ties toward the LOWEST index) -- two different moves shared a decoded
+   tile/coordinate under the crafted policy, so the two tie-break
+   directions picked different "winners." Fixed by making the discovery
+   loop use the same lowest-index-wins convention and requiring a clean
+   2x margin over EVERY other candidate (not just the heuristic's own
+   top-k), not just a fragile near-tie.
+
+Full suite: 377 lib (+2 from this fix) + 25 self_play, all green, stable
+across 5 repeated runs of the two new tests (no flakiness observed post-fix).
+
+VALIDATION (cheap smoke test, same recipe as piece 1's original
+override-rate check -- no retrain needed, this is a pure search-time
+mechanism): 8-game self-play batch, `net-asym` leaf, `macro-sims 64`,
+`goal-w-tree 1`, tip checkpoint (`ca587e63...`, unchanged after the run).
+**Result: 2687/3368 plies (79.8%) had the candidate set actually widened
+beyond the heuristic's own top-k, and 835/3368 (24.8%) had a net-only
+candidate win the pick.** Overall micro-mcts override rate rose to 42.8%
+(1443/3368), roughly double EXP_ELO_125 piece 1's original 21.1% smoke
+reading (which only re-weighted within the heuristic's existing top-4).
+This confirms the fix is not cosmetic -- the heuristic's shortlist was
+genuinely suppressing a large fraction of what the net would otherwise
+have picked.
+
+SCOPE BOUNDARY (left alone, per the advisor's note, not silently
+widened): `rank_plies` applies `gate_ok` (the star gate / stance gates)
+BEFORE ranking, so gate-filtered moves never reach `ranked` and this fix
+cannot resurrect them either. That is a different mechanism, and the one
+past attempt at relaxing a gate-adjacent rule (EXP_ELO_075's EndTurn
+revival) measurably collapsed win rate. Not touched here.
+
+**Disposition: ships as the new default (net_prior_w's own default,
+0.3, already made this mechanism live -- this fix is a correctness
+change to code that was already running, not a new opt-in).** Full
+matched-pair + eval_seeds arena win-rate validation not run -- same
+honest caveat as piece 1's original entry: the mechanism is confirmed
+mechanically correct and behaviorally substantial, not yet proven to
+move win-rate. `model.safetensors` unchanged (`ca587e63...`) throughout;
+smoke-test game archives (`games_*.safetensors`, gitignored) deleted
+after the read.
+
+## EXP_ELO_127 — training-loop strength gauge: switched to macro-mcts + eval_seeds.json, ladder pinned on greedy (2026-09-06)
+
+CONTEXT: Verdi asked to make the training loop's periodic strength gauge
+"most useful... run against eval_seeds json... fully against greedy," to
+get a reliable, low-noise self-improvement signal and a trustworthy
+self-termination check. Investigated `run_training_loop.sh`'s existing
+gauge (`ladder.py`/`ladder.json`) before touching anything, and found TWO
+separate problems bundled into what looked like one ask:
+
+1. **Wrong backend, not just noisy seeds.** The gauge has ALWAYS run on
+   the Gumbel backend (`--backend1 gumbel --backend2 greedy/gumbel`),
+   hardcoded, regardless of whether `MACRO_GEN=1` drives actual training-
+   data generation via macro-mcts. Since EXP_ELO_125's piece 2 made
+   `net-asym`-leaf macro-mcts the production/deployment default, the
+   gauge has been measuring a search process nobody ships anymore -- the
+   code's own comment ("gauge the policy we would DEPLOY") has been false
+   since that flip landed.
+2. **Random/incrementing seeds**, not `eval_seeds.json` -- map-generation
+   variance swamps small behavioral effects (EXP_GATE_001), exactly the
+   noise floor problem Verdi has flagged repeatedly this session.
+
+Also found: `ladder.py` already implements a full anchor-progression
+system (not just "measure vs greedy") -- greedy starts as the active
+anchor, and beating it >=80% freezes a snapshot of the model as the NEW
+anchor, retiring greedy. The plateau-based self-termination (2 consecutive
+8-reading windows with no gain) already exists too, and its logic is
+**entirely independent of backend/seed source** -- it just consumes
+whatever `win_rate` gets recorded. This meant the fix didn't require
+touching the plateau-detection math at all, only what feeds it.
+
+Presented findings + 3 real design forks to Verdi via AskUserQuestion
+before implementing (anchor policy: fixed-vs-greedy vs keep the ladder vs
+hybrid; backend: switch to macro-mcts vs keep Gumbel for ladder.json
+continuity; reading size: cheap ~32 seeds vs full 100-seed suite).
+**All three recommended options chosen**: fixed-vs-greedy, switch to
+macro-mcts, keep it cheap (~32 seeds). Verdi's explicit follow-up: don't
+delete the ladder's anchor-freeze logic, make it a reversible toggle so
+it can resume once greedy is saturated (~99%).
+
+CHANGE:
+- `ladder.py`: new `LADDER_FREEZE_DISABLED` env gate (default off,
+  i.e. original behavior) wrapping the ONE line that sets
+  `action = "freeze"` in `cmd_record`. Nothing else touched -- the
+  freeze mechanism is fully intact, just conditionally skipped. Setting
+  `LADDER_FREEZE_DISABLED=0` (or unsetting it) restores the exact
+  original graduate-past-greedy-at-80%+ behavior with zero further
+  changes needed.
+- `run_training_loop.sh`: `export LADDER_FREEZE_DISABLED="${LADDER_FREEZE_DISABLED:-1}"`
+  -- new standing default, "for the time being" per Verdi, overridable.
+  `run_gauge_match` (both branches -- the greedy-opponent path AND the
+  anchor-vs-anchor path used by link-matches/future ladder progression)
+  rewritten to mirror self_play's exact production recipe on config 1
+  (`--macro-leaf1 net-asym --macro-sims1 <pinned> --macro-k1 6
+  --macro-root-prior-w1 0.05 --macro-rollout-nn-w1 1.0
+  --macro-rollout-nn-min-depth1 1`) and add `--seed-file eval_seeds.json`.
+  Dropped the now-irrelevant `$GOAL_ARENA_FLAG` (Gumbel-backend1-only,
+  per its own doc comment) and `--gumbel-k` from the arena invocation
+  itself (kept as a harmless vestigial metadata field in the `ladder.py
+  record` calls -- not used by any decision logic, confirmed by reading
+  `_plateau`/`_gauge_series`, so not worth expanding ladder.py's schema
+  just to keep it accurate).
+- Because freezing is disabled, `ladder.py active` will report greedy as
+  the active anchor for the entire life of any run using this default --
+  which means the "anchor-vs-anchor" branch of `run_gauge_match` and the
+  audit block (`ladder.py audit-opponents`, which needs a retired net
+  anchor to have anything to audit against) both naturally degrade to
+  no-ops without any special-casing. Confirmed by reading `ladder.py`'s
+  `audit-opponents` logic, not assumed.
+- `GAUGE_MCTS_EFF` (`${GAUGE_MCTS:-$MCTS_ITERS}`, default 64) now pins
+  `--macro-sims1/2` -- the parameter that actually controls macro-mcts's
+  tree budget -- rather than the previously-irrelevant `--mcts`/Gumbel
+  iteration count the old comment's "pin the budget so readings are
+  comparable" reasoning was originally written for.
+
+⚠️ Readings recorded before this date used a different backend (Gumbel)
+AND a different seed source (random) than readings after -- both
+`ladder.py`'s own comment and `run_training_loop.sh`'s now say so
+explicitly, matching this project's existing convention for this kind
+of discontinuity (the Jul 27 2026 Gumbel-scale note it replaces).
+
+VERIFICATION: `bash -n run_training_loop.sh` clean. `--seed-file`
+confirmed as arena's real flag name (`src/bin/arena/cli.rs:193-194`),
+all `--macro-*1/2` flags confirmed against the same file already read
+earlier this session. Live end-to-end validation of a real gauge
+iteration NOT run yet -- the machine's GPU was occupied by a concurrent
+throughput-measurement self-play batch at the time of this change, and
+running a competing arena process risked confounding both readings (and
+this project's own convention is never to shard eval work across
+concurrent GPU consumers). Flagged as the next thing to confirm once the
+machine is free, ideally by watching one real `run_training_loop.sh`
+gauge iteration end-to-end rather than a synthetic standalone check.
+
+## EXP_ELO_128 — settings-table lookups: HashMap -> Vec, real but modest throughput win (2026-09-06, overnight)
+
+CONTEXT: Verdi, before going to sleep for ~8 hours: "Get our busy_frac
+numbers WAY up. I am aiming for 80% and the goal is for me to have
+median for a single game at least 10x faster at like 15sec/game...
+Do look into the rank_plies() thing and measure. If it is indeed
+CPU-costly... let's optimize somehow. If we have a bug somewhere we can
+optimize let's do it. Let's also get a sense of the distribution if the
+numbers were better at the beginning but got worse bc of the long tail."
+Following up on the earlier 64-game production run's `busy_frac=0.194`
+finding.
+
+DIAGNOSIS METHOD: `/usr/bin/sample` (macOS's built-in profiler, zero code
+instrumentation needed) against a LIVE production self-play run (128
+actors, macro-mcts/net-asym, `--num-games 64`) -- two 20-second CPU
+profiles, one ~2.5 min in (many actors still had work) and one exactly
+as the run crossed its 80% completion milestone (most actors idle, a
+handful of stragglers still running). **Both profiles showed the
+identical hot function at the top**: `polyfish::settings::units::
+get_unit_setting` was the single hottest function in the entire profile
+in BOTH phases (3338 and 1709 top-of-stack samples out of ~20,000
+respectively), with `IndexMap::get`, hashing (`BuildHasher::hash_one`,
+sip hashing), and malloc/free overhead clustered right alongside it.
+This is itself an important finding: the bottleneck's NATURE did not
+change between the early and late phase, only the DEGREE of actor
+parallelism did -- meaning the earlier-observed low aggregate busy_frac
+is a **long-tail-straggler effect layered on top of a genuine, separate
+CPU-cost issue**, not one thing masquerading as the other. Both needed
+addressing; this entry covers the CPU-cost half.
+
+ROOT CAUSE: `get_unit_setting`/`get_technology_setting`/
+`get_tech_effects`/`get_structure_setting`/`get_resource_setting`
+(`src/settings/{units,technology,structures,resources}.rs`) each did a
+hash map lookup (`rustc_hash::FxHashMap` keyed by the enum) on EVERY
+call, despite each key being a small, dense-ish `#[repr(i8)]` enum
+(`UnitType` max discriminant 62, `TechnologyType` range -1..=121,
+`StructureType`/`ResourceType` similarly small) perfectly suited to
+direct array indexing. These are called from deep inside move
+generation/legality checking (`is_terminal`, `is_steppable`,
+`reach_search_turns`, `compute_movement_cost`, `city_risks_with_threats`,
+`goal_potential_inner`, `plan_city`) which `rank_plies` invokes on every
+candidate it scores. `rank_plies` itself is called 47 times per real
+move decision in production (measured in the original 64-game baseline:
+1,235,010 total calls, 64,921,649 total candidate scores) -- so this
+per-call hashing overhead was being paid on the order of tens of millions
+of times per self-play batch.
+
+FIX: all 5 lookups converted from `LazyLock<FxHashMap<EnumType, Setting>>`
+to `LazyLock<Vec<Setting>>` indexed directly by `variant as i8 as usize`.
+`UnitType`/`StructureType`/`ResourceType` have non-negative discriminants
+so a plain cast works; `TechnologyType` has `BeyondComprehension = -1` as
+its minimum, so `get_technology_setting`/`get_tech_effects` share a new
+`tech_index` helper offsetting from the enum's own iterated minimum
+(a raw `as usize` cast on -1 would wrap to a huge index and panic). Gap
+slots (commented-out enum variants inside the discriminant range) are
+filled with a real, safe placeholder (e.g. `UnitType::None`'s own
+settings) and are provably never read, since no constructible enum value
+can ever equal a nonexistent discriminant (`UnitType::from(v: i32)` can
+only ever yield a real variant or `None`, verified via each enum's own
+`FromRepr`/`EnumIter` derives).
+
+CORRECTNESS VERIFICATION -- including a real bug caught in the TEST
+methodology, not the fix: added 4 new equivalence tests (one per
+settings file), asserting `get_x_setting(v)` matches a freshly-computed
+`build_x_setting(v)` for every real enum variant. The first version
+compared via `format!("{:?}", ...)` Debug-string equality, which FAILED
+for `get_structure_setting(Road)` even though the fix itself was
+correct: `StructureSetting.terrain_types`/`UnitSetting.skills` are
+`HashSet`/`FxHashSet` fields, and two independently-built sets holding
+IDENTICAL elements are not guaranteed to iterate (and so Debug-print) in
+the same order -- Rust's default hasher is seeded per-thread, and the
+`LazyLock` table-init closure can run on a different thread than the
+test's own direct call. Fixed properly by adding `#[derive(PartialEq)]`
+to `StructureSetting`/`UnitSetting` and comparing via real `==` instead
+of Debug formatting (order-independent set equality). Full suite: **381
+lib tests (+4 new) + 25 self_play tests, all green**, confirmed
+independently on both a scratch `CARGO_TARGET_DIR` (fully isolated from
+any live run) and the normal shared target dir.
+
+VALIDATION -- controlled, reproducible before/after via `git stash`/
+`git stash pop` to isolate exactly this change (not an apples-to-oranges
+comparison across differently-seeded runs like the earlier 64-vs-64
+reads): identical 32-game batch, `--seed-file eval_seeds.json`, same
+actor/eval-server config (128 actors, macro-sims 64, macro-k 6,
+net-asym leaf), same machine, sequential same-session runs.
+
+| Metric | Before (pre-fix) | After (fixed) | Change |
+|---|---|---|---|
+| forwards/sec (realized, forwards÷wall-clock) | 64.85 | 67.85 | +4.6% |
+| busy_frac | 0.157 | 0.165 | +5.1% (relative) |
+| moves/sec | 9.86 | 10.41 | +5.6% |
+| Game duration median | 170.95s | 159.95s | -6.4% |
+| Game duration p90 | 448.60s | 464.70s | **+3.6% (worse)** |
+| Turn duration median | 1746ms | 1668ms | -4.5% |
+| Turn duration p90 | 14331ms | 13615ms | -5.0% |
+| avg_batch | 3.37 | 3.39 | flat |
+
+**Disposition, stated plainly: this is a real, verified, correctly-shipped
+fix, but it did NOT come close to Verdi's targets (busy_frac -> 80%,
+median game -> 15s).** The improvement is genuine but modest (~5% across
+most metrics), not transformative. Most tellingly, **p90 game duration
+did not improve at all -- it got very slightly worse**, while the median
+improved a little. This is exactly the signature predicted going in: a
+CPU-cost fix makes each individual actor's work somewhat cheaper, which
+nudges the median down, but does nothing for whatever is producing the
+LONG TAIL of unusually slow games, since that tail is governed by a
+structurally different mechanism (see EXP_ELO_129 below). Being the
+single hottest function in a CPU profile does not imply fixing it
+dominates end-to-end throughput when many OTHER functions (other
+`IndexMap`/hashing/malloc call sites still visible in both `sample`
+profiles) collectively contribute more than any one of them alone --
+this profile had a long tail of contributors, not one dominant peak.
+**The 80%/15s targets require a separate, likely larger fix (see
+EXP_ELO_129) -- this entry should not be read as having closed that
+gap, only as having removed one real, confirmed, now-eliminated cost.**
+`model.safetensors` untouched throughout (pure inference/self-play code
+change, no training involved).
+
+## EXP_ELO_129 — actor starvation: the likely dominant remaining bottleneck (diagnosed by code reading, empirical confirmation abandoned for machine safety) (2026-09-06, overnight)
+
+CONTEXT: EXP_ELO_128's settings-lookup fix landed cleanly but only bought
+~5% across the board, and tellingly, **p90 game duration did not improve
+at all** (it ticked slightly up) while the median improved a little --
+exactly the signature of a fix that makes typical work cheaper without
+touching whatever produces the long tail. Continuing Verdi's overnight
+mandate to find the real, larger throughput problem.
+
+HYPOTHESIS, CONFIRMED BY DIRECT CODE READING (`src/bin/self_play/
+runner.rs:57-77`), not by measurement: every actor thread runs
+`loop { let i = job_counter.fetch_add(1, ...); if i >= args.num_games {
+break; } play_single_game(i, ...) }` against ONE shared atomic counter.
+This IS proper work-stealing in principle -- an actor that finishes
+early loops back and claims the next unclaimed index -- but **only if
+there are more indices left to claim than actors already working**.
+When `num_games <= num_actors` (production's own defaults:
+`NUM_GAMES=64`, `ACTORS=128`, in `run_training_loop.sh` -- and every
+benchmark this session used the same shape), the counter exhausts
+itself almost immediately: the first `num_games` actors each grab
+EXACTLY ONE game and run it alone, start to finish, and the remaining
+`num_actors - num_games` threads see `i >= args.num_games` on their
+very first attempt and exit having done nothing. There is no
+work-stealing event to observe in this regime, because nothing is ever
+left in the queue for a fast-finishing actor to steal. The batch's total
+wall-clock is just "however long the single slowest of `num_games`
+games takes," and busy_frac necessarily collapses as those games finish
+one by one with **zero replacement** -- this is a completely different
+mechanism from EXP_ELO_128's per-call CPU cost, and explains why fixing
+the latter barely moved the needle: a cheaper per-move cost shortens
+every game a little, but does nothing about actors going idle once
+their one assigned game ends.
+
+This also directly explains the "was it better at the start" question
+from Verdet's original ask: the two `sample` CPU profiles in EXP_ELO_128
+looked qualitatively IDENTICAL (same hot function, same relative
+ranking) precisely because actor STARVATION doesn't change what the
+CPU is doing while it's active -- it only changes HOW MANY actors are
+active at a given moment. Early in a batch, up to `num_games` actors
+are genuinely busy; late in the same batch, only however many games
+haven't yet finished are still running, with everyone else idle. The
+profile of "what busy actors do" never changes; only their count does.
+
+ATTEMPTED EMPIRICAL VALIDATION, ABANDONED FOR MACHINE SAFETY: planned to
+directly test this by raising `--num-games` well above `--actors` (so
+the queue never runs dry) and checking whether `busy_frac` rises
+substantially. First attempt: 256 games / 128 actors -- this would have
+been the first run all night to saturate the FULL 128-actor pool
+concurrently (every prior successful run this session, including all of
+EXP_ELO_125-128's validation, topped out at 64 concurrent actors, since
+`num_games` never exceeded 64 before tonight). It was killed almost
+immediately (log shows only the startup banner, zero progress lines).
+Checked system memory immediately after: `PhysMem: 34G used (26G wired),
+908M unused` on a 36GB machine, with **no self_play/arena/cargo process
+running at the time of the check** -- the wired baseline was already
+consuming nearly the whole machine independent of anything I was doing.
+Retried more conservatively at 96 games / 32 actors (matching a
+concurrency level -- 32 -- well below the 64-concurrent level already
+proven stable across many successful runs tonight). This one progressed
+genuinely (19/96, then 38/96 across two checks, ~9 minutes of real
+work, `vm.swapusage` showing 24.3GB of a 25.6GB swap file already in
+use) before it was ALSO killed externally, mid-run, with no crash/panic
+in its own log. `pmset` confirms an active `caffeinate` process
+asserting `PreventSystemSleep`, ruling out "the Mac went to sleep" as
+the cause. The precise external cause (OS-level memory-pressure jetsam
+killing a background process on an already heavily-swapped machine
+seems most likely, given the swap numbers, but this is not confirmed)
+was not pinned down. **Given three kills in a row on increasingly
+conservative attempts, on a machine already showing near-exhausted free
+memory before any of these tests started, continuing to push
+larger/more-concurrent self-play runs tonight was judged not worth the
+risk of destabilizing Verdi's machine while they're asleep and unable
+to intervene -- this investigation stops here for tonight, undecided
+empirically, but not undiagnosed.**
+
+DISPOSITION: the actor-starvation mechanism is established with high
+confidence from the code itself -- this is not a probabilistic
+behavioral claim requiring a live A/B to believe, it is a direct
+consequence of how `job_counter` is consumed, true by construction
+whenever `num_games <= num_actors`. **Recommended fix, explicitly NOT
+implemented tonight and left for Verdi's own sign-off**: raise
+`--num-games` well above `--actors` for self-play generation batches --
+concretely, `run_training_loop.sh`'s current defaals
+(`BASELINE_GAMES=64`, `ACTORS=128`) should very likely be inverted in
+ratio (e.g. actors well below games-per-iteration, or games-per-iteration
+raised to several times the actor count) so the job queue never runs dry
+before the batch ends. This is deliberately NOT auto-applied as a
+config change: it trades off iteration cadence and checkpoint/gauge
+timing against raw throughput (CLAUDE.md's own note that "all
+iteration-keyed schedules... are derived from -g" means this should
+rescale cleanly, but the practical batch-size/memory-footprint economics
+of a much larger concurrent game count are a judgment call, not a pure
+bug fix like EXP_ELO_128 was) -- exactly the kind of standing-config
+change that should be Verdi's call once awake, not something to change
+unilaterally overnight, especially on a machine that just proved it
+can't currently sustain higher concurrency without getting killed.
+
+**Honest summary against Verdi's original ask**: the 80%-busy_frac and
+15s-median-game targets were NOT reached tonight. EXP_ELO_128 fixed a
+real, confirmed, measured CPU-cost bug for a genuine but modest ~5%
+gain. EXP_ELO_129 identifies what is very likely the dominant remaining
+cause (actor starvation under a too-small games:actors ratio) with high
+confidence from code analysis, but the live confirmation number was not
+obtained, and the fix itself was deliberately left un-applied pending
+Verdi's own judgment call on the batch-size/memory tradeoff, especially
+given tonight's evidence that this exact machine cannot currently
+sustain a fully-saturated 128-actor run without something killing the
+process. Both findings and both pieces of reasoning are recorded here
+precisely so this can be picked up and finished with real numbers once
+Verdi is back and the machine's memory situation can be assessed with
+them present.
