@@ -18073,3 +18073,231 @@ production artifact; it proved the APPROACH (decomposed listwise
 ranking beats regression-then-argmax and beats zero-Δφ), not a
 deployable checkpoint — Phase 1's head trains fresh, inside the real
 trunk, on real self-play data, not this harvest.
+
+**⚠️ SUPERSEDED (Sep 6, 2026, same day)**: the assumption that Phase 1
+must add new heads inside `network.rs`'s real trunk turned out to be an
+open question, not a given — tested below (rungs B and A2) and rejected
+in favor of a standalone net. Everything after this line happened in
+the same session as the ACTUAL result above, prompted by Verdi asking
+why `rank_plies` isn't already replaced by an existing net signal, then
+directing "let's plug our NN and replace the cpu work for rank_plies."
+
+### Rung B (Sep 6, 2026) — do the EXISTING production policy heads already do this for free?
+
+CONTEXT: `micro_mcts.rs`'s own comment notes the production
+action_type/source_spatial/target_spatial/move_option heads are already
+"behavior-cloned on macro-mcts's own committed picks" — i.e. one-hot on
+argmax(rank_plies) (modulo micro-mcts override), the same target family
+as this experiment's listwise label. If those heads already predict it
+well, Phase 1 collapses to Rust-only wiring: no new heads, no retrain,
+no dual-network-sync shape change.
+
+METHOD: zero training. Load `model.safetensors` into the real
+`PolyZeroNet` (train.py), forward it on the same harvested features,
+run its 4 policy-head logits through the SAME `composed_log_probs`/
+`regret` used for the ACTUAL result above (`eval_production_heads_regret.py`).
+Confirmed the 12 missing state_dict keys on load are all training-only
+(5 aux heads + `pi_rollout_value`, none of the policy/pool path) — the
+result below is not a random-init artifact.
+
+RESULT: held-out regret 106.7-108.1 (full-set vs val-split, consistent)
+— beats `score_move`-alone (181) but **~2x worse than the dedicated
+54.3 head**, and actively **loses to the zero-Δφ baseline on Attack**
+(156.7-160.9 vs 132.2-144.0 baseline) — a disqualifying regression on a
+real-volume move type (16% of calls). Verdict: REJECTED. The existing
+heads are a usable-but-lossy proxy, not a free replacement.
+
+### Rung A2 (Sep 6, 2026) — fine-tune the EXISTING heads (frozen trunk) against the listwise target
+
+HYPOTHESIS: rung B's heads and this experiment's target are the *same*
+family (argmax-cloned vs listwise-over-the-same-scores), not competing
+objectives like macro_stance vs value (which is why `DETACH_MACRO_HEADS`
+exists) — so fine-tuning just `pi_action`/`pi_option`/`pi_source`/
+`pi_target`/`p_pool_conv`/`p_fc_shared` (trunk frozen, zero risk to the
+live policy/value heads) against the harvest's listwise loss might close
+most of the gap to 54.3 for a fraction of Phase 1's cost.
+
+METHOD: `finetune_production_heads.py`, same data/split/seed as the
+ACTUAL result above (so its 54.32 is directly comparable), only the 6
+named modules trainable, AdamW, up to 40 epochs, eval every 5.
+
+RESULT (killed at epoch 10 of 40): held-out regret 108.1 (pre) -> 109.5
+(epoch 4) -> 106.5 (epoch 9) — flat, within noise, **despite train_loss
+falling steadily 5.10 -> 3.82** (a real ~25% drop). The Attack
+regression never recovers (154.5 -> 160.9 -> 161... vs 132.2 baseline,
+unchanged sign across every checkpoint). Falling train loss with flat
+held-out regret is the signature of a capacity ceiling, not
+undertraining: `p_pool_conv` is a **1-channel** pool feeding the shared
+policy head (called out in `train.py`'s own comments as a known
+bottleneck — `v_pool_conv` was widened 1->8 for exactly this reason),
+whereas the dedicated `TrunkNet` that scored 54.3 pools the full 64-dim
+trunk via global-average-pool. Verdict: REJECTED, diagnosed
+architectural (pool width), not a training-recipe fix (ruled out
+before spending the remaining 30 epochs / ~30 min).
+
+### Disposition (revised) — standalone net, not new PolyZeroNet heads
+
+Given B and A2 both fail and `TrunkNet` (the offline gate's own
+architecture) already clears 54.3 on this exact data: Phase 1 ships
+`TrunkNet` as its **own standalone candle module** (`src/ai/ply_ranker.rs`,
+own `ply_ranker.safetensors`), not new heads inside `PolyZeroNet`/
+`network.rs`. This reverses the ACTUAL result's own disposition text
+above (superseded, not deleted, per this file's append-only
+convention). Rationale: ~4x cheaper per forward than the full
+cross-attention trunk (matters at `rank_plies`'s call frequency — up to
+~8×(1+k) sequential calls per real turn), fully decoupled from
+`train.py`'s lifecycle (no risk to the live policy/value heads, no
+retrain-on-every-run coupling), and skips the dual-network-sync /
+tch-Metal-backend-wiring cost entirely since it's called directly on
+the actor thread (`rank_plies` is synchronous CPU code, not routed
+through the batched `Evaluator`/`eval_server` built for the 20x-larger
+main net). Trade-off accepted: a second small Python/Rust weight pair
+to keep in sync, instead of zero.
+
+Plan: (1) add `--out` to `train_ply_ranker.py`, save
+`ply_ranker.safetensors` (fp32) from the same 30-epoch run that scored
+54.32, plus a small golden-vector `.npz` fixture (a few examples' inputs
++ TrunkNet's own logit outputs) to catch a silent Rust-port shape bug
+before it ever reaches self-play. (2) Port `TrunkNet` to
+`src/ai/ply_ranker.rs` verbatim (stem conv -> GN -> ReLU -> +player_proj
+broadcast -> 4x GN residual blocks -> GAP -> 4 heads), `Option`-loaded
+so a missing weights file is a clean fallback to the CPU path, output
+shaped as `RawPolicyOutput` so `compute_move_priors_raw` and micro-
+mcts's `net_prior_w` blend need no changes. (3) Thread `ranker:
+Option<&PlyRanker>` through `rank_plies`/`rank_view`/`execute_turn`/
+`execute_turn_recorded` (call sites: `macro_mcts.rs:904,1452,209`,
+`macro_agent.rs:265`, `reward_lab.rs:222`); net path fires only when
+`lambda != 0.0 && ranker.is_some()`, and skips `threats`/`belief`/
+`pre_health`/`pre_lethal`/`phi_pre`/the per-candidate simulate/undo loop
+entirely — that's the whole CPU-cost removal. Score =
+`score_move + 50.0 * composed_log_prob` (50 = training temperature, so
+`softmax_priors` downstream is calibrated); goal painted identically to
+the harvest (`state_to_cpu_features_goal(state, player, None,
+Some(goal))`) or the net path is silently out-of-distribution.
+
+BAR (paired, not offline): seed 770425 harness, three arms at matched
+budget — full-Δφ (current), `--macro-rollout-lambda 0.0` (4.52x
+throughput bar), NN ranker. Ship only if the NN ranker beats
+`lambda 0.0` on win rate (quality) AND beats full-Δφ on moves/s
+(throughput) — offline regret 54.3 is a gate to reach this measurement,
+not the bar itself, since the ranker is a `rank_plies` replica and
+inherits whatever `rank_plies` itself misprices.
+
+### Phase 1 implementation + ACTUAL paired-gauge result (Sep 6-7, 2026, Verdi-directed: "let's plug our NN and replace the cpu work for rank_plies", then left for 2 hours with "continue working... until we have an answer" and explicit license to reshape/retrain the main net if needed)
+
+**Built, in order**: (1) re-ran `train_ply_ranker.py` for 30 epochs with
+`--out`/`--golden-vectors` added (the original run never saved weights)
+— reproduced **53.92 held-out regret**, matching the original 54.32 run
+almost exactly (same data/seed/arch, expected variance only). (2)
+Ported `TrunkNet` verbatim to `src/ai/ply_ranker.rs` — own standalone
+candle module, NOT new heads on `PolyZeroNet` (see the two rejected
+rungs above); `Option`-loaded via `POLYFISH_PLY_RANKER=<path>`, `None`
+falls back to CPU cleanly. Verified byte-faithful against the Python
+checkpoint via a golden-vector cross-check (5 examples, max abs diff
+0.000061 — floating-point noise, not a port bug). (3) Wired into
+`rank_plies` (`macro_exec.rs`) via a **global env-var-gated `OnceLock`**
+(`ply_ranker()`, mirroring `micro_mcts_params()`/`dphi_probe_path()`'s
+own idiom) rather than advisor's suggested `Option<&PlyRanker>` threaded
+through every call site — this keeps every existing call site AND every
+existing test byte-identical when the env var is unset (confirmed: all
+388 lib tests pass unchanged). Net path fires whenever `lambda != 0.0 &&
+ply_ranker().is_some()`, skips `threats`/`belief`/`pre_health`/
+`pre_lethal`/`phi_pre`/the whole per-candidate simulate/undo loop, and
+reuses `compute_move_priors_raw` (the same composition the production
+policy prior already uses) on ONE forward pass per ply.
+
+**Bug found and fixed mid-measurement**: first score formula was
+`score_move + 50·ln(composed_prior)` (raw, uncentered). For a ~40-
+candidate ply even the argmax composed probability is typically only
+0.05-0.2 (`ln` ∈ [-3,-1.6], term ∈ [-150,-80]) — the net term dominated
+`score_move` (range 0-115) with the SAME sign for every candidate,
+demoting `score_move` to a tiebreaker, AND routinely dropped the total
+score below `revive_endturn_if_worse_than_floor`'s -700 floor for
+perfectly ordinary candidates. Symptom: Arm C's first run produced
+games with wildly variable, often very low move counts (43-601 vs Arm
+A's tight 258-671) at the SAME `--max-turns 25` — diagnosed as spurious
+EndTurn revival firing mid-game, not a real behavior change. Fixed two
+ways: (a) skip `revive_endturn_if_worse_than_floor` entirely on the net
+path (its -700 default was empirically calibrated against Δφ's scale,
+EXP_ELO_077/082/102 — a different quantity than `ln(prior)`;
+`revive_endturn_for_lone_doomed_unit` stays, since it's type-based not
+score-scale-dependent); (b) center the log-priors per call
+(`lp - mean(lp)`) before scaling, matching `listwise_loss`'s own
+per-call centering of `true_scores` during training — the head was
+never trained to reproduce the log-prior's absolute magnitude, only its
+relative structure across one call's candidates.
+
+**Measurement**: seed 770425, `--anchor-frac 1.0` vs Heuristic, fixed
+Imperius/Imperius, production macro-mcts recipe (`--macro-sims 64
+--macro-k 6 --macro-root-prior-w 0.05 --macro-rollout-nn-w 1.0
+--macro-rollout-nn-min-depth 1 --goal-channels --goal-w-tree 1
+--macro-lambda 1.0`), `--max-turns 25` (half the training default —
+explicit speed/quality tradeoff for a time-boxed comparison, not the
+production value), n=32 requested/~31 completed per arm (noise floor
+NOT the 0.078-at-n=128/0.008-paired figure from other gauges — smaller
+n here, unpaired-equivalent since each arm is a separate process, only
+loosely paired via shared `--base-seed`; read directions, not precise
+magnitudes):
+
+| arm | moves/sec | anchor win rate | vs full-Δφ | vs lambda=0 |
+|---|---|---|---|---|
+| A: full-Δφ (current production) | 17.56 | 41.9% | — | — |
+| B: `--macro-rollout-lambda 0.0` (EXP_ELO_061 bar) | 37.61 | 38.7% | 2.14x faster, -3.2pp | — |
+| C-v2: NN ranker, uncentered | 29.43 | 29.0% (9/31) | 1.68x faster, -12.9pp | 0.78x, -9.7pp |
+| C-v3: NN ranker, centered | 28.28 | 29.0% (9/31) | 1.61x faster, -12.9pp | 0.75x, -9.7pp |
+
+**C-v2 and C-v3 are the SAME games, not two independent measurements** —
+total moves (15153) and win rate (9/31 exactly) are bit-identical
+between them. Worth recording precisely because it reveals the centering
+"fix" was mathematically inert here, not merely unhelpful: `s_i' =
+score_move_i + 50*(lp_i - mean_lp) = s_i - 50*mean_lp`, a per-call
+CONSTANT shift applied equally to every candidate. Constant shifts never
+change `argmax`, so once the floor revival is already skipped (fixed
+between v1 and v2), centering cannot alter a single move choice — only
+the floor check could ever have read the uncentered magnitude, and that
+check is off on this path. The real, load-bearing fix was skipping
+`revive_endturn_if_worse_than_floor`; centering would only matter if
+that floor were ever restored. Two independently-launched processes
+landing on bit-identical outcomes is also a useful confirmation that
+this measurement is deterministic given the seed, not a lucky/unlucky
+sample — 29.0% is a real, reproducible number for this exact ranker and
+formula, not noise.
+
+**Verdict: REJECTED against the pre-registered two-sided bar.** The NN
+ranker beats full-Δφ on throughput (1.6-1.7x) but is strictly dominated
+by `--macro-rollout-lambda 0.0` — worse on BOTH throughput (0.75-0.78x)
+AND quality (-9.7pp) than a lever that already ships for free and
+required zero new code. n=31/arm is small (this gauge is not the
+0.078-at-n=128 / 0.008-paired noise-floor citation elsewhere in this
+file — that was a different, larger, more tightly paired setup); the
+MAGNITUDE should be read loosely, but the DIRECTION is unambiguous and,
+per the above, not a noise artifact — C is the worst of three arms on
+quality by a wide margin, reproducibly.
+
+**Why this isn't an argument for widening `p_pool_conv` and retraining
+PolyZeroNet** (Verdi's own suggested fallback going in): the ceiling
+here was never pooling width — the standalone `TrunkNet`/`PlyRanker`
+already has a correctly-sized full-trunk global-average-pool and hit
+53.9-54.3 regret offline, cleanly beating that same architecture's
+own bar. What this gauge answers is a DIFFERENT question: whether a
+`rank_plies` REPLICA at ~54-point average regret (regret is denominated
+in `score_move`'s own units, where Capture=115 and a kill=95 — 54
+points is a real, not negligible, average gap on that scale) can beat
+`lambda 0.0` — which does not try to replicate `rank_plies` at all, it
+just skips the shaping term entirely — in actual play. It cannot, at
+least not with this training recipe/harvest/formula. That is a question
+about the DISTILLATION TARGET's achievable ceiling and how the score
+composes with `score_move`, not about network capacity — a wider
+`PolyZeroNet` head trained the same way would inherit the same ceiling.
+
+**Disposition**: do not ship. `--macro-rollout-lambda 0.0` remains the
+best-measured lever on both throughput and quality axes and needs no
+further work to use. If this line of work continues, the next
+experiment is not a wider net — it's changing what's being distilled
+(e.g. weight the blend so `score_move` isn't systematically
+outranked by the net term even after centering, since centering only
+fixes the floor interaction, not the RELATIVE weighting between
+`score_move` and `50*lp` within a call) or reconsidering whether
+`rank_plies`'s own choices are even the right training target, per
+advisor's standing caveat that regret treats `rank_plies` as ground
+truth when it is itself a heuristic, not verified-optimal play.

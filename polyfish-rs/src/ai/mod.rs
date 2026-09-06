@@ -11,6 +11,7 @@ pub mod mapper;
 pub mod movement;
 pub mod network;
 pub mod oracle_macro;
+pub mod ply_ranker;
 pub mod search;
 #[cfg(feature = "tch-eval")]
 pub mod tch_network;

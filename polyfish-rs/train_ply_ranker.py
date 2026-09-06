@@ -328,6 +328,10 @@ def main():
     ap.add_argument("--val-frac", type=float, default=0.2)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--max-calls", type=int, default=0, help="0 = no cap")
+    ap.add_argument("--out", default="", help="save best checkpoint here (safetensors)")
+    ap.add_argument(
+        "--golden-vectors", default="", help="dump a few (input, logits) pairs here (.npz) for a Rust port sanity check"
+    )
     args = ap.parse_args()
 
     # Line-buffer stdout even when redirected to a file, so progress is
@@ -397,6 +401,38 @@ def main():
     print("\n=== FINAL (best checkpoint by val regret) ===")
     model.load_state_dict(best_state)
     evaluate(model, val_examples, device, args.temperature)
+
+    if args.out:
+        from safetensors.torch import save_file
+
+        fp32_state = {k: v.detach().cpu().float().contiguous() for k, v in best_state.items()}
+        save_file(fp32_state, args.out)
+        print(f"[main] saved best checkpoint to {args.out}", file=sys.stderr)
+
+    if args.golden_vectors:
+        # A handful of (spatial, player) -> (action, source, target, option)
+        # logit pairs, dumped straight from the saved checkpoint -- the only
+        # thing that catches a silent shape/transposition bug in the Rust
+        # port before it reaches self_play (every existing backend here has
+        # been bitten by "loads fine, outputs garbage").
+        model.eval()
+        n_golden = min(5, len(val_examples))
+        spatial = np.stack([val_examples[i].spatial for i in range(n_golden)])
+        player = np.stack([val_examples[i].player for i in range(n_golden)])
+        with torch.no_grad():
+            sp_t = torch.from_numpy(spatial).float().to(device)
+            pl_t = torch.from_numpy(player).float().to(device)
+            action_logits, source_logits, target_logits, option_logits = model(sp_t, pl_t)
+        np.savez(
+            args.golden_vectors,
+            spatial=spatial.astype(np.float32),
+            player=player.astype(np.float32),
+            action_logits=action_logits.detach().cpu().numpy(),
+            source_logits=source_logits.detach().cpu().numpy(),
+            target_logits=target_logits.detach().cpu().numpy(),
+            option_logits=option_logits.detach().cpu().numpy(),
+        )
+        print(f"[main] saved {n_golden} golden vectors to {args.golden_vectors}", file=sys.stderr)
 
 
 if __name__ == "__main__":
