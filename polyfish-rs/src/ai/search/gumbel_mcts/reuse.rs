@@ -35,25 +35,6 @@ pub(super) fn clone_child_move(root: &GumbelNode, idx: usize) -> Option<Box<dyn 
         .and_then(|c| c.move_to_here.as_ref())
         .map(|m| dyn_clone::clone_box(&**m))
 }
-/// Blend a heuristic prior into a raw logit slice in place.
-/// Formula `p' = (1-w)*p_net + w*p_heur`, `p_heur = softmax(heur_scores / TEMP)`.
-/// Shared by the root blend (`blend_heuristic_prior`) and in-tree expansion.
-pub(super) fn blend_heuristic_into_logits(logits: &mut [f32], heur_scores: &[f32], weight: f32) {
-    const HEURISTIC_TEMP: f32 = 20.0;
-    if logits.is_empty() || logits.len() != heur_scores.len() {
-        return;
-    }
-
-    let p_net = softmax(logits);
-    let scaled: Vec<f32> = heur_scores.iter().map(|s| s / HEURISTIC_TEMP).collect();
-    let p_heur = softmax(&scaled);
-
-    for (i, l) in logits.iter_mut().enumerate() {
-        let p = (1.0 - weight) * p_net[i] + weight * p_heur[i];
-        // Add a small epsilon to prevent log(0)
-        *l = (p + 1e-9).ln();
-    }
-}
 /// Weight on the goal prior: mass reserved for moves that advance a SAVE
 /// batch. Sized against the measured deficit — the net's prior on the lane
 /// tech is ~3e-6 (median, 519 traced Smithery decisions), an 11.3-nat gap to
@@ -125,7 +106,7 @@ pub(super) fn blend_heuristic_prior(game: &Game, children: &mut [GumbelNode], we
         .map(|c| c.move_to_here.as_ref()
             .map_or(0.0, |m| crate::ai::scoring::score_move(game, m.as_ref())))
         .collect();
-    blend_heuristic_into_logits(&mut logits, &scores, weight);
+    crate::ai::search::policy_composer::blend_heuristic_into_logits(&mut logits, &scores, weight);
     for (child, l) in children.iter_mut().zip(logits.into_iter()) {
         child.logit = l;
     }

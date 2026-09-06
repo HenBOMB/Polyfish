@@ -205,7 +205,12 @@ fn run_micro_probe(
                 break;
             }
             // rank_view, not raw rank_plies: byte-for-byte the same per-ply
-            // sequence the real decision uses, for free.
+            // sequence the real decision uses, for free -- EXCEPT when a
+            // `PlyRanker` is loaded, in which case `select_move`'s real
+            // decision uses `net_root::rank_view_net_or_cpu` instead and
+            // this probe no longer mirrors it exactly (diagnostic-only,
+            // measures eval-cache hit-rate behavior, not real game quality,
+            // so left on the CPU path deliberately rather than updated).
             let mut next = crate::ai::macro_agent::rank_view(
                 &mut probe_game,
                 pov,
@@ -901,14 +906,33 @@ impl<'a> MacroMctsSearch<'a> {
         // EXP_ELO_061: rollout_lambda, not lambda -- this runs up to `sims`
         // times per real turn (once per node expansion), vs the real
         // per-ply commit's one call in select_move.
-        let _ = macro_exec::execute_turn(
-            &mut game,
-            player,
-            &goal,
-            &mut lane_states[s],
-            &mut counters[s],
-            params.rollout_lambda,
-        );
+        //
+        // `net_root` rework: net-driven greedy playout when a `PlyRanker` is
+        // loaded AND rollouts aren't specifically disabled
+        // (`POLYFISH_PLY_RANKER_ROLLOUTS=0`, independent of the real-ply
+        // toggle) -- `execute_turn`/`execute_turn_recorded` themselves stay
+        // untouched since they're shared by `belief/mod.rs`'s fog-of-war
+        // rollouts and `MacroLookaheadAgent::replan`.
+        let _ = match crate::ai::ply_ranker::ply_ranker()
+            .filter(|_| crate::ai::search::net_root::net_rollouts_enabled())
+        {
+            Some(ranker) => crate::ai::search::net_root::execute_turn_net_greedy(
+                &mut game,
+                player,
+                &goal,
+                &mut lane_states[s],
+                &mut counters[s],
+                ranker,
+            ),
+            None => macro_exec::execute_turn(
+                &mut game,
+                player,
+                &goal,
+                &mut lane_states[s],
+                &mut counters[s],
+                params.rollout_lambda,
+            ),
+        };
         let shape = match &shape_pre {
             Some((pre, aux)) => {
                 let post =
@@ -1449,7 +1473,7 @@ impl<'a> MacroMctsAgent<'a> {
         let goal = self.turn_goal.clone().unwrap_or_default();
         let unit_status =
             crate::ai::search::unit_goals::reconcile_unit_goals(&view.state, pov, &goal, &mut self.unit_goals);
-        let mut ranked = crate::ai::macro_agent::rank_view(
+        let (mut ranked, net_derived) = crate::ai::search::net_root::rank_view_net_or_cpu(
             &mut view,
             pov,
             &goal,
@@ -1484,6 +1508,7 @@ impl<'a> MacroMctsAgent<'a> {
                 self.evaluator,
                 &micro_params,
                 self.micro_carry.take(),
+                net_derived,
             );
             self.last_micro_root_q = picked_q;
             if let Some(idx) = pick {

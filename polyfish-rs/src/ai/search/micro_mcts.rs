@@ -63,6 +63,11 @@ pub struct MicroParams {
     /// so unlike macro's root prior this carries no root-painting-mismatch
     /// risk: the four decomposed policy heads it reads are already
     /// behavior-cloned on macro-mcts's own committed picks (`brain.rs`).
+    ///
+    /// A complete no-op whenever `micro_search_pick`'s own
+    /// `root_already_net_ranked` is true (the `net_root` rework) -- `ranked`
+    /// already reflects a net+heuristic blend in that case, so there is
+    /// nothing left for this field's second forward pass to add.
     pub net_prior_w: f32,
 }
 
@@ -130,6 +135,12 @@ pub fn micro_mcts_params() -> Option<MicroParams> {
 /// not influencing move selection at all in practice, regardless of sims.
 pub static MICRO_MCTS_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static MICRO_MCTS_OVERRIDES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// `net_root` rework: how many `micro_search_pick` calls received an
+/// already net-derived `ranked` (see `root_already_net_ranked`) -- cheap
+/// live confirmation during a gauge run that the net path is actually being
+/// exercised, not silently falling back to CPU `rank_plies`.
+pub static MICRO_MCTS_NET_DERIVED_ROOTS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 /// EXP_ELO_079 diagnostic: emergent search depth actually reached per real
 /// ply, not assumed from the unrelated old-GumbelMctsAgent depth/sims curve
@@ -389,9 +400,13 @@ pub fn micro_search_pick(
     evaluator: &Evaluator,
     params: &MicroParams,
     carry: Option<MicroTreeCarry>,
+    root_already_net_ranked: bool,
 ) -> (Option<usize>, Option<MicroTreeCarry>, Option<f32>) {
     if ranked.len() < 2 || ranked[0].1.move_type() == MoveType::EndTurn {
         return (None, None, None);
+    }
+    if root_already_net_ranked {
+        MICRO_MCTS_NET_DERIVED_ROOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     if carry.is_some() {
         MICRO_CARRY_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -413,8 +428,16 @@ pub fn micro_search_pick(
     // cheap per-move readout off that one already-computed tensor, not an
     // extra network call), take the net's own top-k, and union it into the
     // candidate set so a net-favored move can never be silently excluded.
+    //
+    // `net_root`-rework note: when `root_already_net_ranked` is true,
+    // `ranked` was ALREADY built from one net forward pass + a heuristic
+    // blend (see `net_root::net_rank_root_candidates`) -- this whole block
+    // exists only to bridge a heuristic-derived `ranked` with the net's own
+    // opinion, so there is nothing left for a second forward pass to add.
+    // Skipping it here also removes a redundant forward pass that used to
+    // run even when the ranker had already supplied `ranked`.
     let mut net_priors_full: Option<Vec<f32>> = None;
-    if params.net_prior_w > 0.0 {
+    if !root_already_net_ranked && params.net_prior_w > 0.0 {
         if let Some(raw) = crate::ai::features::state_to_cpu_features_goal(&view.state, pov, None, Some(goal))
             .ok()
             .and_then(|f| evaluator.evaluate(vec![f]).into_iter().next().map(|r| r.2))
@@ -590,7 +613,7 @@ mod tests {
             if ranked.len() < 2 {
                 continue;
             }
-            micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None);
+            micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, false);
         }
 
         let calls = MICRO_MCTS_DEPTH_CALLS.load(std::sync::atomic::Ordering::Relaxed);
@@ -660,12 +683,53 @@ mod tests {
             let heur_top = ranked.len().min(4);
             ran_any = true;
             let (picked, _, _) =
-                micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None);
+                micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, false);
             if let Some(idx) = picked {
                 assert!(
                     idx < heur_top,
                     "seed {seed}: net_prior_w == 0.0 but the pick ({idx}) fell outside the \
                      heuristic's own top-{heur_top} -- the widening gate is not actually closed"
+                );
+            }
+        }
+        assert!(ran_any, "no seed produced a real search call -- test setup is broken");
+    }
+
+    /// `net_root` rework: `root_already_net_ranked == true` must fully gate
+    /// off the second-forward-pass widening block even when `net_prior_w`
+    /// is nonzero -- there's nothing left for it to add once `ranked` is
+    /// already net-derived. Checked via the returned pick staying inside
+    /// `ranked`'s own top-k, not the shared `MICRO_MCTS_UNION_WIDENED`
+    /// atomic -- per `union_pick_maps_back_to_the_original_ranked_index`'s
+    /// own note below, that counter is a process-wide static and `cargo
+    /// test` runs tests in parallel by default, so it isn't a reliable
+    /// per-test signal.
+    #[test]
+    fn root_already_net_ranked_fully_gates_off_the_widening_block() {
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+        let params = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.3 };
+        let mut ran_any = false;
+        for seed in 0..8i64 {
+            let game = tiny_game_at_seed(seed);
+            let pov = game.state.settings.current_player_turn_id;
+            let mut view = game.clone_for_mcts(pov);
+            let goal = compute_macro_goal(&view.state, pov, 0);
+            let aux = compute_goal_aux(&view.state, pov, &goal, 0, 0, None);
+            let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
+            let ranked = rank_plies(&mut view, pov, &goal, &aux, star_gate, 1.0, None, None);
+            if ranked.len() < 2 {
+                continue;
+            }
+            let heur_top = ranked.len().min(4);
+            ran_any = true;
+            let (picked, _, _) = micro_search_pick(
+                &view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, true,
+            );
+            if let Some(idx) = picked {
+                assert!(
+                    idx < heur_top,
+                    "seed {seed}: root_already_net_ranked == true but the pick ({idx}) fell \
+                     outside the top-{heur_top} -- the widening block did not gate off"
                 );
             }
         }
@@ -768,7 +832,7 @@ mod tests {
             let evaluator = Evaluator::Dummy(DummyEvalHandle::new().with_policy(policy));
             let params = MicroParams { sims: 1, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 1.0 };
             let (picked, _, _) =
-                micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None);
+                micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, false);
             assert_eq!(
                 picked,
                 Some(target_idx),

@@ -179,31 +179,45 @@ impl PlyRanker {
     }
 }
 
-/// Process-wide optional ranker, gated by `POLYFISH_PLY_RANKER=<path>` --
-/// same env-var-gated-`OnceLock` idiom as `micro_mcts_params`/
-/// `dphi_probe_path`, chosen over threading an `Option<&PlyRanker>` through
-/// `rank_plies`/`rank_view`/`execute_turn`/every one of their callers: it
-/// keeps every existing call site (including every test) byte-identical
-/// when the env var is unset, which a threaded parameter could not.
-/// `None` on a missing file OR a load error (logged once) -- never a hard
-/// failure, since a missing ranker must fall back to the CPU path.
+/// Default path checked when `POLYFISH_PLY_RANKER` is unset -- mirrors
+/// `model.safetensors`'s own implicit-load-from-cwd convention
+/// (`self_play/main.rs`'s `p1_path`/`p2_path` defaults). A missing file at
+/// this path is silently `None` (see `load_optional`), so this is safe to
+/// check unconditionally: no checkpoint present means no behavior change.
+const DEFAULT_PLY_RANKER_PATH: &str = "ply_ranker.safetensors";
+
+/// Process-wide optional ranker. `POLYFISH_PLY_RANKER=<path>` picks an
+/// explicit checkpoint; `POLYFISH_PLY_RANKER=0` disables the ranker
+/// entirely (matches `POLYFISH_ENDTURN_HARD_GATE`'s convention) even if
+/// `ply_ranker.safetensors` exists in cwd; unset checks for
+/// `ply_ranker.safetensors` in cwd by default. Same env-var-gated-
+/// `OnceLock` idiom as `micro_mcts_params`/`dphi_probe_path`, chosen over
+/// threading an `Option<&PlyRanker>` through `rank_plies`/`rank_view`/
+/// `execute_turn`/every one of their callers: it keeps every existing call
+/// site (including every test) byte-identical whenever no checkpoint is
+/// present. `None` on a missing file OR a load error (logged once) -- never
+/// a hard failure, since a missing ranker must fall back to the CPU path.
 pub fn ply_ranker() -> Option<&'static PlyRanker> {
     static RANKER: std::sync::OnceLock<Option<PlyRanker>> = std::sync::OnceLock::new();
     RANKER
         .get_or_init(|| {
-            let path = std::env::var("POLYFISH_PLY_RANKER").ok()?;
+            let path = match std::env::var("POLYFISH_PLY_RANKER") {
+                Ok(v) if v == "0" => return None,
+                Ok(v) => v,
+                Err(_) => DEFAULT_PLY_RANKER_PATH.to_string(),
+            };
             match PlyRanker::load_optional(
                 &path,
                 crate::ai::features::NUM_CHANNELS,
                 RawFeatures::PLAYER_STATE_DIM,
             ) {
-                Ok(Some(ranker)) => Some(ranker),
-                Ok(None) => {
-                    eprintln!("[ply_ranker] POLYFISH_PLY_RANKER={path} does not exist, falling back to CPU rank_plies");
-                    None
+                Ok(Some(ranker)) => {
+                    eprintln!("[ply_ranker] loaded {path}");
+                    Some(ranker)
                 }
+                Ok(None) => None,
                 Err(e) => {
-                    eprintln!("[ply_ranker] failed to load POLYFISH_PLY_RANKER={path}: {e}, falling back to CPU rank_plies");
+                    eprintln!("[ply_ranker] failed to load {path}: {e}, falling back to CPU rank_plies");
                     None
                 }
             }

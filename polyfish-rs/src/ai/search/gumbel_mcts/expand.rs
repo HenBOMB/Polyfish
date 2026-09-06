@@ -4,7 +4,7 @@
 //! of collected leaves into NN evaluations plus newly expanded nodes. A
 //! second `impl<'a> GumbelMctsAgent<'a>` block — see trace.rs's note.
 
-use super::reuse::blend_heuristic_into_logits;
+use crate::ai::search::policy_composer::blend_heuristic_into_logits;
 
 use crate::ai::features::RawFeatures;
 use crate::ai::gumbel_qtransform::{self, softmax};

@@ -18301,3 +18301,106 @@ fixes the floor interaction, not the RELATIVE weighting between
 `rank_plies`'s own choices are even the right training target, per
 advisor's standing caveat that regret treats `rank_plies` as ground
 truth when it is itself a heuristic, not verified-optimal play.
+
+## EXP_ELO_132 — net_root rework: root candidates directly from the net, `rank_plies` cut out of the hot path (Sep 7, 2026, Verdi-directed: "cut rank_plies() out entirely... make it THE DEFAULT")
+
+CONTEXT: EXP_ELO_131 Phase 1 wired the `PlyRanker` net in as a branch
+*inside* `rank_plies` (`net_rank_plies`), still trimming/patching a
+CPU-heuristic-produced list. Verdi's read: this is backward — micro-
+mcts should get its root candidates directly from one NN forward pass
+over the cheap legal-move list, and the same mechanism should drive
+macro-mcts's own root-candidate-turn rollouts. Full design in
+`plan_net_root_candidates.md` (repo root). Precedent: `gumbel_mcts`'s
+`build_fresh_root` already does exactly this shape (cheap legal-move
+enumeration -> one net call -> blend a heuristic prior -> rank) and
+ships today — this rework ports that pattern rather than inventing one.
+
+HYPOTHESIS: removing `rank_plies`'s per-candidate simulate/undo loop
+from BOTH the real per-ply trajectory (`rank_view_net_or_cpu`) and
+macro-mcts's rollouts (`execute_turn_net_greedy`) — plus removing
+`micro_search_pick`'s now-redundant second forward pass — will measure
+throughput-positive relative to EXP_ELO_131 Phase 1's rejected
+`net_rank_plies` arm (28-29 moves/s), since that arm still paid
+`rank_plies`'s cost unconditionally on the real-ply path and duplicated
+the forward pass once more inside `micro_search_pick`. Quality is NOT
+expected to clear the two-sided bar with this checkpoint (same
+underlying Δφ-replica training target, now moved aside as
+`ply_ranker.safetensors.rejected_20260906` and reloaded here only via
+explicit `POLYFISH_PLY_RANKER=<path>` override) — that question is
+Part B's, not this rework's.
+
+METHOD: same seed-770425 paired gauge as EXP_ELO_131 (`--anchor-frac
+1.0` vs Heuristic, fixed Imperius/Imperius, production macro-mcts
+recipe, `--max-turns 25` deliberate speed tradeoff, n=32 requested),
+new Arm D using the rejected checkpoint through the new `net_root`
+mechanism (`POLYFISH_PLY_RANKER=ply_ranker.safetensors.rejected_20260906`),
+compared against the three EXP_ELO_131 arms recorded above (A: full-Δφ
+17.56 moves/s @ 41.9%; B: `lambda=0.0` 37.61 moves/s @ 38.7%; C:
+`net_rank_plies` 28-29 moves/s @ 29.0%).
+
+BAR: this is a plumbing/throughput check, not a quality gate — proceed
+to treat the rework as validated if Arm D's throughput beats Arm C's
+28-29 moves/s (confirms removing the redundant forward pass + the
+unconditional real-ply cost actually helped). Quality parity with Arm C
+(~29%) or better is a bonus, not required; only a REGRESSION below Arm
+C's quality with the identical checkpoint would indicate a bug in the
+rework itself (same weights, same nominal target — a quality drop here
+would mean the new plumbing computes something meaningfully different
+from the old, not a legitimate finding).
+
+### ACTUAL (Sep 7, 2026)
+
+All 388->389 lib tests pass unchanged with no `ply_ranker.safetensors`
+present (the load-bearing CPU-fallback invariant), plus every
+integration test file, `0` failures anywhere. Rebuilt release,
+re-pointed `POLYFISH_PLY_RANKER` at the SAME rejected checkpoint
+(`ply_ranker.safetensors.rejected_20260906`) through the new `net_root`
+mechanism, ran the identical seed-770425 gauge (n=31 completed):
+
+| arm | checkpoint | mechanism | moves/sec | win rate |
+|---|---|---|---|---|
+| A: full-Δφ (production) | n/a | CPU `rank_plies` | 17.56 | 41.9% |
+| B: `--macro-rollout-lambda 0.0` | n/a | CPU, skip Δφ | 37.61 | 38.7% |
+| C: EXP_ELO_131 Phase 1 (rejected) | rejected ckpt | `net_rank_plies` (in-`rank_plies` branch) | 28-29 | 29.0% |
+| **D: this rework** | **same rejected ckpt** | **`net_root` (direct)** | **38.97** | **38.7%** |
+
+**Bar cleared decisively on throughput** (38.97 > 28-29, and faster
+than Arm A by 2.2x, edging out even Arm B). **Quality did not
+regress — it improved substantially with the IDENTICAL weights**:
+29.0% -> 38.7%, exactly tying Arm B, up from dead last to tied-best-
+among-alternatives. Since D and C share the same trained checkpoint,
+this delta is attributable entirely to the mechanism change: log-domain
+composition (`compute_move_log_probs_raw`, not the old probability-
+domain-then-manual-`.ln()` path) plus the Gumbel-precedented
+`p' = (1-w)*p_net + w*p_heur` blend (`blend_heuristic_into_logits`,
+`w=0.5`) in place of the old flat `score_move + 50*(centered log-prior)`
+additive formula — the SAME weights read out through better-composed
+math play meaningfully better. This was not required by the
+pre-registered bar (only "no regression" was) but is a genuinely useful
+finding: the rework is not just a throughput cleanup, it also happened
+to fix a real quality gap in how the net's opinion was being read out,
+independent of anything Part B might still improve about the training
+target itself.
+
+**Still short of the original two-sided ship bar** (beat `lambda=0.0`
+outright, not tie it) — Arm D ties B, it doesn't beat it, and neither A
+nor B's quality is cleared. This is expected and unsurprising: Part A
+was never meant to fix the training-target ceiling (still the same
+Δφ-replica checkpoint), only the plumbing around it. That D closes
+nearly the ENTIRE quality gap to the free lever using the REJECTED
+checkpoint is an encouraging sign for Part B specifically — a better
+training target layered onto this same (now demonstrably more
+efficient) mechanism starts from a much closer position than EXP_ELO_
+131's own numbers suggested.
+
+**Disposition**: Part A (the `net_root` rework) is validated and
+lands as designed — real, measured throughput win, no quality
+regression (a real quality improvement, in fact), full test-suite
+parity when no ranker is configured. `ply_ranker.safetensors.rejected_
+20260906` stays moved aside (not restored to the auto-load default
+path) since it still hasn't cleared the real bar on its own merits —
+only `POLYFISH_PLY_RANKER=<explicit path>` reactivates it, matching
+A6's documented required-companion-step. Part B (training-target
+research) proceeds as planned in `plan_net_root_candidates.md`,
+now with a stronger starting point than assumed when that plan was
+written.

@@ -299,74 +299,6 @@ fn endturn_revive_price() -> f32 {
     })
 }
 
-/// Training temperature `train_ply_ranker.py` used for its listwise softmax
-/// (`--temperature`, default 50.0) — recovers `softmax(composed) ≈
-/// softmax((true_score − mean) / 50)`.
-const NET_RANK_LOG_PRIOR_SCALE: f32 = 50.0;
-
-/// EXP_ELO_131 Phase 1: `rank_plies`'s net-path replacement for the whole
-/// per-candidate `simulate_move`/`goal_potential_with_belief`/undo pipeline
-/// — one `PlyRanker` forward pass on the pre-move state (painted with
-/// `Some(goal)`, matching the harvest's own convention exactly), composed
-/// per candidate via the SAME `compute_move_priors_raw` the production
-/// policy prior already uses. Score = `score_move + 50·(ln(prior) − mean)`.
-///
-/// The subtracted per-call mean is load-bearing, not cosmetic: the training
-/// loss (`listwise_loss`) centers `true_scores` before softmaxing, so the
-/// head was only ever trained to reproduce RELATIVE structure across a
-/// call's candidates, never the log-prior's absolute magnitude. A first cut
-/// without centering (Sep 6 2026) added the raw `ln(prior)` — for a ~40-
-/// candidate ply even the argmax composed probability is typically only
-/// 0.05–0.2 (ln ∈ [−3, −1.6], term ∈ [−150,−80]), so the net term dominated
-/// `score_move` (range 0–115) for every candidate with the SAME sign,
-/// demoting `score_move`'s well-calibrated heuristic to a tiebreaker instead
-/// of blending with it, AND regularly dropped the whole score below
-/// `revive_endturn_if_worse_than_floor`'s −700 floor for perfectly ordinary
-/// candidates (measured: games ran ~2-10x shorter than the CPU path at the
-/// same `--max-turns`, diagnosed as spurious EndTurn revival firing on
-/// ordinary plies). Centering fixes both: the net term becomes a
-/// zero-mean-per-call reordering signal on the same rough footing as `score_move`,
-/// and the combined score no longer routinely crosses the floor for
-/// non-catastrophic candidates — see `rank_plies`'s call site for why the
-/// floor revival is still skipped on this path regardless.
-///
-/// Returns `None` (never panics) on a feature/forward-pass/shape failure so
-/// the caller falls back to the CPU Δφ path — a ranker hiccup must never
-/// crash a real turn.
-fn net_rank_plies(
-    game: &Game,
-    player: PlayerId,
-    goal: &MacroGoal,
-    ranker: &crate::ai::ply_ranker::PlyRanker,
-    unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
-    eco_plan: Option<&crate::ai::eco_plan_commit::EcoPlanCommit>,
-    moves: &[Box<dyn Move>],
-) -> Option<Vec<(f32, Box<dyn Move>)>> {
-    let feats =
-        crate::ai::features::state_to_cpu_features_goal(&game.state, player, None, Some(goal)).ok()?;
-    let raw = ranker.forward_raw(&feats).ok()?;
-    let map_size = game.state.settings.size as usize;
-    let priors = crate::ai::search::policy_composer::compute_move_priors_raw(&raw, moves, map_size, false);
-    if priors.len() != moves.len() {
-        return None;
-    }
-    let log_priors: Vec<f32> = priors.iter().map(|&p| p.max(f32::MIN_POSITIVE).ln()).collect();
-    let mean_log_prior = log_priors.iter().sum::<f32>() / log_priors.len() as f32;
-    Some(
-        moves
-            .iter()
-            .zip(log_priors.iter())
-            .map(|(m, &lp)| {
-                let mut s = scoring::score_move_with_unit_goals(game, m.as_ref(), unit_goals, eco_plan);
-                if m.move_type() != MoveType::EndTurn {
-                    s += NET_RANK_LOG_PRIOR_SCALE * (lp - mean_log_prior);
-                }
-                (s, dyn_clone::clone_box(m.as_ref()))
-            })
-            .collect(),
-    )
-}
-
 /// Rank the current player's plies under a fixed goal, best first. EndTurn is
 /// suppressed while any other move survives the gates (the search backends'
 /// root convention); a fully gated-out ply degrades to a lone EndTurn.
@@ -397,31 +329,6 @@ pub fn rank_plies(
         return vec![(0.0, Box::new(EndTurnMove) as Box<dyn Move>)];
     }
     RANK_PLIES_CANDIDATES.fetch_add(moves.len() as u64, std::sync::atomic::Ordering::Relaxed);
-
-    // EXP_ELO_131 Phase 1: when a ranker is loaded (POLYFISH_PLY_RANKER set)
-    // and lambda calls for the shaping term at all, replace the entire
-    // per-candidate simulate/undo Δφ pipeline below with one forward pass on
-    // the pre-move state. `net_rank_plies` returns `None` on any feature/
-    // forward-pass failure, falling through to the unchanged CPU path.
-    if lambda != 0.0 {
-        if let Some(ranker) = crate::ai::ply_ranker::ply_ranker() {
-            if let Some(net_scored) = net_rank_plies(game, player, goal, ranker, unit_goals, eco_plan, &moves) {
-                // `revive_endturn_if_worse_than_floor`'s -700 default is
-                // calibrated against score_move+λΔφ's scale (measured empirically
-                // on that quantity, EXP_ELO_077/082/102). The net path's
-                // `50*ln(composed_prior)` term is a DIFFERENT scale entirely --
-                // a composed 4-head product of only moderately-unlikely
-                // per-head probabilities can already land near -700 for an
-                // ordinary candidate, not just a catastrophic one (measured:
-                // Sep 6 2026 first gauge attempt, games ran ~2-10x shorter than
-                // the CPU path at the same --max-turns, diagnosed as spurious
-                // EndTurn revival). Skip the floor revival on this path;
-                // lone-doomed-unit revival is type-based, not score-scale-
-                // dependent, so it stays.
-                return revive_endturn_for_lone_doomed_unit(net_scored, has_other, lambda, &game.state);
-            }
-        }
-    }
 
     // EXP_ELO_061 throughput fix: `threat_units` depends only on the
     // OPPONENT's units/ghosts, never on the acting player's own candidate
@@ -588,7 +495,7 @@ pub fn rank_plies(
         })
         .collect();
     scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let scored = revive_endturn_for_lone_doomed_unit(scored, has_other, lambda, &game.state);
+    let scored = revive_endturn_for_lone_doomed_unit(scored, has_other, lambda != 0.0, &game.state);
     revive_endturn_if_worse_than_floor(scored, has_other, lambda)
 }
 
@@ -647,13 +554,13 @@ fn revive_endturn_if_worse_than_floor(
 /// Distinct mechanism from the flat floor, not a retuning of it: only fires
 /// when there is provably nothing else to do, not merely when a score is
 /// low.
-fn revive_endturn_for_lone_doomed_unit(
+pub(super) fn revive_endturn_for_lone_doomed_unit(
     scored: Vec<(f32, Box<dyn Move>)>,
     has_other: bool,
-    lambda: f32,
+    pricing_active: bool,
     state: &GameState,
 ) -> Vec<(f32, Box<dyn Move>)> {
-    if !has_other || lambda == 0.0 || endturn_hard_gate() {
+    if !has_other || !pricing_active || endturn_hard_gate() {
         return scored;
     }
     let all_lethal_same_unit = (|| {
@@ -1014,7 +921,7 @@ mod tests {
         );
 
         let scored = vec![(-699.0f32, Box::new(AttackMove::new(60, 61)) as Box<dyn Move>)];
-        let out = revive_endturn_for_lone_doomed_unit(scored, true, 1.0, &state);
+        let out = revive_endturn_for_lone_doomed_unit(scored, true, true, &state);
         assert_eq!(
             out.len(),
             1,
@@ -1049,7 +956,7 @@ mod tests {
         );
 
         let scored = vec![(-50.0f32, Box::new(AttackMove::new(60, 61)) as Box<dyn Move>)];
-        let out = revive_endturn_for_lone_doomed_unit(scored, true, 1.0, &state);
+        let out = revive_endturn_for_lone_doomed_unit(scored, true, true, &state);
         assert!(out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn));
     }
 
@@ -1077,7 +984,7 @@ mod tests {
             (-699.0f32, Box::new(AttackMove::new(60, 61)) as Box<dyn Move>),
             (-699.0f32, Box::new(AttackMove::new(62, 63)) as Box<dyn Move>),
         ];
-        let out = revive_endturn_for_lone_doomed_unit(scored, true, 1.0, &state);
+        let out = revive_endturn_for_lone_doomed_unit(scored, true, true, &state);
         assert!(
             out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn),
             "two different units still on the board must not collapse to an unconditional EndTurn"
@@ -1102,7 +1009,7 @@ mod tests {
             (-699.0f32, Box::new(AttackMove::new(60, 61)) as Box<dyn Move>),
             (-620.0f32, Box::new(StepMove::new(60, 71)) as Box<dyn Move>),
         ];
-        let out = revive_endturn_for_lone_doomed_unit(scored, true, 1.0, &state);
+        let out = revive_endturn_for_lone_doomed_unit(scored, true, true, &state);
         assert!(out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn));
     }
 
@@ -1121,9 +1028,9 @@ mod tests {
         state.tribes.get_mut(&2).unwrap().units.push(unit_at(61, UnitType::Warrior, 2));
 
         let scored = || vec![(-699.0f32, Box::new(AttackMove::new(60, 61)) as Box<dyn Move>)];
-        let out = revive_endturn_for_lone_doomed_unit(scored(), false, 1.0, &state);
+        let out = revive_endturn_for_lone_doomed_unit(scored(), false, true, &state);
         assert!(out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn));
-        let out = revive_endturn_for_lone_doomed_unit(scored(), true, 0.0, &state);
+        let out = revive_endturn_for_lone_doomed_unit(scored(), true, false, &state);
         assert!(out.iter().all(|(_, m)| m.move_type() != MoveType::EndTurn));
     }
 

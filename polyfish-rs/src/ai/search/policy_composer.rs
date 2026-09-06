@@ -294,6 +294,28 @@ fn softmax(logits: &[f32]) -> Vec<f32> {
         .collect()
 }
 
+/// Blend a heuristic prior into a raw logit slice in place.
+/// Formula `p' = (1-w)*p_net + w*p_heur`, `p_heur = softmax(heur_scores / TEMP)`.
+/// Moved here from `gumbel_mcts/reuse.rs` (still used there via
+/// `blend_heuristic_prior`) so `net_root.rs` can share the same
+/// implementation instead of re-deriving the blend math a second time.
+pub(crate) fn blend_heuristic_into_logits(logits: &mut [f32], heur_scores: &[f32], weight: f32) {
+    const HEURISTIC_TEMP: f32 = 20.0;
+    if logits.is_empty() || logits.len() != heur_scores.len() {
+        return;
+    }
+
+    let p_net = softmax(logits);
+    let scaled: Vec<f32> = heur_scores.iter().map(|s| s / HEURISTIC_TEMP).collect();
+    let p_heur = softmax(&scaled);
+
+    for (i, l) in logits.iter_mut().enumerate() {
+        let p = (1.0 - weight) * p_net[i] + weight * p_heur[i];
+        // Add a small epsilon to prevent log(0)
+        *l = (p + 1e-9).ln();
+    }
+}
+
 use crate::ai::features;
 
 /// Convert 2D coords to flat index
