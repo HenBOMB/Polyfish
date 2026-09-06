@@ -776,7 +776,7 @@ pub fn is_tile_frozen(state: &GameState, idx: i32) -> bool {
 pub fn count_frozen_tiles(state: &GameState) -> i32 {
     let mut count = 0;
     for idx in state.tiles.keys() {
-        if is_tile_frozen(state, *idx) {
+        if is_tile_frozen(state, idx) {
             count += 1;
         }
     }

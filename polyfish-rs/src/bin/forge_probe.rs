@@ -51,23 +51,23 @@ fn main() {
         let best_at = |r: i32| -> usize {
             let mut best = 0usize;
             for (idx, tile) in &state.tiles {
-                if *idx == cap
-                    || get_chebyshev_distance(*idx, cap, size) > r
+                if idx == cap
+                    || get_chebyshev_distance(idx, cap, size) > r
                     || !matches!(
                         tile.terrain_type,
                         TerrainType::Field | TerrainType::Forest
                     )
                     || matches!(
-                        state.structures.get(idx),
+                        state.structures.get(&idx),
                         Some(Some(s)) if s.structure_type == StructureType::Village
                     )
                 {
                     continue;
                 }
-                let lvl = get_square_indices(*idx, 1, size)
+                let lvl = get_square_indices(idx, 1, size)
                     .into_iter()
                     .filter(|n| {
-                        n != idx
+                        *n != idx
                             && is_metal(n)
                             && get_chebyshev_distance(*n, cap, size) <= r
                     })

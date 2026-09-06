@@ -17873,3 +17873,72 @@ before deciding Fix 3's scope, per the standing plan -- Fix 3
 (`GameState.tiles` IndexMap -> Vec) has the largest blast radius of
 the three and should be sized against what's ACTUALLY still hot after
 Fixes 1+2, not the original pre-fix profile.
+
+### Fix 3 (tiles IndexMap -> TileMap) -- SHIPPED, correctness-verified;
+wall-clock benchmark SKIPPED (2026-09-06, out of time budget)
+
+`GameState.tiles: IndexMap<i32, TileState, FxBuild>` -> a new `TileMap`
+newtype (`states.rs`, `Vec<Option<TileState>>`) wrapping every method the
+248 real call sites already used (`get`/`get_mut`/`contains_key`/`insert`/
+`entry().or_insert_with()`/indexing/`keys`/`values`/`iter`/`iter_mut`) with
+IndexMap's exact argument types, so `get`/`get_mut` (249 call sites alone)
+and every `insert`/`entry`/`contains_key` site compiled UNCHANGED. Only
+~25 sites that pattern-destructured `(&idx, tile)` needed the `&` dropped,
+since the newtype's iterators yield the index by value (no `i32` is
+actually stored to hand out a reference to). `post_load` (`game.rs`) now
+backfills any index gap to a full `size*size` dense grid before computing
+coords (stderr warning if a real load was sparse) -- this, not the type
+change itself, is what turns `get`/`get_mut` into a bounds-checked array
+index instead of a hash+probe. `Vec<Option<T>>` over plain `Vec<T>`
+deliberately: ~70 test fixtures build sparse boards (3-10 tiles) and rely
+on `get()` returning `None` for the rest -- a grow-on-insert plain `Vec`
+would have silently filled those gaps with phantom default tiles instead
+of preserving absence.
+
+Pre-checks (all 4 originally scoped) came back clean: no
+`GameState.tiles.remove()` call exists anywhere (the one `.remove(` hit
+in `game.rs` is an unrelated local `serde_json::Map<String, Value>` used
+by raw-JSON preprocessing); mapgen always populates densely in index
+order; EVERY real `.insert()`/`.entry()` site outside `mapgen.rs:1378`
+and 2 debug binaries turned out to be `#[cfg(test)]` fixture code (not
+the "40+ of 55" advisor estimated -- effectively all of them); and
+`hash.rs` doesn't hash tile iteration order at all (its `get_hash` is a
+generic per-tile-index xxhash used by discovery/structure RNG, not
+whole-state hashing).
+
+CORRECTNESS VERIFICATION: full suite green (387 lib tests + all
+self_play/integration/bin tests, 0 failures) after fixing one stale
+fixture assertion (`integration_audit.rs`'s `test_load_raw_json_parity`
+asserted `tiles.len() == 2` for a synthetic 2-of-121-tile JSON fixture --
+now asserts 121, reflecting the new "post_load always densifies" 
+invariant, which is a correctness improvement, not a weakened test: the
+2 real tiles' field-by-field assertions are untouched). New
+`tile_map_round_trips_a_real_saved_state` test (`integration_audit.rs`)
+loads the actual on-disk `saved_state.json`, round-trips it through
+`TileMap`'s custom `Serialize`/`Deserialize`, and asserts every tile's
+coords/terrain/owner survive -- guards the wire format specifically,
+not just the in-memory type. Also ran the full heavy `--ignored` mapgen
+suite (`test_min_capital_distance_1v1`, `maximality_holds_on_generated_
+drylands_maps`, `resources_only_within_2_of_a_village`,
+`climate_boundary_width`, plus belief/macro_mcts probes) -- all green;
+the only 3 ignored-test failures were pre-existing `REPLAY_FILE`-env-var
+probes unrelated to this change.
+
+VALIDATION: NOT DONE. The paired 32-game/32-actor benchmark hit two
+setbacks -- first a single straggler game that ran ~90+ minutes solo
+after the other 31 finished (a known long-tail pathology, motivating
+item 2 in the current priority queue: round-batched virtual loss), then
+a self-inflicted methodology bug (the rerun's command was missing
+`--search-backend macro-mcts --macro-sims 64 --macro-k 6
+--macro-root-prior-w 0.05 --macro-rollout-nn-w 1.0 --goal-channels
+--goal-w-tree 1`, so it silently ran the CLI-default Gumbel backend
+instead of macro-mcts -- caught from the startup banner before any
+number was used, but cost real wall-clock). Verdi called time on the
+benchmark loop (2+ hours for one comparison) and redirected to item 3
+(train a model to replace `rank_plies`'s CPU dependency) as higher
+priority. Shipping on correctness verification alone; expected effect
+is directional only (the pre-fix profile attributed ~13% of real CPU
+work to `IndexMap::get` alone, +~6% more to `HashMap`/`IndexMap`
+hash/rehash on the same tile lookups) -- a real wall-clock number
+should be captured opportunistically (e.g. piggybacked on a future
+run's before/after) rather than blocking on a dedicated benchmark.

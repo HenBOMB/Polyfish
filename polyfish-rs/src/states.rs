@@ -190,6 +190,135 @@ impl TileState {
     }
 }
 
+/// Dense array-backed replacement for the former `IndexMap<i32, TileState>`.
+/// Preserves IndexMap's `Option`-returning lookup API exactly (including
+/// `None` for indices never inserted, which sparse test fixtures rely on)
+/// while turning `get`/`get_mut` into a bounds-checked array index instead
+/// of a hash + probe. Wire format (a JSON object keyed by tile index,
+/// insertion order == index order for every real state) is unchanged.
+#[derive(Debug, Clone, Default)]
+pub struct TileMap(Vec<Option<TileState>>);
+
+/// Mirrors `indexmap::map::Entry` closely enough that `.entry(idx).or_default()`
+/// / `.or_insert_with(..)` call sites need no changes.
+pub struct TileEntry<'a> {
+    slot: &'a mut Option<TileState>,
+}
+
+impl<'a> TileEntry<'a> {
+    pub fn or_default(self) -> &'a mut TileState {
+        self.or_insert_with(TileState::default)
+    }
+
+    pub fn or_insert_with<F: FnOnce() -> TileState>(self, f: F) -> &'a mut TileState {
+        if self.slot.is_none() {
+            *self.slot = Some(f());
+        }
+        self.slot.as_mut().unwrap()
+    }
+}
+
+impl TileMap {
+    #[inline]
+    pub fn get(&self, idx: &i32) -> Option<&TileState> {
+        usize::try_from(*idx).ok().and_then(|i| self.0.get(i)).and_then(|t| t.as_ref())
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self, idx: &i32) -> Option<&mut TileState> {
+        usize::try_from(*idx).ok().and_then(|i| self.0.get_mut(i)).and_then(|t| t.as_mut())
+    }
+
+    #[inline]
+    pub fn contains_key(&self, idx: &i32) -> bool {
+        self.get(idx).is_some()
+    }
+
+    pub fn insert(&mut self, idx: i32, tile: TileState) -> Option<TileState> {
+        let i = idx as usize;
+        if i >= self.0.len() {
+            self.0.resize(i + 1, None);
+        }
+        std::mem::replace(&mut self.0[i], Some(tile))
+    }
+
+    pub fn entry(&mut self, idx: i32) -> TileEntry<'_> {
+        let i = idx as usize;
+        if i >= self.0.len() {
+            self.0.resize(i + 1, None);
+        }
+        TileEntry { slot: &mut self.0[i] }
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.iter().filter(|t| t.is_some()).count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.iter().all(|t| t.is_none())
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &TileState> {
+        self.0.iter().filter_map(|t| t.as_ref())
+    }
+
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut TileState> {
+        self.0.iter_mut().filter_map(|t| t.as_mut())
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = i32> + '_ {
+        self.0.iter().enumerate().filter_map(|(i, t)| t.as_ref().map(|_| i as i32))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (i32, &TileState)> {
+        self.0.iter().enumerate().filter_map(|(i, t)| t.as_ref().map(|t| (i as i32, t)))
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (i32, &mut TileState)> {
+        self.0.iter_mut().enumerate().filter_map(|(i, t)| t.as_mut().map(|t| (i as i32, t)))
+    }
+}
+
+impl<'a> IntoIterator for &'a TileMap {
+    type Item = (i32, &'a TileState);
+    type IntoIter = Box<dyn Iterator<Item = (i32, &'a TileState)> + 'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Box::new(self.iter())
+    }
+}
+
+impl std::ops::Index<&i32> for TileMap {
+    type Output = TileState;
+
+    fn index(&self, idx: &i32) -> &TileState {
+        self.get(idx).expect("tile index out of range")
+    }
+}
+
+impl Serialize for TileMap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_map(self.iter())
+    }
+}
+
+impl<'de> Deserialize<'de> for TileMap {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let map: IndexMap<i32, TileState, FxBuild> = IndexMap::deserialize(deserializer)?;
+        let mut tiles = TileMap::default();
+        for (idx, tile) in map {
+            tiles.insert(idx, tile);
+        }
+        Ok(tiles)
+    }
+}
+
 /// State of a structure on the map
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -613,7 +742,7 @@ pub enum EndOfTurnAction {
 pub struct GameState {
     pub settings: GameSettings,
     #[serde(default)]
-    pub tiles: IndexMap<i32, TileState, FxBuild>,
+    pub tiles: TileMap,
     #[serde(default)]
     pub structures: IndexMap<i32, Option<StructureState>, FxBuild>,
     #[serde(default)]
@@ -644,7 +773,7 @@ impl Default for GameState {
     fn default() -> Self {
         Self {
             settings: GameSettings::default(),
-            tiles: IndexMap::default(),
+            tiles: TileMap::default(),
             structures: IndexMap::default(),
             resources: IndexMap::default(),
             tribes: IndexMap::default(),
@@ -696,15 +825,15 @@ impl GameState {
         let mut visible_tiles = std::collections::HashSet::new();
         for (idx, tile) in self.tiles.iter() {
             if tile.explorers.contains(&pov_id) {
-                visible_tiles.insert(*idx);
+                visible_tiles.insert(idx);
             }
         }
 
         // 1. Obscure Tiles
         for (idx, tile) in self.tiles.iter_mut() {
-            if !visible_tiles.contains(idx) {
+            if !visible_tiles.contains(&idx) {
                 let predicted_terrain = if let Some(pred) = &self._prediction {
-                    pred._terrain.get(idx).map(|(t, _)| *t).unwrap_or(TerrainType::Field)
+                    pred._terrain.get(&idx).map(|(t, _)| *t).unwrap_or(TerrainType::Field)
                 } else {
                     TerrainType::Field
                 };

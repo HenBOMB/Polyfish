@@ -340,7 +340,7 @@ pub fn enumerate_candidates_with_belief(
             .tiles
             .iter()
             .find(|(_, t)| t.capital_of == pov)
-            .map(|(&i, _)| i);
+            .map(|(i, _)| i);
         // Confirmed sighting beats the posterior peak when available.
         let enemy_cap = b
             .capital_confirmed

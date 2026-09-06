@@ -245,7 +245,7 @@ fn get_nearest_known_tribe(state: &GameState, idx: i32) -> Option<TribeType> {
     let mut best_tribe = None;
 
     // Check all tiles for known cities
-    for (&t_idx, tile) in &state.tiles {
+    for (t_idx, tile) in state.tiles.iter() {
         // Must be visible or have a known capital/village
         let is_known_city = tile.capital_of > 0
             || (tile.explorers.contains(&pov_id)
@@ -369,7 +369,7 @@ pub fn predict_terrain(
 pub fn get_border_clouds(state: &GameState) -> Vec<i32> {
     let pov_id = state.settings.current_player_turn_id;
     let mut border = std::collections::HashSet::new();
-    for (&idx, tile) in &state.tiles {
+    for (idx, tile) in state.tiles.iter() {
         if tile.explorers.contains(&pov_id) {
             for n in get_adjacent_indices(state, idx, 1) {
                 let n_explored = state
@@ -395,7 +395,7 @@ pub fn update_predictions(state: &mut GameState) {
 
     // Prediction for ALL unexplored tiles (Mental Image)
     let mut fog_tiles = Vec::new();
-    for (&idx, tile) in &state.tiles {
+    for (idx, tile) in state.tiles.iter() {
         if !tile.explorers.contains(&pov_id) {
             fog_tiles.push(idx);
         }
@@ -424,7 +424,7 @@ pub fn predict_enemy_capitals(state: &GameState) -> Vec<i32> {
         .tiles
         .iter()
         .find(|(_, t)| t.capital_of == pov_id)
-        .map(|(&idx, _)| idx)
+        .map(|(idx, _)| idx)
     else {
         return Vec::new();
     };

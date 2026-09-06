@@ -489,7 +489,7 @@ pub fn recommended_techs(state: &GameState, player: PlayerId) -> Vec<TechnologyT
                 T::Water | T::Ocean => water += 1,
                 _ => {}
             }
-            if let Some(Some(r)) = state.resources.get(idx) {
+            if let Some(Some(r)) = state.resources.get(&idx) {
                 match r.resource_type {
                     R::Metal => metal += 1,
                     R::Crop => crop += 1,

@@ -44,7 +44,7 @@ impl<'a> Ctx<'a> {
         let size = state.settings.size;
         let n = (size * size).max(0) as usize;
         let mut explored = vec![false; n];
-        for (&i, t) in &state.tiles {
+        for (i, t) in state.tiles.iter() {
             if i >= 0 && (i as usize) < n && t.explorers.contains(&observer) {
                 explored[i as usize] = true;
             }
@@ -77,19 +77,19 @@ impl<'a> Ctx<'a> {
             .tiles
             .iter()
             .filter(|(i, t)| {
-                **i >= 0
-                    && (**i as usize) < n
+                *i >= 0
+                    && (*i as usize) < n
                     && t.explorers.contains(&observer)
                     && t.capital_of != 0
             })
-            .map(|(&i, _)| i)
+            .map(|(i, _)| i)
             .find(|&i| Some(i) != own_capital);
 
         let land_tiles = state
             .tiles
             .iter()
             .filter(|(i, t)| {
-                **i >= 0 && (**i as usize) < n && t.explorers.contains(&observer)
+                *i >= 0 && (*i as usize) < n && t.explorers.contains(&observer)
             })
             .filter(|(_, t)| !matches!(t.terrain_type, TerrainType::Water | TerrainType::Ocean))
             .count();

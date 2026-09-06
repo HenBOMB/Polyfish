@@ -218,7 +218,7 @@ pub fn update_exploration(state: &mut GameState, player_id: PlayerId) -> UndoCal
         for (idx, tile) in state.tiles.iter_mut() {
             if !tile.explorers.contains(&player_id) {
                 tile.explorers.insert(player_id);
-                modified_tiles.push(*idx);
+                modified_tiles.push(idx);
             }
         }
     } else if let Some(tribe) = state.tribes.get(&player_id) {
@@ -341,7 +341,7 @@ pub fn try_discover_other_tribes(state: &mut GameState) -> UndoCallback {
         .tiles
         .iter()
         .filter(|(_, t)| t.explorers.contains(&pov_id))
-        .map(|(&idx, _)| idx)
+        .map(|(idx, _)| idx)
         .collect();
 
     for idx in explored_tiles {

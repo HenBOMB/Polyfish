@@ -1477,7 +1477,7 @@ mod tests {
             .tiles
             .iter()
             .filter(|(_, t)| matches!(t.terrain_type, TerrainType::Water | TerrainType::Ocean))
-            .map(|(idx, _)| *idx)
+            .map(|(idx, _)| idx)
             .collect()
     }
 
@@ -1577,7 +1577,7 @@ mod tests {
                 for (idx, tile) in &state.tiles {
                     let (x, y) = (tile.coords.x, tile.coords.y);
 
-                    if let Some(Some(structure)) = state.structures.get(idx) {
+                    if let Some(Some(structure)) = state.structures.get(&idx) {
                         match structure.structure_type {
                             StructureType::Village => {
                                 assert!(
@@ -1757,14 +1757,14 @@ mod tests {
                             seed
                         );
                         assert_eq!(
-                            *idx, tile.coords.idx,
+                            idx, tile.coords.idx,
                             "map key idx != coords.idx map={:?} seed={}",
                             map_type,
                             seed
                         );
                         assert_eq!(
                             (x, y),
-                            crate::functions::idx_to_coords(*idx, side),
+                            crate::functions::idx_to_coords(idx, side),
                             "coords <-> idx mismatch map={:?} seed={}",
                             map_type,
                             seed
@@ -1818,7 +1818,7 @@ mod tests {
             for (idx, tile) in &state.tiles {
                 let d = sites
                     .iter()
-                    .map(|&v| get_chebyshev_distance(*idx, v, size))
+                    .map(|&v| get_chebyshev_distance(idx, v, size))
                     .min()
                     .unwrap_or(99);
                 if d > 2 {
@@ -1826,7 +1826,7 @@ mod tests {
                 }
                 let res = state
                     .resources
-                    .get(idx)
+                    .get(&idx)
                     .and_then(|r| r.as_ref())
                     .map(|r| r.resource_type);
                 match tile.terrain_type {
@@ -1955,7 +1955,7 @@ mod tests {
             })
             .map(|(&i, _)| i)
             .collect();
-        for (&i, t) in &state.tiles {
+        for (i, t) in &state.tiles {
             if t.capital_of > 0 && !sites.contains(&i) {
                 sites.push(i);
             }
@@ -2137,7 +2137,7 @@ mod tests {
                 let (Some(cap1), Some(cap2)) = (cap1, cap2) else { continue };
                 let c1 = classic_climate_id(t1);
                 let c2 = classic_climate_id(t2);
-                for (&idx, tile) in &state.tiles {
+                for (idx, tile) in &state.tiles {
                     if tile.climate != c1 && tile.climate != c2 {
                         continue;
                     }

@@ -164,7 +164,7 @@ pub fn predict_explorer(state: &GameState, start_idx: i32) -> (Vec<i32>, Vec<i32
         .tiles
         .iter()
         .filter(|(_, t)| t.explorers.contains(&pov_id))
-        .map(|(&idx, _)| idx)
+        .map(|(idx, _)| idx)
         .collect();
     let mut explored_tiles: rustc_hash::FxHashSet<i32> = rustc_hash::FxHashSet::default();
     let mut path_indices: Vec<i32> = Vec::new();
@@ -251,7 +251,7 @@ fn calculate_explorer_scores(
 
     // 1. Initial scoring for all fog tiles
     // We scan ALL tiles for fog
-    for (&idx, _) in &state.tiles {
+    for (idx, _) in state.tiles.iter() {
         if !visible.contains(&idx) {
             scores.insert(idx, score_fog_tile(state, visible, idx));
         }

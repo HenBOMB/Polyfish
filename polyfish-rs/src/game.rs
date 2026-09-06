@@ -7,6 +7,7 @@ use crate::actions::{
     self, UndoCallback, end_unit_turn, gain_stars, has_effect, start_unit_turn,
     try_discover_other_tribes, try_remove_effect, update_exploration,
 };
+use crate::coords::Coords;
 use crate::functions::{
     get_pov_tribe, get_total_production, is_game_over, sync_scores,
 };
@@ -73,6 +74,26 @@ impl Game {
     /// Post-load initialization (visibility, coord indices, etc.)
     pub fn post_load(&mut self) {
         let map_size = self.state.settings.size;
+
+        // 0. Enforce the dense-tiles invariant `TileMap`'s array-index fast
+        // path relies on. Mapgen always produces a full size*size grid; a
+        // sparse live/replay load or hand-built fixture gets the gaps
+        // backfilled with default (unowned, unexplored) tiles instead of
+        // leaving them absent.
+        let target_len = (map_size * map_size).max(0) as usize;
+        let populated_before = self.state.tiles.len();
+        if populated_before > 0 && populated_before < target_len {
+            eprintln!(
+                "post_load: tiles map was sparse ({populated_before}/{target_len} populated) -- filling gaps with default tiles"
+            );
+        }
+        for i in 0..target_len {
+            let idx = i as i32;
+            self.state.tiles.entry(idx).or_insert_with(|| TileState {
+                coords: Coords::from_index(idx, map_size),
+                ..Default::default()
+            });
+        }
 
         // 1. Compute coord indexes for all tiles
         for (_idx, tile) in self.state.tiles.iter_mut() {

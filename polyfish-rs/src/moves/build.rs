@@ -339,7 +339,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
         }
 
         // 4. Roads in neutral territory
-        for (&idx, tile) in &state.tiles {
+        for (idx, tile) in state.tiles.iter() {
             if tile.owner == 0 && crate::functions::is_tile_explored(state, idx, pov_id) && !tile.has_road {
                 // Cannot build if an enemy unit is on the tile
                 if crate::functions::get_enemy_at(state, idx, pov_id).is_some() {

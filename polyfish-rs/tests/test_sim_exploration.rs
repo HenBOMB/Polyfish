@@ -35,10 +35,10 @@ fn unexplored_tiles(game: &Game, pov: i32, n: usize) -> Vec<i32> {
                 && game
                     .state
                     .structures
-                    .get(*idx)
+                    .get(idx)
                     .map_or(true, |s| s.is_none())
         })
-        .map(|(idx, _)| *idx)
+        .map(|(idx, _)| idx)
         .take(n)
         .collect()
 }

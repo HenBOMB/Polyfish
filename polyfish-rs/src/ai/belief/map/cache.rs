@@ -42,7 +42,7 @@ impl MapBelief {
     pub fn key_of(state: &GameState, observer: PlayerId) -> BeliefKey {
         let mut explored = 0u32;
         let mut hash = 0u64;
-        for (&i, t) in &state.tiles {
+        for (i, t) in state.tiles.iter() {
             if t.explorers.contains(&observer) {
                 explored += 1;
                 hash = hash.wrapping_add(mix(i as u64));

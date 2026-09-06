@@ -588,7 +588,7 @@ pub(crate) fn final_ground_truth(
 // Aux-head ground truth; the final state is dropped when this returns.
 let n_tiles = features::MAP_SIZE * features::MAP_SIZE;
 let mut final_owner = vec![0i32; n_tiles];
-for (&idx, tile) in &state.tiles {
+for (idx, tile) in &state.tiles {
     let i = idx as usize;
     if i < n_tiles {
         final_owner[i] = tile.owner;

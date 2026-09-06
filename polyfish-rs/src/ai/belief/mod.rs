@@ -479,7 +479,7 @@ fn explored_set(state: &GameState, pov: PlayerId) -> std::collections::HashSet<i
         .tiles
         .iter()
         .filter(|(_, t)| t.explorers.contains(&pov))
-        .map(|(&i, _)| i)
+        .map(|(i, _)| i)
         .collect()
 }
 
@@ -542,7 +542,7 @@ impl CalibHarness {
                 .tiles
                 .iter()
                 .find(|(_, t)| t.capital_of == pid)
-                .map(|(&i, _)| i)
+                .map(|(i, _)| i)
                 .unwrap_or(-1)
         };
         let tracks = players
@@ -911,7 +911,7 @@ mod tests {
                 .tiles
                 .iter()
                 .filter(|(_, t)| t.capital_of > 0)
-                .map(|(&idx, _)| idx)
+                .map(|(idx, _)| idx)
                 .collect();
             assert_eq!(caps.len(), 2, "seed {i}: expected 2 capitals, got {caps:?}");
             for &c in &caps {
@@ -1022,7 +1022,7 @@ mod tests {
             .tiles
             .iter()
             .find(|(_, t)| t.capital_of == pid)
-            .map(|(&i, _)| i)
+            .map(|(i, _)| i)
             .unwrap()
     }
 
@@ -1256,7 +1256,7 @@ mod tests {
                         .tiles
                         .iter()
                         .find(|(_, t)| t.capital_of == opp)
-                        .map(|(&i, _)| i);
+                        .map(|(i, _)| i);
                     let seen = opp_cap.filter(|c| newly.contains(c));
                     beliefs[seat].on_explored(&newly, seen);
                     prev_explored[seat] = now;

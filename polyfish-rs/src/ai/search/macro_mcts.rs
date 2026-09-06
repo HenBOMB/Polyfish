@@ -1674,7 +1674,7 @@ mod tests {
                 .tiles
                 .iter()
                 .find(|(_, t)| t.capital_of == pov)
-                .map(|(&i, _)| i)
+                .map(|(i, _)| i)
                 .unwrap_or(24);
             let b = BeliefState::new(11, 2, own, pov, opp);
             let view = game.clone_for_mcts(pov);

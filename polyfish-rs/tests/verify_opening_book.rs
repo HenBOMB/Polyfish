@@ -40,7 +40,7 @@ fn test_imperius_opening() {
         .tiles
         .iter()
         .find(|(_, t)| t.coords == unit_pos)
-        .map(|(&i, _)| i)
+        .map(|(i, _)| i)
         .unwrap();
 
     // Modify tile to have Fruit
