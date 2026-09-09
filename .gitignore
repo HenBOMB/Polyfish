@@ -80,3 +80,5 @@ decision_traces_*/
 # Scratch analysis dumps & value-head calibration data (untracked one-offs)
 scratchpad_*.txt
 value_calib*.jsonl
+
+research_outcome.md

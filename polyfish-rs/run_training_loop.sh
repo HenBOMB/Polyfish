@@ -12,16 +12,40 @@ echo $$ > .training.pid
 # See self_play --help and expert_boost_throughput.md for details.
 BASELINE_GAMES=64
 ITERATIONS=500
-NUM_GAMES=64
+# Verdi, Sep 7 2026: 32, not 64 -- matches ACTORS below (one game per actor,
+# a single synchronized wave/burst per iteration, which is genuinely how this
+# script invokes self_play: one fresh process per iteration, not a long-lived
+# pool). Measured 5x consecutively, back-to-back, zero gap: 137.98/138.21/
+# 140.96/135.94/138.21 moves/s -- flat, no thermal decay, zero macOS
+# CPU-wakeup-guard warnings across the whole ~9-minute sequence. This
+# replaces the old 64-real-actor default, which hit the exact wakeup-guard
+# warning this project has been burned by before (SIGKILL under the
+# pre-net_root rank_plies-driven rollouts); post-net_root it no longer
+# crashes, but it does still trip the OS rate limit (~180 moves/s, warning
+# fires every time) -- 32 is the highest cleanly-validated, zero-warning
+# rung, not merely the highest-throughput one measured tonight. `scaled()`
+# below auto-adjusts CHECKPOINT_EVERY/MILESTONE_EVERY to compensate, so the
+# GAMES-based schedule cadence is unaffected by this change.
+NUM_GAMES=32
 export MCTS_ITERS=64
 export DETACH_VALUE_TRUNK=1
 # EXP_ELO_072: first net-leaf macro-mcts reading ever to clear parity with
 # the heuristic leaf (50.4% vs 44.1% backfill, matched-pair at iter40).
 export DETACH_MACRO_HEADS=1
-# 128 actors measured best on an M3 Max with metal (~578 moves/s @ 128 games+).
-# Throughput scales with concurrent games; small NUM_GAMES (-g) is a real limiter, not this knob.
-# See expert_boost_throughput.md for details.
-ACTORS=128
+# Verdi, Sep 7 2026: 32, matching NUM_GAMES above -- see that constant's own
+# comment for the measurement. The old "128 actors, ~578 moves/s" figure
+# below is a Gumbel-backend number from a completely different search
+# regime (actors park for free waiting on the eval server there); it was
+# never re-validated for the macro-mcts/net_root path this script's
+# MACRO_GEN=1 mode actually runs, and doesn't apply to it -- macro-mcts's
+# per-actor work is genuinely CPU-adjacent even after removing rank_plies
+# from rollouts, so oversubscribing actors past NUM_GAMES buys nothing
+# (extra actor threads beyond num-games claim no job and exit immediately,
+# per self_play/runner.rs's job-counter loop) and pushing past ~64 real
+# concurrent actors trips the same macOS per-process wakeup-rate guard
+# every time. If MACRO_GEN is ever unset (falling back to the Gumbel
+# backend), consider raising this back toward 128 -- untested this session.
+ACTORS=32
 # 3 servers × 2 workers measured best on metal after buffer pooling
 # (~610-650 moves/s — see expert_boost_throughput.md). 0 = auto (3 on metal,
 # 1 on tch/candle). Don't force >1 on tch — MPS serializes across shards.
@@ -208,7 +232,7 @@ MILESTONE_EVERY=$(scaled 100)
 # and a fixed file count IS a fixed game window (10 files = 640 games).
 ARCHIVE_KEEP="${ARCHIVE_KEEP:-10}"
 export REPLAY_BUFFER_FILES=$ARCHIVE_KEEP
-echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, league every $LEAGUE_INTERVAL iterations, gauge every ${GAUGE_INTERVAL:-$LEAGUE_INTERVAL} (scale ${GAUGE_GUMBEL_SCALE:-0}, ${GAUGE_GAMES:-32}x2 games), replay window $ARCHIVE_KEEP files"
+echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, league every $LEAGUE_INTERVAL iterations, gauge every ${GAUGE_INTERVAL:-$LEAGUE_INTERVAL} (scale ${GAUGE_GUMBEL_SCALE:-0}, ${GAUGE_GAMES:-100}x2 games), replay window $ARCHIVE_KEEP files"
 
 REWARD_FLAG=""
 if [ "$REWARD_SHAPING" = true ]; then
@@ -533,6 +557,14 @@ do
         LABEL_REL_W_FLAG="--label-rel-w $LABEL_REL_W"
     fi
 
+    # EXP_ELO_138: dose (0.0-1.0) on de-meaning the TD window reward's
+    # delta_abs term against its measured population-average per-turn
+    # growth. Unset = binary default (0.0, no-op, production labels).
+    LABEL_ABS_DEBIAS_FLAG=""
+    if [ -n "${LABEL_ABS_DEBIAS:-}" ]; then
+        LABEL_ABS_DEBIAS_FLAG="--label-abs-debias $LABEL_ABS_DEBIAS"
+    fi
+
     # EXP_ELO_016: development-potential shaping weights — label snapshots
     # (SHAPE_W_LABEL) and the in-tree Gumbel backup (SHAPE_W_TREE) are
     # threaded separately. Unset = 0 = raw score deltas (legacy).
@@ -645,14 +677,14 @@ do
     # One-line config echo so silent env misconfigurations (ITER_OFFSET,
     # LABEL_REL_W, BOOTSTRAP) are visible in the log — EXP_ELO_006 post-mortem:
     # two runs voided by a missing ITER_OFFSET that nothing surfaced.
-    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-0} td_missing=${TD_MISSING} goal_channels=${GOAL_CHANNELS:-0} goal_w_tree=${GOAL_W_TREE:-1} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=${NUM_GAMES}x${SELF_PLAY_LOOPS} mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0} macro_stance_w=${MACRO_STANCE_W:-0} macro_order_w=${MACRO_ORDER_W:-0} macro_root_prior_w=${MACRO_ROOT_PRIOR_W:-0} macro_rollout_nn_w=${MACRO_ROLLOUT_NN_W:-0}"
+    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} label_abs_debias=${LABEL_ABS_DEBIAS:-0} pov_consistency_w=${POV_CONSISTENCY_W:-0} wl_labels=${WL_LABELS:-0} td_missing=${TD_MISSING} goal_channels=${GOAL_CHANNELS:-0} goal_w_tree=${GOAL_W_TREE:-1} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=${NUM_GAMES}x${SELF_PLAY_LOOPS} mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0} macro_stance_w=${MACRO_STANCE_W:-0} macro_order_w=${MACRO_ORDER_W:-0} macro_root_prior_w=${MACRO_ROOT_PRIOR_W:-0} macro_rollout_nn_w=${MACRO_ROLLOUT_NN_W:-0}"
 
     SP_LOG=$(mktemp)
     for ((sp=1; sp<=SELF_PLAY_LOOPS; sp++)); do
         if [ "$SELF_PLAY_LOOPS" -gt 1 ]; then
             echo "🎲 Self-play pass $sp/$SELF_PLAY_LOOPS (-g $NUM_GAMES each)"
         fi
-        "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $GOAL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" --td-lambda "${TD_LAMBDA:-0.8}" $TD_MISSING_FLAG --outcome-scale "${OUTCOME_SCALE:-3.0}" $LABEL_REL_W_FLAG $SHAPE_FLAGS $UNFREEZE_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+        "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $GOAL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" --td-lambda "${TD_LAMBDA:-0.8}" $TD_MISSING_FLAG --outcome-scale "${OUTCOME_SCALE:-3.0}" $LABEL_REL_W_FLAG $LABEL_ABS_DEBIAS_FLAG $SHAPE_FLAGS $UNFREEZE_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
         SP_STATUS=${PIPESTATUS[0]}
         if [ "$SP_STATUS" -ne 0 ]; then
             echo "Self-play failed with exit code $SP_STATUS" >&2
@@ -736,15 +768,18 @@ do
         done
     fi
 
-    # 5. Strength gauge (EXP 10/11): paired arena reading vs the ladder's
-    # active anchor. ladder.py owns ladder.json (anchors, readings, verdicts):
-    # >=80% freezes the model as the next anchor (n=64 link match); two
-    # consecutive 8-reading windows with no gain stop the run (plateau).
+    # 5. Strength gauge (EXP 10/11): paired arena reading vs eval_seeds.json.
+    # Verdi, Sep 7 2026: deliberately NOT reading the ladder's active anchor
+    # for the time being (ladder.py still owns ladder.json's readings/verdict
+    # history via the `record` call below, just not anchor SELECTION) --
+    # always gauge against plain Greedy instead, unconditionally. This also
+    # means the ANCHOR_NAME = "greedy" check below (anchor-frac decay clock)
+    # now actually fires, where it silently never did while the ladder's
+    # tracked anchor was a stale non-greedy checkpoint.
     GAUGE_EVERY=$([ "$GAUGE_INTERVAL" -gt 0 ] && echo "$GAUGE_INTERVAL" || echo "$LEAGUE_INTERVAL")
     if [ "$GAUGE_EVERY" -gt 0 ] && [ $((i % GAUGE_EVERY)) -eq 0 ]; then
-        ACTIVE_JSON=$(.venv/bin/python3 ladder.py active)
-        ANCHOR_PATH=$(echo "$ACTIVE_JSON" | jq -r '.path')
-        ANCHOR_NAME=$(echo "$ACTIVE_JSON" | jq -r '.name')
+        ANCHOR_PATH=""
+        ANCHOR_NAME="greedy"
         GAUGE_LOG=$(mktemp)
 
         # Readings are only comparable at a FIXED budget — sigma(Q)'s scale grows
@@ -805,7 +840,14 @@ do
         GAUGE_SNAPSHOT="checkpoints/gauge_${RUN_ID}_iter${i}.safetensors"
         cp model.safetensors "$GAUGE_SNAPSHOT"
 
-        run_gauge_match "$ANCHOR_PATH" "${GAUGE_GAMES:-32}" "replays/gauge_stats/${RUN_ID}_iter${i}"
+        # Sep 9 2026 (post-EXP_ELO_139 confirmatory gauge): default bumped
+        # 32->100 (the full eval_seeds.json set, 200 games swapped). The
+        # n=64 in-training reads this default used to produce resolve
+        # ~10pp+ and drove a false "promising" EXP_ELO_139 call that a
+        # full-set n=200 re-read (~1-2pp resolution) reversed. Override
+        # with GAUGE_GAMES for a cheaper/faster read when precision isn't
+        # the point (e.g. a quick sanity check mid-development).
+        run_gauge_match "$ANCHOR_PATH" "${GAUGE_GAMES:-100}" "replays/gauge_stats/${RUN_ID}_iter${i}"
         if [ -n "$GAUGE_W" ] && [ -n "$GAUGE_L" ]; then
             VERDICT=$(.venv/bin/python3 ladder.py record --kind gauge \
                 --run-id "$RUN_ID" --iteration "$i" \
@@ -875,7 +917,7 @@ do
                 .venv/bin/python3 ladder.py audit-opponents | jq -c '.[]' | while read -r AUD; do
                     AUD_NAME=$(echo "$AUD" | jq -r '.name')
                     AUD_PATH=$(echo "$AUD" | jq -r '.path')
-                    run_gauge_match "$AUD_PATH" "${GAUGE_GAMES:-32}" "replays/gauge_stats/${RUN_ID}_iter${i}_audit_${AUD_NAME}"
+                    run_gauge_match "$AUD_PATH" "${GAUGE_GAMES:-100}" "replays/gauge_stats/${RUN_ID}_iter${i}_audit_${AUD_NAME}"
                     if [ -n "$GAUGE_W" ] && [ -n "$GAUGE_L" ]; then
                         .venv/bin/python3 ladder.py record --kind audit --opponent "$AUD_NAME" \
                             --run-id "$RUN_ID" --iteration "$i" \

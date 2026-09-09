@@ -19,6 +19,9 @@ pub(crate) const SHARD_GAMES: usize = 64;
 pub(crate) fn flush_shard(
     collected_spatial_maps: Vec<Tensor>,
     collected_player_states: Vec<Tensor>,
+    // EXP_ELO_139: opponent's-true-POV counterfactual of the same state.
+    collected_spatial_maps_opp: Vec<Tensor>,
+    collected_player_states_opp: Vec<Tensor>,
     collected_action_type: Vec<Vec<f32>>,
     collected_source_spatial: Vec<Vec<f32>>,
     collected_target_spatial: Vec<Vec<f32>>,
@@ -55,6 +58,11 @@ pub(crate) fn flush_shard(
     let spatial_maps_tensor = spatial_maps_tensor.reshape((total_steps, spatial_dim))?;
     let player_states_tensor = Tensor::cat(&collected_player_states, 0)?;
     let player_states_tensor = player_states_tensor.reshape((total_steps, player_dim))?;
+
+    let spatial_maps_opp_tensor = Tensor::cat(&collected_spatial_maps_opp, 0)?;
+    let spatial_maps_opp_tensor = spatial_maps_opp_tensor.reshape((total_steps, spatial_dim))?;
+    let player_states_opp_tensor = Tensor::cat(&collected_player_states_opp, 0)?;
+    let player_states_opp_tensor = player_states_opp_tensor.reshape((total_steps, player_dim))?;
 
     fn flatten_vec(v: Vec<Vec<f32>>) -> Vec<f32> {
         v.into_iter().flatten().collect()
@@ -147,6 +155,8 @@ pub(crate) fn flush_shard(
     let mut tensors = HashMap::new();
     tensors.insert("spatial_maps".to_string(), spatial_maps_tensor);
     tensors.insert("player_states".to_string(), player_states_tensor);
+    tensors.insert("spatial_maps_opp".to_string(), spatial_maps_opp_tensor);
+    tensors.insert("player_states_opp".to_string(), player_states_opp_tensor);
     tensors.insert("action_type".to_string(), action_tensor);
     tensors.insert("source_spatial".to_string(), source_tensor);
     tensors.insert("target_spatial".to_string(), target_tensor);

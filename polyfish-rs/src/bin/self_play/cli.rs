@@ -89,6 +89,14 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = reward::REL_W)]
     pub(crate) label_rel_w: f32,
 
+    /// EXP_ELO_138: dose (0.0-1.0) on de-meaning the TD window reward's
+    /// `delta_abs` term against its measured population-average per-turn
+    /// growth (EXP_ELO_021's positive-sum bias — both players' scores grow
+    /// in almost any window, so it reads positive regardless of who's
+    /// ahead). 0.0 (default) reproduces production labels exactly.
+    #[arg(long, default_value_t = 0.0)]
+    pub(crate) label_abs_debias: f32,
+
     /// EXP_ELO_002: iteration where the anchor-frac decay clock starts —
     /// the anchor's effective decay iteration is `iteration - this`
     /// (clamped at 0). The loop passes the current iteration to HOLD

@@ -84,6 +84,17 @@ MACRO_ORDER_W = float(os.environ.get("MACRO_ORDER_W", "0.0"))
 # frozen-edge shortcut), row-masked (aux_rollout_value_mask), not in
 # AUX_DIMS. Default 0.0: existing training unaffected until turned on.
 ROLLOUT_VALUE_W = float(os.environ.get("ROLLOUT_VALUE_W", "0.0"))
+# EXP_ELO_139: POV-consistency loss. `NetAsym` (macro_mcts.rs) evaluates
+# net(mover, state) AND net(opponent, state) on the same shared state to
+# force root_value zero-sum by construction -- but only the mover's call is
+# ever a real decision point, so only it ever receives a label. The
+# opponent's counterfactual call is asked constantly at inference and never
+# graded once. This penalizes v_win(mover) + v_win(opponent) for the SAME
+# state deviating from 0, directly supervising the previously-ungraded
+# call for the first time. Intended as a COMPLEMENT to LABEL_ABS_DEBIAS,
+# not a replacement -- see EXP_ELO_138's addendum. Default 0.0: existing
+# training unaffected until turned on, same convention as ROLLOUT_VALUE_W.
+POV_CONSISTENCY_W = float(os.environ.get("POV_CONSISTENCY_W", "0.0"))
 # EXP_ELO_066: every macro_stance/macro_order training row's spatial input
 # is painted with the search's own COMMITTED (already-chosen) goal -- the
 # label is that same search's visit-mass marginalization, so the head could
@@ -414,7 +425,8 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target,
                  aux_pred=None, aux_targets=None, aux_mask=None,
                  ref_policy_pred=None, kl_ref_weight=0.0,
                  macro_stance_target=None, macro_order_target=None, macro_mask=None,
-                 rollout_value_target=None, rollout_value_mask=None):
+                 rollout_value_target=None, rollout_value_mask=None,
+                 opp_win_pred=None, pov_mask=None):
     """
     Compute multi-head loss using decomposed targets.
     policy_targets is a dict containing the 7 target tensors.
@@ -548,6 +560,24 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target,
         l = (per_sample * mask).sum() / denom
         macro_losses['rollout_value'] = l
         total_loss = total_loss + ROLLOUT_VALUE_W * l
+
+    # EXP_ELO_139: POV-consistency. `net(mover)` is densely supervised (every
+    # real decision point); `net(opponent)` on the SAME state -- the
+    # counterfactual NetAsym evaluates at inference -- never otherwise
+    # receives a label. Penalizes their sum for deviating from the zero-sum
+    # identity NetAsym's (a-b)/2 assumes but doesn't itself enforce on the
+    # raw single-POV outputs. Same per-file mask shape as the AUX_DIMS heads.
+    if (
+        POV_CONSISTENCY_W > 0.0
+        and opp_win_pred is not None
+        and pov_mask is not None
+    ):
+        mask = pov_mask.squeeze(-1) if pov_mask.dim() > 1 else pov_mask
+        denom = mask.sum().clamp(min=1.0)
+        per_sample = ((values_pred['win'] + opp_win_pred) ** 2).squeeze(-1)
+        l = (per_sample * mask).sum() / denom
+        macro_losses['pov_consistency'] = l
+        total_loss = total_loss + POV_CONSISTENCY_W * l
 
     # loss_win returned raw (unweighted, no aux terms) — value_r2 needs it;
     # value_loss alone can't be unweighted once loss_progress is mixed in.
@@ -737,6 +767,13 @@ def train():
         # (turn, pov), same shape as macro_ballot).
         c_rollout_value = []
         c_rollout_value_mask = []
+        # EXP_ELO_139: opponent's-true-POV counterfactual of the same state.
+        # Per-FILE presence (AUX_DIMS convention, not per-row) -- always
+        # computable when self_play writes it, never partially present
+        # within a file the way rollout_value/eco_ceiling are.
+        c_spatial_opp = []
+        c_player_opp = []
+        c_pov_mask = []
 
         for f in chunk_files:
             try:
@@ -825,6 +862,21 @@ def train():
                     c_rollout_value.append(torch.zeros(n, 1))
                     c_rollout_value_mask.append(torch.zeros(n, 1))
 
+                # EXP_ELO_139: opponent-POV counterfactual. `sp` is already
+                # width-normalized (zero-padded) above; the opp tensor is a
+                # brand-new field introduced at the current channel width, so
+                # no legacy-width padding path applies to it. Half-precision
+                # in RAM, same reason as `sp` -- this is the second-largest
+                # tensor in the buffer.
+                if "spatial_maps_opp" in data and "player_states_opp" in data:
+                    c_spatial_opp.append(data["spatial_maps_opp"].half())
+                    c_player_opp.append(data["player_states_opp"].float())
+                    c_pov_mask.append(torch.ones(n))
+                else:
+                    c_spatial_opp.append(torch.zeros_like(sp, dtype=torch.float16))
+                    c_player_opp.append(torch.zeros(n, data["player_states"].shape[1]))
+                    c_pov_mask.append(torch.zeros(n))
+
             except Exception as e:
                 print(f"Error loading {f}: {e}")
                 continue
@@ -865,6 +917,9 @@ def train():
             macro_mask = torch.cat(c_macro_mask)
             target_rollout_value = torch.cat(c_rollout_value)
             rollout_value_mask = torch.cat(c_rollout_value_mask)
+            spatial_maps_opp = torch.cat(c_spatial_opp)
+            player_states_opp = torch.cat(c_player_opp)
+            pov_mask = torch.cat(c_pov_mask)
 
         except RuntimeError as e:
             print(f"OOM loading chunk: {e}")
@@ -874,6 +929,7 @@ def train():
         del c_spatial, c_player, c_win, c_progress, c_aux, c_aux_mask
         del c_macro_stance, c_macro_order, c_macro_mask
         del c_rollout_value, c_rollout_value_mask
+        del c_spatial_opp, c_player_opp, c_pov_mask
         gc.collect()
 
         dataset_size = len(spatial_maps)
@@ -892,6 +948,9 @@ def train():
             "macro_mask": macro_mask,
             "target_rollout_value": target_rollout_value,
             "rollout_value_mask": rollout_value_mask,
+            "spatial_maps_opp": spatial_maps_opp,
+            "player_states_opp": player_states_opp,
+            "pov_mask": pov_mask,
             "dataset_size": dataset_size,
             "chunk_idx": chunk_idx,
         }
@@ -1046,8 +1105,8 @@ def train():
         total_aux_t = {k: torch.zeros((), device=DEVICE) for k in AUX_DIMS}
         total_aux_n_t = {k: torch.zeros((), device=DEVICE) for k in AUX_DIMS}
         total_kl_t = torch.zeros((), device=DEVICE)
-        total_macro_t = {'macro_stance': torch.zeros((), device=DEVICE), 'macro_order': torch.zeros((), device=DEVICE), 'rollout_value': torch.zeros((), device=DEVICE)}
-        total_macro_n_t = {'macro_stance': torch.zeros((), device=DEVICE), 'macro_order': torch.zeros((), device=DEVICE), 'rollout_value': torch.zeros((), device=DEVICE)}
+        total_macro_t = {'macro_stance': torch.zeros((), device=DEVICE), 'macro_order': torch.zeros((), device=DEVICE), 'rollout_value': torch.zeros((), device=DEVICE), 'pov_consistency': torch.zeros((), device=DEVICE)}
+        total_macro_n_t = {'macro_stance': torch.zeros((), device=DEVICE), 'macro_order': torch.zeros((), device=DEVICE), 'rollout_value': torch.zeros((), device=DEVICE), 'pov_consistency': torch.zeros((), device=DEVICE)}
 
         print(f"\n=== Epoch {epoch+1}/{EPOCHS} ===")
 
@@ -1064,6 +1123,9 @@ def train():
             macro_mask = chunk["macro_mask"]
             target_rollout_value = chunk["target_rollout_value"]
             rollout_value_mask = chunk["rollout_value_mask"]
+            spatial_maps_opp = chunk["spatial_maps_opp"]
+            player_states_opp = chunk["player_states_opp"]
+            pov_mask = chunk["pov_mask"]
             dataset_size = chunk["dataset_size"]
             chunk_idx = chunk["chunk_idx"]
 
@@ -1096,6 +1158,17 @@ def train():
                 batch_macro_mask = macro_mask[batch_idx].to(DEVICE)
                 batch_rollout_value = target_rollout_value[batch_idx].to(DEVICE)
                 batch_rollout_value_mask = rollout_value_mask[batch_idx].to(DEVICE)
+
+                # EXP_ELO_139: sliced only when the loss is actually on, same
+                # cost-avoidance convention as every other optional term.
+                batch_spatial_opp = None
+                batch_player_opp = None
+                batch_pov_mask = None
+                if POV_CONSISTENCY_W > 0.0:
+                    batch_spatial_opp = spatial_maps_opp[batch_idx].to(DEVICE, dtype=torch.float32)
+                    batch_spatial_opp = batch_spatial_opp.view(-1, SPATIAL_CHANNELS, MAP_SIZE, MAP_SIZE)
+                    batch_player_opp = player_states_opp[batch_idx].to(DEVICE)
+                    batch_pov_mask = pov_mask[batch_idx].to(DEVICE)
 
                 # Reshape spatial to (B, C, H, W)
                 batch_spatial = batch_spatial.view(-1, SPATIAL_CHANNELS, MAP_SIZE, MAP_SIZE)
@@ -1158,6 +1231,16 @@ def train():
                     values_pred['macro_stance'] = blind_values_pred['macro_stance']
                     values_pred['macro_order'] = blind_values_pred['macro_order']
 
+                # EXP_ELO_139: opponent's-true-POV counterfactual, same
+                # weights, second forward -- same shape of change as the
+                # blind_spatial pass above. NOTE: batch_spatial_opp is not
+                # D4-rotated even when AUGMENT_D4 is on (both default off;
+                # untested in combination -- see POV_CONSISTENCY_W's comment).
+                opp_win_pred = None
+                if POV_CONSISTENCY_W > 0.0:
+                    _, opp_values_pred, _ = model(batch_spatial_opp, batch_player_opp)
+                    opp_win_pred = opp_values_pred['win']
+
                 # EXP_ELO_013: ref forward pass on the identical (possibly
                 # D4-augmented) batch, so its spatial heads align tile-for-
                 # tile with the live model's without any extra transform.
@@ -1171,7 +1254,8 @@ def train():
                     aux_pred, batch_aux, batch_aux_mask,
                     ref_policy_pred, KL_REF_WEIGHT,
                     batch_macro_stance, batch_macro_order, batch_macro_mask,
-                    batch_rollout_value, batch_rollout_value_mask)
+                    batch_rollout_value, batch_rollout_value_mask,
+                    opp_win_pred, batch_pov_mask)
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -1204,6 +1288,7 @@ def train():
                         'macro_stance': batch_macro_mask,
                         'macro_order': batch_macro_mask,
                         'rollout_value': batch_rollout_value_mask,
+                        'pov_consistency': batch_pov_mask,
                     }
                     for k, l in macro_losses.items():
                         n_k = macro_mask_by_key[k].sum().detach()
@@ -1283,7 +1368,7 @@ def train():
     total_macro_n = {k: v.item() for k, v in total_macro_n_t.items()}
     final_macro = {
         k: (total_macro_t[k].item() / total_macro_n[k] if total_macro_n.get(k, 0) > 0 else 0.0)
-        for k in ('macro_stance', 'macro_order', 'rollout_value')
+        for k in ('macro_stance', 'macro_order', 'rollout_value', 'pov_consistency')
     }
     if MACRO_STANCE_W > 0.0 or MACRO_ORDER_W > 0.0:
         print(
@@ -1295,6 +1380,11 @@ def train():
         print(
             f"  rollout_value_loss={final_macro['rollout_value']:.4f} "
             f"(supervised rows: {int(total_macro_n['rollout_value'])}/{target_n})"
+        )
+    if POV_CONSISTENCY_W > 0.0:
+        print(
+            f"  pov_consistency_loss={final_macro['pov_consistency']:.4f} "
+            f"(supervised rows: {int(total_macro_n['pov_consistency'])}/{target_n})"
         )
 
     # R^2 of the win head against the LAST epoch's own target distribution:

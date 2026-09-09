@@ -24,6 +24,10 @@ pub(crate) struct DecomposedPolicyData {
 /// this step as its "next decision" horizon.
 pub(crate) struct HistoryStep {
     pub(crate) features: GameFeatures,
+    /// EXP_ELO_139: the same state, encoded from the opponent's own true POV
+    /// (their own fog-of-war) -- the counterfactual `NetAsym` evaluates at
+    /// inference but which never otherwise receives a training label.
+    pub(crate) opp_features: GameFeatures,
     pub(crate) policy: DecomposedPolicyData,
     pub(crate) player_id: PlayerId,
     pub(crate) my_score: f32,

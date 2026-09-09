@@ -18404,3 +18404,1389 @@ A6's documented required-companion-step. Part B (training-target
 research) proceeds as planned in `plan_net_root_candidates.md`,
 now with a stronger starting point than assumed when that plan was
 written.
+
+## EXP_ELO_133 — Part B, B1: does the EXISTING main-net policy already
+beat `lambda=0.0` as the real-per-ply root-ranker source? (zero new
+training) (pre-registered Sep 7, 2026, by the parallel Part B research
+session per `plan_net_root_candidates.md`'s B1)
+
+CONTEXT: EXP_ELO_131's "Rung B" already checked the existing
+`PolyZeroNet` policy heads against `rank_plies`'s own Δφ-regret metric:
+held-out regret 106.7-108.1, ~2x worse than the dedicated `PlyRanker`'s
+54.3, and actively LOSES to the zero-Δφ baseline on Attack (16% of
+calls). That comparison judged the heads against `rank_plies`'s
+hand-coded formula as ground truth — the exact target this whole
+`net_root` effort is abandoning (`plan_net_root_candidates.md`: "a copy
+can't beat the thing it copies"). It says nothing about how well those
+heads play once plugged into the real decision loop, where micro-mcts's
+bounded search sits downstream of whatever root ranking it's handed.
+
+This project has hit the same shape of trap at least six times before —
+a policy/value target's offline fit (loss, regret, calibration)
+improved while paired-gauge play quality did not follow, or moved the
+opposite way (EXP_ELO 046, 060, 069, 072, 073, 123 — see
+`current_understanding.md`'s "The value head" section). Rung B's regret
+numbers are offline-fit evidence of exactly that shape and are treated
+as background only, not as part of this entry's verdict (see BAR).
+
+EXP_ELO_132 moved this experiment's actual comparison point: the
+`net_root` rework alone, on the SAME rejected `PlyRanker` checkpoint,
+jumped 29.0% → 38.7% win rate (Arm D), exactly tying `lambda=0.0`
+(Arm B) with better throughput (38.97 vs 37.61 moves/s). So this
+experiment is no longer "beat a dominated 29.0% arm" — it's "does the
+already-trained main net, read through the same validated `net_root`
+mechanism, beat or tie the same 38.7% bar Arm D already reached."
+
+HYPOTHESIS: using the existing main-net `PolyZeroNet` policy heads
+(`RootRankerSource::MainNet`, via `POLYFISH_NET_ROOT_SOURCE=main_net`)
+as the real-per-ply root-candidate source in `MacroMctsAgent::
+select_move` — NOT in macro-mcts's own rollouts, see confound note
+below — measures competitively against `--macro-rollout-lambda 0.0`
+(Arm B, 38.7%) on the seed-770425 paired win-rate gauge, because
+micro-mcts's own bounded PUCT search is the actual decision-maker
+downstream of the root ranking, not raw fidelity to `rank_plies`'s Δφ
+formula.
+
+METHOD: zero training — `model.safetensors` is already trained and
+already loaded via the production `Evaluator`. Implemented: `net_root
+::net_root_source_is_main_net()` reads `POLYFISH_NET_ROOT_SOURCE=
+main_net` and switches `rank_view_net_or_cpu`'s real-per-ply builder
+from `RootRankerSource::Ply` to `RootRankerSource::MainNet(evaluator)`
+(any other/unset value keeps A6's `ply_ranker`-or-CPU-fallback
+behavior unchanged — verified: full lib suite, 384 passed/0 failed,
+with no `ply_ranker.safetensors` present and `POLYFISH_NET_ROOT_SOURCE`
+unset). Deliberately EXCLUDES `execute_turn_net_greedy` (rollouts) —
+per `ply_ranker.rs`'s own module doc, the dedicated small net exists
+specifically because the main net's forward pass is materially more
+expensive, and rollouts pay that cost on every ply of every simulated
+turn; mixing the main net into rollouts would conflate a throughput
+confound with the quality question this experiment asks. Confirmed
+before running: `MicroParams::net_prior_w` defaults to 0.0 and is set
+only via `POLYFISH_MICRO_MCTS_NET_PRIOR_W`, unset anywhere in this
+gauge's recipe or the training-loop defaults — so `micro_search_pick`'s
+second-forward-pass/union-widening block never fires regardless of this
+experiment, and there is no double-forward-pass confound to account for
+beyond the root builder's own one pass.
+
+Run the seed-770425 paired gauge, same production macro-mcts recipe as
+EXP_ELO_131/132 (`--search-backend macro-mcts --macro-leaf net-asym
+--macro-sims 64 --macro-k 6 --macro-root-prior-w 0.05 --macro-rollout-
+nn-w 1.0 --macro-rollout-nn-min-depth 1 --goal-channels --goal-w-tree 1
+--macro-lambda 1.0`, `--base-seed 770425 --anchor-frac 1.0 --max-turns
+25`, fixed Imperius/Imperius, n=32 requested). New Arm E:
+`POLYFISH_NET_ROOT_SOURCE=main_net`, no `POLYFISH_PLY_RANKER` set (so
+rollouts fall through to CPU `execute_turn`, unaffected). Compared
+against the three arms already measured in EXP_ELO_131/132 on this
+exact recipe (not re-run, per that entry's own precedent of reusing
+EXP_ELO_131's A/B numbers unchanged in EXP_ELO_132): A: full-Δφ, 17.56
+moves/s, 41.9%; B: `lambda=0.0`, 37.61 moves/s, 38.7%; D: dedicated
+`PlyRanker` via `net_root` (rejected checkpoint), 38.97 moves/s, 38.7%.
+
+BAR (two-sided, per the plan's B4): proceed to further main-net-heads
+work only if Arm E beats Arm B (38.7%) on paired win rate AND beats
+Arm A (17.56 moves/s) on throughput. Offline regret (Rung B's
+106.7-108.1, or any other offline-fit/loss/calibration number) is
+EXPLICITLY NOT admissible evidence for this verdict in either
+direction, per the six-instance calibration/discrimination-decoupling
+precedent above — background context only, never part of the pass/fail
+call.
+
+Known confound to record up front, expected NOT resolved by this
+experiment either way: Arm E should show a smaller throughput win than
+Arm D even if quality clears the bar — the real per-ply commit happens
+every ply regardless of source, so E fully pays whatever the main net's
+larger forward-pass cost is (`ply_ranker.rs`'s module doc: "~20x-larger
+main net" than the dedicated net — verify this ratio empirically from
+the run's own moves/s rather than citing it uncited). It is plausible
+Arm E clears quality but fails the throughput half of the bar — that is
+still a real, useful, recordable result (it would mean the TARGET is
+right and only inference cost needs solving, e.g. distilling the main
+net's demonstrated real-ply behavior into the small dedicated net),
+not a wasted run.
+
+### ACTUAL (Sep 7, 2026)
+
+Ran Arm E: `POLYFISH_NET_ROOT_SOURCE=main_net`, no `POLYFISH_PLY_RANKER`
+set, identical seed-770425/n=32 recipe. 31/32 games completed within
+the launched process (`--dump-results` confirms 32 rows written, one
+non-anchor game at game_idx 0 per this recipe's own convention, matching
+A/B/D).
+
+| arm | mechanism | moves/sec | anchor win rate (n=31) |
+|---|---|---|---|
+| A: full-Δφ | CPU `rank_plies` | 17.56 | 41.9% |
+| B: `lambda=0.0` | CPU, skip Δφ | 37.61 | 38.7% |
+| D: dedicated `PlyRanker` (rejected ckpt) | `net_root`, real-ply+rollouts | 38.97 | 38.7% |
+| **E: main-net heads (this entry)** | **`net_root`, real-ply ONLY** | **7.67** | **41.9%** |
+
+**Quality: ties Arm A exactly (41.9%, 13/31 anchor wins), beating both
+B and D's 38.7%.** This is a genuinely positive result for the
+hypothesis: the existing, already-trained main-net policy heads,
+read through `net_root`'s log-domain-composition + Gumbel-style
+heuristic blend, produce root-ranking decisions that play exactly as
+well as the full expensive Δφ computation — at zero new training. Rung
+B's offline-regret verdict (main-net heads ~2x worse regret, regresses
+on Attack) does NOT transfer to play quality once the moved-through
+mechanism is `net_root`'s validated composition instead of the naive
+formula Rung B was judged against — reconfirms this entry's own
+pre-registered caveat that offline regret is not admissible evidence
+here, in either direction.
+
+**Throughput: 7.67 moves/sec — WORSE than every other arm, including
+full-Δφ (17.56), by more than 2x.** This clearly FAILS the throughput
+half of the bar. Diagnosis via the same `EVAL_SERVER_STATS_AGG` line
+EXP_ELO_134 used: `busy_frac: 0.083` (vs. Arm D's 0.446), `avg_batch:
+2.85`, `wait_s: 85.19` out of `busy_s: 168.52` — the eval server was
+busy only 8.3% of this run's 2038s wall-clock. Mechanism: Arm E adds
+ONE extra synchronous network round-trip per real ply (the main-net
+forward pass replacing what used to be a purely-local CPU `rank_plies`
+call) on top of an otherwise-UNCHANGED rollout path (no `PlyRanker`
+loaded, so `execute_turn_net_greedy` never engages — rollouts pay the
+exact same full CPU Δφ cost as Arm A). In an already latency-bound
+pipeline (EXP_ELO_134's own finding: the dominant cost across every
+arm is thread-blocking, not compute), inserting one more mandatory
+blocking round-trip into the real-ply critical path — paid once per
+real ply, every real ply, with no compensating rollout savings — cost
+far more wall-clock than the CPU `rank_plies` call it replaced saved.
+This is the concrete, measured version of this entry's own
+pre-registered "known confound": Arm E pays the main net's full
+inference cost but banks NONE of Arm D's rollout-side savings, since
+B1 deliberately keeps rollouts off the net path.
+
+**Verdict: REJECTED against the pre-registered two-sided bar.** Quality
+clears decisively; throughput fails decisively (worse than the
+DO-NOTHING baseline, not merely short of the target). Per the bar's own
+disposition text, this specific failure mode (clears quality, fails
+throughput) means the TARGET is validated but this arm's inference cost
+is not — consistent with `ply_ranker.rs`'s own module doc rationale for
+why a small dedicated net exists in the first place (the main net is
+~20x more expensive per forward and unsuited to this call frequency).
+**Disposition: do not ship Arm E as configured.** The demonstrated
+result — main-net-heads quality ties full-Δφ — is real evidence in
+favor of Part B's underlying premise (the main net's own policy already
+knows enough to rank root candidates well) and should inform B2 if it
+runs (a retrained dedicated `PlyRanker` need not chase a from-scratch
+target; distilling the main net's OWN demonstrated real-ply behavior,
+which this entry shows is good, is a more direct path than the original
+Δφ-replica target). Not pursuing further main-net-heads work per the
+bar's own stated gate.
+
+## EXP_ELO_134 — throughput diagnostic: where do the missing 10x go? (Sep 7, 2026, Verdi-directed overnight objective: 300-500 moves/s, currently ~30-50)
+
+STATUS: DIAGNOSTIC ONLY — no fix attempted or shipped this entry. Root
+cause is now measured with hard numbers; the fix (Virtual Mean/leaf-
+parallel batching) is scoped but deliberately NOT implemented tonight
+(see disposition).
+
+CONTEXT: Verdi's standing throughput target is 300-500 moves/s; current
+production macro-mcts numbers sit at 17.56 (full-Δφ) to 38.97
+(net_root+PlyRanker, EXP_ELO_132's Arm D) moves/s — nowhere close.
+`run_training_loop.sh`'s own comment cites ~578-650 moves/s "at 128
+games+" on this same Mac, but that figure is from the GUMBEL backend at
+`ACTORS=128` (eval-server-bound: actors park on the eval server with no
+CPU cost, so 128 concurrent games is free oversubscription). Macro-mcts
+cannot use that actor count: the wakeup-limit memory
+(`macos-wakeup-limit-kills-net-leaf-actors`) established `ACTORS=128`
+under `MACRO_LEAF=net*` trips macOS's per-process CPU-wakeups guard
+(SIGKILL within 40-70s) because macro-mcts's tree bookkeeping/candidate
+generation is genuine per-actor CPU work, unlike Gumbel's much
+finer-grained per-node calls — so macro-mcts runs are capped at
+`-a <core count>` (14 on this Mac). The open question this entry
+answers: given that 14-actor ceiling, where does the remaining time
+actually go?
+
+METHOD: reused the already-built `net_root`-enabled `self_play` release
+binary (no new build). Ran an 8-game profiling batch at the exact
+EXP_ELO_132/133 production recipe (`--macro-sims 64 --macro-k 6
+--macro-root-prior-w 0.05 --macro-rollout-nn-w 1.0
+--macro-rollout-nn-min-depth 1 --goal-channels --goal-w-tree 1
+--macro-lambda 1.0 --base-seed 770425 --anchor-frac 1.0 --max-turns 25
+--tribe1/2 Imperius`), `POLYFISH_PLY_RANKER=ply_ranker.safetensors.
+rejected_20260906` set (Arm D's exact config — dedicated `PlyRanker`
+serving BOTH the real-per-ply commit AND macro-mcts's own rollouts,
+since `POLYFISH_PLY_RANKER_ROLLOUTS` defaults on). While it ran, took a
+5-second macOS `sample` of the live `self_play` process (1ms interval,
+all threads) and read the unconditional `EVAL_SERVER_STATS_AGG`/
+`Throughput:` stdout lines the binary already prints (`self_play/
+runner.rs`, no flag needed).
+
+RESULT:
+- **Throughput: 37.27 moves/sec (2814 moves over 75.51s)** — matches
+  EXP_ELO_132's Arm D reading (38.97 at n=32) within expected n=8
+  variance. Confirms this 8-game batch is representative, not a fluke.
+- **`EVAL_SERVER_STATS_AGG`: `avg_batch: 2.53` (max_batch cap is 256),
+  `busy_frac: 0.446`, `cache_hit_rate: 0.542`, 14,824 forwards for
+  37,511 rows across 3 shards.** The eval server — the same Metal/
+  MPSGraph pipeline that hits ~578-650 moves/s under Gumbel's 128-actor
+  regime — is running here at an average batch size of 2.53 against a
+  cap of 256, and is idle/waiting more than half the wall-clock it was
+  measured over. It is nowhere near saturated; the GPU pipeline built
+  for exactly this kind of throughput is starved of concurrent demand.
+- **`sample`'s "Sort by top of stack" breakdown (5s, 1ms interval, all
+  threads) is dominated by blocking primitives, not compute**:
+  `__psynch_cvwait` 45,253 samples, `semaphore_wait_trap` 23,731,
+  `__workq_kernreturn` 15,470, `__psynch_mutexwait` 8,594 — roughly
+  93,000 blocked-thread samples vs. the largest actual-work entries
+  (`rayon::iter::plumbing::bridge_producer_consumer` 6,644,
+  `candle_core::cpu_backend::utils::Map2::map` 1,345 — CPU backend,
+  confirming `PlyRanker::forward_raw` really does run un-accelerated
+  candle-CPU math directly on the actor thread, exactly as its module
+  doc says — plus a long tail of `eco_plan`/`movement`/`scoring`
+  functions each in the low hundreds of samples or less). Almost every
+  thread, almost all the time, is waiting, not computing.
+
+INTERPRETATION: two compounding, independently-diagnosed mechanisms,
+not one:
+1. **Actor-count ceiling starves the eval-server's own batching.** 14
+   concurrent games cannot fill a 256-row batch inside a 1ms coalescing
+   window the way 128 concurrent Gumbel games can — `avg_batch: 2.53`
+   is the direct symptom. This ceiling itself is load-bearing (raising
+   it re-trips the CPU-wakeups guard under CPU-bound macro-mcts work)
+   — it is not simply a knob to turn up.
+2. **`PlyRanker`'s rollout forward passes never reach the eval server
+   at all.** By design (`ply_ranker.rs`'s own doc: "called directly on
+   the actor thread ... not routed through the batched Evaluator/
+   eval_server"), every one of macro-mcts's own internal rollout plies
+   (up to `macro_sims`=64 per real turn) pays a synchronous, unbatched,
+   CPU-backend candle forward on the acting thread. This doesn't
+   contend with the eval server for GPU time, but it does serialize
+   real wall-clock per actor, and — more importantly — it structurally
+   cannot benefit from the SAME batching mechanism that makes the main
+   net's Metal path fast, because it was never designed to be called
+   from more than one place at a time.
+
+Both mechanisms point the same direction: **the fix is not a hot-
+function optimization (no single non-blocking function even reaches
+2,000 samples out of ~110,000) — it's more concurrent demand per unit
+wall-clock**, either by running more simultaneous tree searches (not
+possible today without retripping the wakeup guard) or by having EACH
+actor's own tree search generate several batchable leaf-evaluation
+requests at once instead of one at a time. The latter is exactly
+"Virtual Mean batching" — flagged as "the real near-term win" in this
+project's own prior GPU-MCTS research conclusion (`gpu-mcts-research-
+conclusion` memory) — running several simulations of the SAME tree
+concurrently (classic AlphaZero-style leaf-parallel MCTS with virtual
+loss) so their leaf evaluations coalesce into one real batch instead of
+each blocking the actor thread in turn. This would let a single actor
+manufacture the concurrent demand that 14 actors alone cannot, without
+touching the wakeup-guard-constrained actor count at all.
+
+DISPOSITION: **diagnostic only, not shipped.** Implementing leaf-
+parallel/virtual-loss batching means rewriting `MacroMctsSearch`'s
+`expand()`/rollout loop to issue and await several leaf evaluations
+per tree concurrently instead of one at a time — real surgery on a
+2158-line file this project's engine-correctness bar (`Game`/`Move`
+"never panic on valid input") treats seriously, plus new correctness
+risk around virtual-loss bookkeeping and determinism (this repo has
+been burned before by threading/iteration-order determinism bugs, see
+`same-seed-not-reproducible`). Not something to attempt unsupervised
+overnight without review. **Recommended next step for a future
+session**: scope a small, isolated virtual-loss prototype behind a
+flag, gated identically to `POLYFISH_MICRO_MCTS_*`, measured on this
+exact 8-game/EVAL_SERVER_STATS_AGG harness first (avg_batch should rise
+well above 2.53) before any paired win-rate gauge — batch-size and
+win-rate are separable questions, don't conflate them the way the
+value-head calibration/discrimination history in this project warns
+against.
+
+**Addendum (same night, read-only follow-up):** re-checked this
+entry's own "Virtual Mean batching" citation against the `gpu-mcts-
+research-conclusion` memory directly rather than from recollection.
+Correction: that research (Cazenave arXiv:2104.04278, Jul 2026) is
+scoped explicitly to **`mcts_zero.rs`/`gumbel_mcts.rs`'s leaf
+selection** — running several concurrent traversals of the SAME tree
+per round, replacing the virtual-loss penalty with a running-mean
+value so their leaf evals coalesce into one real GPU batch. It has
+**never been evaluated against `macro_mcts.rs`**, whose `simulate()`
+(macro_mcts.rs:790) has a materially different cost shape: each edge
+expansion (`expand()`, line 863) runs an entire simulated turn
+(`execute_turn`/`execute_turn_net_greedy`, up to `MAX_EXEC_PLIES`=64
+plies) before it ever reaches one `leaf_value` call — not the single
+cheap per-node network call `gumbel_mcts` batches. Applying Cazenave's
+technique here verbatim would require actually parallelizing multiple
+`simulate()` traversals over the SAME mutable node array concurrently
+— real concurrent-tree-mutation risk (locking/lock-free bookkeeping,
+new determinism surface) this repo has been burned by before
+(`same-seed-not-reproducible`), not a drop-in leaf-selection swap the
+way it is for `gumbel_mcts`. Do not treat it as an already-validated
+plan for macro-mcts.
+
+**Lower-risk, more concretely-scoped alternative, specific to what
+this entry actually measured:** the diagnosed second mechanism above
+— `PlyRanker::forward_raw` running raw, synchronous, unbatched candle-
+CPU math directly on each actor's own thread (confirmed present in the
+`sample` breakdown) — has an architecturally simple fix that requires
+**zero tree-structure changes and no concurrent mutation**: give
+`PlyRanker` the same batched-server treatment `eval_server`/`Evaluator`
+already gives the main net. Each actor's own tree search stays exactly
+as sequential as today; only the mechanism computing one `forward_raw`
+call changes, from "compute it locally, right now" to "submit it to a
+shared batching worker and await the reply" — the same shape of change
+`ply_ranker.rs`'s own module doc already contrasts against ("called
+directly on the actor thread... not routed through the batched
+Evaluator/eval_server built for the ~20x-larger main net"), just
+reversed: build that missing batching path instead of continuing to
+justify its absence. With 14 concurrent actors each contributing
+rollout-ply requests, this could plausibly lift `avg_batch` off 2.53
+without touching `macro_mcts.rs`'s selection/backup logic at all. Still
+real work (a new batching layer, not a config flag) and still belongs
+behind a measurement on the EVAL_SERVER_STATS_AGG harness before any
+paired win-rate gauge, per this entry's own recommended-next-step
+discipline — but it is the well-scoped, low-correctness-risk option,
+where Cazenave's technique is the higher-risk, unvalidated-for-this-
+backend one. Recommend starting here.
+
+## EXP_ELO_135 — Experiment A: instrument the RAW pre-search value head
+under macro-mcts, turn-band it against `micro_root_q` (pre-registered
+Sep 7, 2026, Verdi-directed: "I am more interested in the value head
+discrimination problem... there is nothing at turn 3 that makes
+'OBVIOUS' this is a crushing win so that's a code smell to me")
+
+CONTEXT: watching `verdi_watch_vs_greedy/game_iter1_game1_seed43`,
+Verdi flagged the value head assigning near-identical high confidence
+(Q=0.86-0.92) to multiple candidates at turn 3 of a 30-50 turn game —
+far too early for any position to be genuinely decided. The project's
+own ledger already shows this pattern for *search-consumed* signals
+(`evaluate_state` r² 0.122->0.889 early->late; `micro_root_q` r²
+0.227->0.732, 53.8% saturating past +/-0.8 vs 0.1% for the heuristic).
+Six prior attempts to fix this by re-engineering the value TRAINING
+LABEL (EXP_ELO_021/022/024/046/067-069/123/124) all failed to move
+arena discrimination even when calibration improved — that family is
+closed. This experiment attacks a different, previously-unmeasured
+gap instead: `--dump-value-calib`'s `raw_value` field (meant to carry
+the bare, pre-search NN value) is populated only under the Gumbel
+backend; under production macro-mcts it has silently never been
+captured, so every existing calibration number conflates the value
+head itself with whatever PUCT backup already did on top of it. This
+is diagnostic only — no training, no label change.
+
+CHANGES (all opt-in, byte-identical default when unset):
+- `macro_mcts.rs`: `MacroMctsAgent::last_root_own_value` (`Option<f32>`,
+  mirrors `last_micro_root_q`'s pattern) populated in `select_move`
+  right after the turn goal is resolved, one extra forward pass painted
+  with that same goal, gated behind `POLYFISH_MACRO_ROOT_OWN_VALUE=1`
+  (OnceLock-cached).
+- `brain.rs`: added the missing `MacroMcts(a) => a.last_root_own_value()`
+  arm (was Gumbel-only, `_ => None`); `clear_last_root_value` now also
+  clears MacroMcts's copy (required companion fix -- `game.rs` reads
+  `last_root_own_value()` unconditionally every ply, so a forced-move
+  ply with no search would otherwise leak the previous ply's value).
+- New `polyfish-rs/analyze_value_calib.py` (no committed calibration
+  script existed before this -- every past reading was ad-hoc,
+  uncommitted scratch Python): turn-banded n/Pearson-r/r2/OLS-slope+
+  intercept/saturation per signal column, plus an inner-joined
+  `raw_value`-vs-`micro_root_q` comparison as the primary diagnostic
+  pair. No sklearn in the venv -- r2/OLS computed by hand with numpy.
+
+METHOD: `self_play --dump-value-calib`, current production recipe read
+live from `run_training_loop.sh` at iteration 23 (the run's actual
+current iteration): `--search-backend macro-mcts --macro-leaf net-asym
+--macro-sims 64 --macro-k 6 --macro-root-prior-w 0.05
+--macro-rollout-nn-w 1.0 --macro-rollout-nn-min-depth 1 --goal-channels
+--goal-w-tree 1`, `DETACH_MACRO_HEADS=1 MACRO_STANCE_W=1.0
+MACRO_ORDER_W=1.0` (production env), `POLYFISH_MACRO_ROOT_OWN_VALUE=1`
+(new instrumentation flag), `--iteration 23` (value-trust ramp
+saturates to 1.0, matching the live run's own value_trust=1.000),
+`--gamemode 2`, both seats net (mirror, matching EXP_ELO_123/124's
+convention, no anchor games), n=120 games (double the prior 60-game
+dose so splitting `[0,10)` into `[0,5)`/`[5,10)` still gets a real
+per-band n), actors=32/eval-servers=3 (validated safe-throughput
+config from the overnight actor-scaling work).
+
+EXPECTED: `raw_value` tracks `micro_root_q` closely at every turn band
+-- both bad early (low r2, high slope error), both improving late.
+This would confirm the over-confidence is a genuine value-head
+perception property, not something search amplifies, and hand
+Experiment B its real ramp parameters instead of guessed ones.
+
+BAR (diagnostic, not win-rate): the expected outcome above is decisive
+either way it lands, AS LONG AS raw_value is not materially BETTER than
+micro_root_q in the early bands -- an 8-sim average cannot manufacture
+confidence its own inputs lack, so that specific outcome is a bug-check
+trigger on the new hook (POV-sign or goal-painting mismatch), not a
+finding to act on. Do not compare raw_value's saturation rate against
+the historical 55-73% `root_value` numbers -- those are `NetAsym`'s
+`(a-b)/2` differenced quantity, a different distribution; the only
+valid comparable baseline is `micro_root_q`'s own 53.8%.
+
+ACTUAL: n=120 games, 45543 rows, 0 sim failures. Turn-banded
+`raw_value` vs `micro_root_q` (inner-joined, n=42075 rows with both
+present):
+
+```
+band       n      raw_r2  micro_r2  raw_sat  micro_sat
+[0,5)     5275    0.062   0.073     0.269    0.277
+[5,10)    9152    0.354   0.380     0.525    0.519
+[10,15)  12807    0.610   0.630     0.737    0.740
+[15,20)   9470    0.684   0.719     0.796    0.796
+[20,25)   3448    0.555   0.594     0.729    0.715
+[25,30)   1177    0.424   0.468     0.731    0.716
+[30,35)    548    0.447   0.462     0.631    0.619
+[35,40)    198    0.924   0.857     0.515    0.545
+```
+
+`raw_value` tracks `micro_root_q` almost exactly at every band — r2
+within 0.01-0.04, saturation within 0.6-1.4pp, in EITHER direction (no
+systematic raw-worse-than-micro or raw-better-than-micro pattern). The
+plan's bug-check trigger (raw MATERIALLY better than micro in early
+bands) did NOT fire -- the new hook is trusted, no POV/goal-painting
+bug.
+
+VERDICT: **confirmed, decisive** -- the turn-3-style over-confidence is
+a genuine value-head perception property, not something PUCT search
+amplifies on top of a more modest signal. Most direct evidence for
+Verdi's "code smell": 25.5%/27.7% of raw/micro values at turn [0,5)
+are ALREADY saturated past +/-0.8 with r2=0.06-0.07 against the actual
+outcome -- the net is confidently wrong about 1 in 4 turn-0-5
+positions before a single simulation has run. `heur_value` never
+saturates at any band (0.000 everywhere, matching the historical 0.1%
+baseline), confirming this is specific to the learned value head, not
+an artifact of the diagnostic itself.
+
+Note for interpretation: `micro_root_q` here includes in-tree
+goal-potential shaping (`--goal-w-tree 1`, matching production) on top
+of the value head's own Q, so "tracks raw_value closely" shows search
+does not systematically PUSH values toward the extremes beyond what
+the value head itself already outputs -- it does not by itself rule out
+shaping/search changing WHICH candidate wins at the margin. Also: r2 is
+fit on 42075 correlated rows sharing ~240 game-level outcome labels
+(2 player-seats x 120 games) -- per-band deltas smaller than that
+effective n can resolve should not be read as a real trend (e.g. the
+[20,25)->[25,30) r2 dip and the [35,40) spike, the latter also only
+n=198 rows / a handful of games that ran long, are within noise). The
+robust, well-supported part of the shape is the [0,5)->[15,20) climb
+(0.06->0.72 r2, backed by 5000-13000 rows/band) and the fact that the
+earliest band is dramatically worse than every other band -- that
+part is not noise.
+
+This closes Experiment A. Feeds Experiment B's ramp parameters
+directly: value-head discrimination is genuinely poor through turn 10
+(r2 0.06-0.35, worse than `heur_value`'s own 0.14-0.40 in the same
+bands) and only becomes clearly load-bearing from turn ~10-20 onward
+(r2 0.61-0.72) -- ramp `c_puct` down (trust up) across turns ~[5,20),
+not a wider or narrower window guessed from `micro_root_q` or
+`heur_value` alone as the plan explicitly warned against.
+
+**Addendum (same session, follow-up readout on the existing dump, no
+new self_play run)**: mirror play makes mean(final_outcome)~=0 pooled,
+so the OLS slope/r2 above can't distinguish "both seats correctly told
+apart" from "both seats told the same undifferentiated high number" --
+the second is what turn-3 over-confidence actually looks like. Added
+per-band signed mean, saturation split by sign (>+0.8 vs <-0.8), and
+per-seat mean to `analyze_value_calib.py`. Result: raw_value's mean
+is strongly POSITIVE at every band (+0.43 to +0.60, never near zero),
+and the 25.5%+ saturation at [0,5) is ~100% on the +0.8 side (0% on
+the <-0.8 side) -- both seats are told they're the winning side more
+often than not, an optimism skew layered on top of the low-r2 finding
+above.
+
+This is NOT a POV/hook bug in the new instrumentation, though: split
+by seat (p1/p2), `final_outcome` itself (the actual ground truth, not
+the value head) shows overall mean p1=+0.530 (n=25209) vs p2=-0.011
+(n=20334), and the same p1>p2 gap holds in every turn band ([10,15):
+p1=0.560 vs p2=0.000; [15,20): p1=0.613 vs p2=0.233). Seat 1 really
+does end games better than seat 2 in this run, and raw_value's own
+per-seat means (e.g. [10,15): p1=0.650, p2=0.216) track that real gap
+in the same direction and rough proportion, not amplify it into
+something the ground truth doesn't support. This matches a
+pre-existing, already-documented finding from `notes.md`'s July 2026
+Phase-2-baseline section -- "p1 vs p2 score gap (~4256 vs 3291) is
+seat advantage, both sides were the same model" -- so this is a known,
+structural property of the self-play setup (almost certainly Polytopia's
+real first-move/turn-order advantage), not something introduced by
+tonight's rank_plies removal or net_root rework, and out of scope for
+both this experiment and Experiment B. Flagging only because the
+magnitude (a >=0.5 mean swing on the seat that moves first) is larger
+than intuition would suggest and is worth a dedicated look if the
+project ever revisits self-play data balance -- not folded into either
+experiment here. Caveat: the July note cited above is a SCORE-ratio
+gap (4256 vs 3291), and prior dedicated seat-bias measurements in this
+ledger (51.1%/44.9% at n~352, "no seat bias" at n=512, 123/256 vs
+112/256) are WIN-COUNT gaps -- different quantities, not a like-for-
+like contradiction, so this isn't evidence those win-rate readings were
+wrong. Small additional data point (not a new measurement, pulled from
+EXP_ELO_136's control arm below): net-vs-Greedy arena, Config 1 won as
+P1 76/100 vs as P2 65/100 -- an 11pp seat gap in an actual WIN rate,
+in a non-mirror matchup. Suggestive that the asymmetry has an engine-
+side (not purely mirror-training-side) component, but n=100/seat and
+one run -- not established, worth a dedicated look, not investigated
+further here.
+
+## EXP_ELO_136 — Experiment B: turn-conditional micro-mcts `c_puct` as
+a value-trust ramp, gauged vs Greedy (pre-registered Sep 7, 2026,
+follows directly from EXP_ELO_135's turn-banded numbers)
+
+CONTEXT: EXP_ELO_135 confirmed the value head's own r2 against
+`final_outcome` is genuinely poor before turn ~10 (0.06-0.35, worse
+than the hand-written heuristic's 0.14-0.40 in the same bands) and only
+becomes load-bearing from turn ~10-20 onward (0.61-0.72). PUCT's
+`s = q + u` (micro_mcts.rs:359-361, `q` at implicit weight 1.0) makes
+trust-weighting Q algebraically equivalent to dividing `c_puct` by that
+same weight -- so turn-conditional trust is implementable as a
+turn-conditional `c_puct` with no change to the Q computation itself.
+
+DEVIATION FROM THE APPROVED PLAN'S METHOD, caught before running (see
+prior advisor consult, same session): the plan's Experiment B method
+specified `--macro-leaf1 net-asym --macro-leaf2 heuristic` (a leaf-type
+comparison inherited from EXP_ELO_123/124's convention) as the gauge
+matchup. This does NOT isolate the ramp's effect: both sides are
+`MacroMctsAgent`s that call the SAME `micro_search_pick`/
+`micro_mcts_params()` for their real per-ply decisions (leaf choice
+only changes the macro tree's internal turn-rollout scorer, upstream
+of micro) -- the ramp lives in a process-global `OnceLock`, so both
+sides would receive it identically in one process, making control-vs-
+treatment measure a near-zero-by-construction quantity. **Using the
+production strength gauge instead**: `--backend1 macro-mcts
+$GAUGE_MACRO_FLAGS --backend2 greedy` (verbatim from
+`run_training_loop.sh` ~line 807, EXP_ELO_127's convention). `Greedy`
+dispatches to `GreedyHeuristicAgent` (confirmed via `grep` -- zero
+references to `micro_mcts`/`micro_search_pick` in `heuristic_mcts.rs`),
+so the ramp touches ONLY backend1 in this matchup -- a real, isolated
+treatment. This is also literally the instrument Verdi standardized
+tonight ("always eval_seeds vs greedy") and the same reading he asked
+for earlier in the session. Consequence: the plan's "free bonus"
+`DETACH_MACRO_HEADS` confirmatory re-check (net-asym vs heuristic leaf,
+the EXP_ELO_072 lineage) is NOT covered by this design and remains
+unconfirmed -- out of scope for this entry, noted as still-open.
+
+CHANGES:
+- `micro_mcts.rs`: new `turn_conditional_c_puct(turn, base) -> f32`,
+  reading 4 env vars via a `OnceLock<Option<(f32,f32,f32,f32)>>`
+  (`POLYFISH_MICRO_MCTS_CPUCT_EARLY/LATE/TURN_START/TURN_END`), linear
+  interpolation between `(turn_start, early)` and `(turn_end, late)`,
+  flat outside that range, returns `base` unchanged unless all 4 parse.
+- `macro_mcts.rs`: right before the `micro_search_pick` call, takes a
+  local `mut` copy of `micro_params` (it's `Copy`) and overrides
+  `.c_puct` via the function above using `game.state.settings.turn` --
+  no mutation of the cached global, no risk to the singleton.
+
+VERIFICATION (done before any gauge run): `cargo build --lib` clean (7
+pre-existing warnings, 0 new), `cargo test --lib --features apple`
+389/389 pass. Byte-identical no-op check: self_play, `--actors 1`
+(serial, to remove concurrent-actor/eval-cache timing noise from the
+comparison), `--base-seed 770425`, 2 games, config A = ramp vars unset,
+config B = ramp vars set to a mathematical no-op (`EARLY=LATE=1.5`,
+matching the `c_puct` default exactly, `TURN_START=5 TURN_END=20`) --
+every move, every count (802 moves, forwards=8435, cache_hits=3965,
+cache_misses=8435, avg_batch=1.47) identical between A and B; only
+wall-clock timing fields differed. Confirms both the unset-path
+(returns `base`) and the interpolation math (no off-by-one/direction
+bug) are correct. (An earlier `--actors 32` version of this same check
+showed a 1-count difference in micro-mcts override totals out of 1550,
+727 vs 726, alongside slightly different eval-server cache hit/miss
+counts -- diagnosed as pre-existing concurrent-actor/cache-timing
+noise, not a ramp bug, and confirmed clean once serialized.)
+
+PARAMETERS (first cut, per Q-gap-dial precedent that first fits
+overshoot ~2x -- see `q-gap-dial-method` memory): `EARLY=3.0` (2x the
+1.5 baseline; the r-ratio between EXP_ELO_135's `micro_root_q` r at
+[0,5) and [15,20) is 0.270->0.848, ~3.1x, so 3.0 undershoots that raw
+ratio deliberately as the conservative first cut), `LATE=1.5`
+(unchanged from today's default -- the ramp is a pure no-op at/after
+`turn_end`), `TURN_START=5`, `TURN_END=20` (the well-supported climb
+window from EXP_ELO_135, backed by 5000-13000 rows/band; the `[20,30)`
+dip and `[35,40)` spike are within this project's own noise-floor
+caveat for band-level reads and were NOT used to extend the window).
+
+METHOD: `arena`, `--model1 model.safetensors --model2
+model.safetensors --backend1 macro-mcts --macro-leaf1 net-asym
+--macro-sims1 64 --macro-k1 6 --macro-root-prior-w1 0.05
+--macro-rollout-nn-w1 1.0 --macro-rollout-nn-min-depth1 1 --backend2
+greedy --mcts 64 --seed-file eval_seeds.json --games 100 --gamemode
+2` (verbatim production gauge argv; `--games 100` = all 100 available
+seeds x2 orientations = 200 games, matching the plan's n=200).
+- **Control**: ramp env vars unset.
+- **Treatment**: `POLYFISH_MICRO_MCTS_CPUCT_EARLY=3.0
+  POLYFISH_MICRO_MCTS_CPUCT_LATE=1.5 POLYFISH_MICRO_MCTS_CPUCT_TURN_START=5
+  POLYFISH_MICRO_MCTS_CPUCT_TURN_END=20`.
+
+MECHANISM GATE (per advisor, checked before trusting any win-rate
+delta): treatment's micro-mcts override rate (self_play/arena's own
+end-of-run stat, "micro-mcts calls: N total, M overrode rank_view's top
+pick") must differ from control's -- specifically LOWER, since the
+entire hypothesis is that a higher early `c_puct` makes early-turn
+picks track the (structurally sound) prior/exploration term rather
+than the (poorly-discriminating) Q term, i.e. override the CPU-ranked
+top pick LESS often early. If the two rates are statistically
+indistinguishable, the ramp did not bite at sims=8 and the win-rate
+delta (whatever its sign) is not interpretable as evidence about the
+mechanism.
+
+BAR: treatment must clear control by more than the ~7.8pp/n~128-200
+noise floor (`seed-770425 gauge harness` precedent) AND pass the
+mechanism gate above. A directionally-positive-but-short reading is
+"borderline" -- repeat/extend before trusting, per this project's own
+escalation discipline. If flat at sims=8 (mechanism gate fails or
+delta is null), rerun with `POLYFISH_MICRO_MCTS_SIMS=64` as a secondary
+arm before concluding the idea doesn't help (production sims=8 gives
+most children only 1-2 visits, which could hide a real effect
+regardless of whether `c_puct` matters in principle).
+
+ACTUAL: n=200 games (100 seeds x 2 sides), same checkpoint/seeds both
+arms.
+
+```
+                control (unset)   treatment (ramp)
+Config1 wins    141/200 (70.5%)   134/200 (67.0%)
+Config1 as P1   76/100            72/100
+Config1 as P2   65/100            62/100
+avg score C1    5201.9            4971.1
+avg score C2    3435.9            3714.2   (Greedy)
+C1 moves        44453             41463    (-6.7%)
+C2 moves        35819             37550    (+4.8%, Greedy)
+cities_lost/gm  0.73              0.87
+unsieged rate   50%               44%
+micro-mcts ovr  47.7% (n=39493)   42.7% (n=36458)
+```
+
+Win-rate delta: **-3.5pp (wrong direction)**, well inside the
+~7.8pp/n~200 noise floor -- does not clear the bar in either direction.
+
+MECHANISM GATE, corrected before trusting it (per advisor consult, same
+session): the raw override-rate drop (47.7%->42.7%) is NOT clean
+evidence the ramp changed picks the predicted way, because the
+denominator itself moved -- `MICRO_MCTS_CALLS` counts real plies, and
+treatment had 3035 fewer of them (-7.7%) despite the SAME 200 seeds.
+Critically, Greedy's OWN move count (Config 2, untouched by the ramp)
+rose 4.8% under treatment while Config 1's fell 6.7% -- games ran
+longer overall while the ramped agent acted less per turn, i.e. this
+looks like Config 1 ending turns earlier / doing less per turn, not
+simply "the same plies, different picks." Consistent story across
+every other stat: Config 1's avg score fell (5201.9->4971.1) while
+Greedy's rose (3435.9->3714.2), and Config 1 lost more cities per game
+(0.73->0.87) with a lower unsieged rate (50%->44%) -- underdevelopment/
+passivity, not noise-shaped stat wobble. This matches a previously
+CONFIRMED failure mode in this project's own ledger
+(`endturn-flat-price-unfair-vs-shaped-scores`, EXP_ELO_075): widening
+exploration credit broadly (here: `c_puct` applied uniformly to EVERY
+candidate at the root, including EndTurn, which never accrues Q the
+way developed alternatives do) plausibly gives EndTurn -- and general
+under-action -- more visits than it earned, at exactly the low-r2 early
+turns this ramp targets.
+
+VERDICT: **does not clear the bar.** The pre-registered secondary-sims
+clause ("mechanism gate fails or delta is null") does not fire on its
+own terms -- the gate is confounded, not failed, and the delta is
+negative-in-noise, not null-in-noise; stretching either to justify an
+8x-costlier sims=64 arm, or retuning `early` down from a single
+negative reading, would be measuring the same shape of thing
+`feedback-size-data-runs-to-the-question` warns against. Closing this
+as a first-cut negative: turn-conditional `c_puct` at
+`(early=3.0, late=1.5, turn_start=5, turn_end=20)` does not improve
+(and plausibly mildly hurts, via a known adjacent mechanism) win rate
+vs Greedy at production sims=8. Not evidence the general
+"turn-conditional value trust" idea is dead -- a mechanism that trusts
+Q less early WITHOUT also inflating EndTurn's relative standing (e.g.
+scaling `net_prior_w` instead of `c_puct`, or excluding EndTurn from
+the ramped exploration bonus) remains untested and would need its own
+pre-registration, not a same-night retune.
+
+Caveat: paired-seed design, no per-seed McNemar computed
+(EXP_ELO_120's precedent for this shape of read) -- the -3.5pp is a
+marginal, aggregate read, not a confirmed paired effect either
+direction.
+
+STILL OPEN: the plan's originally-scoped `DETACH_MACRO_HEADS`
+confirmatory re-check (net-asym vs heuristic leaf, EXP_ELO_072's
+lineage, +6.3pp still unconfirmed past a single below-noise-floor
+reading) is NOT covered by this entry's corrected method and remains
+unexecuted.
+
+This closes Experiment A + B as planned. Candidate C
+(`DETACH_PROGRESS_HEAD`) was explicitly lower-priority in the approved
+plan and was not started.
+
+**Follow-up (same session): the EndTurn-inflation story above is
+WRONG about the mechanism -- corrected here before it misleads a
+future reader.** Attempted a targeted fix (EndTurn exempted from the
+ramp's widened `c_puct`, via a `micro_mcts_base_c_puct()` helper
+applied only to `MoveType::EndTurn` children in `select_and_expand`'s
+PUCT loop) and re-ran the same n=20-game ply-trace diagnostic
+(`POLYFISH_PLY_TRACE`) that first surfaced the correlation. The fix
+produced a **byte-identical trace** to the un-fixed ramp (same 6258
+rows, same per-band EndTurn rate to 3 decimals) -- not a null result,
+a no-op: the modified code path is structurally unreachable at the
+level where the real decision is made. `micro_search_pick` (line 481)
+early-returns `(None, None, None, Vec::new())` whenever
+`ranked[0].1.move_type() == MoveType::EndTurn` -- i.e. whenever
+`rank_view_net_or_cpu`'s OWN CPU/net-blended scoring (computed
+upstream of and independent from micro-mcts entirely) already ranks
+EndTurn first, the tree search never runs at all, and `c_puct` (ramped
+or not) never enters the picture. Direct trace confirmation: of 335
+total EndTurn-chosen plies across both arms, **100% had `micro: []`**
+(empty micro-mcts trace) and EndTurn present in the pre-search
+`candidates` list already -- 0 came from PUCT selecting it out of
+multiple genuinely-searched alternatives, and 0 came from the
+`first_true_legal` illegal-fallthrough path either (also checked and
+ruled out). **Reverted the dead-code fix** (`micro_mcts_base_c_puct`
+and its call site) rather than leave an unreachable branch in the PUCT
+loop -- `micro_mcts.rs` is back to EXP_ELO_136's original diff exactly,
+confirmed by a clean `cargo build --lib` (7 pre-existing warnings, 0
+new) and `cargo test --lib --features apple` (389/389).
+
+**What the EndTurn-rate correlation actually is, then**: a downstream/
+cascading symptom, not a first-order PUCT artifact. The ramp only ever
+touches `c_puct` on plies where the tree genuinely searches (`ranked`
+has >=2 candidates AND `ranked[0]` isn't already EndTurn) -- changing
+outcomes on THOSE plies alters the resulting game trajectory, and a
+different trajectory naturally has a different rate of later positions
+where `rank_view_net_or_cpu` legitimately concludes "nothing left to
+do, EndTurn is the correct top-ranked candidate on its own." This is
+consistent with everything else in EXP_ELO_136's ACTUAL (Config 1's
+score fell, cities lost rose, moves/game fell while Greedy's rose) but
+is a much less specific, less directly-fixable claim than "PUCT
+over-explores EndTurn" -- there is no single formula change available
+at the EndTurn candidate itself, because it is never a candidate the
+ramp's mechanism can see. Any real fix would have to touch whatever is
+making the GENUINELY-SEARCHED plies (the ones micro-mcts does run on)
+produce worse outcomes under wider exploration -- e.g. sims=8 spreading
+visits too thin to sharpen the true best pick, which is a budget/
+sharpness question, not an EndTurn-specific one. Not pursued further
+this session; no new fix implemented or gauged.
+
+## EXP_ELO_137 — is turn-3 over-confidence a wrong-target measurement
+artifact, or does the network fail to fit even its own training label?
+(pre-registered + run Sep 7, 2026, Verdi-directed first-principles
+question: "Is the value really focused on win rate or is it focused on
+whatever the value target is... its easy to confident about turn t+5
+early on")
+
+CONTEXT: after EXP_ELO_135 measured raw_value/micro_root_q r2=0.06-0.07
+against `final_outcome` at turn [0,5), Verdi asked whether that's even
+the right comparison -- the actual training label (`value_target`,
+`labels.rs`) is `0.7 * td_lambda_blend + 0.3 * final_outcome`, and with
+`LAMBDA_RETURN=0.8` the forward-view weights on the td_lambda_blend are
+geometric, `(1-lambda)*lambda^(n-1)`: 20% at n=1, 16% at n=2, 12.8% at
+n=3... with the terminal `final_outcome` term inside that blend getting
+only the leftover `lambda^N` (~0.8^27 ~= 0.2% remaining at turn 3, ~27
+turns from the game's end). So at turn 3 the label is dominated (~70%
+of 99.8% of the td_lambda_blend, i.e. the large majority of the whole
+label) by an n-step return bootstrapped off `cp.root_value` -- confirmed
+identical to `macro_root_q` in EXP_ELO_135 -- i.e. the SEARCH'S OWN
+post-MCTS opinion ~5 turns later in the same game, not the game's
+actual outcome. Hypothesis: comparing raw_value against final_outcome
+this early measures the wrong thing almost by construction, and the
+"over-confidence" finding could be a target-choice artifact rather
+than evidence the network itself is broken.
+
+METHOD: no new self-play. `value_target` was already a field in every
+row of EXP_ELO_135's existing dump (`diagnostics/exp135_value_calib.jsonl`,
+n=45543, 120 games). Added `print_target_comparison()` to
+`analyze_value_calib.py`: per turn band, inner-joined r2 and OLS slope
+of `raw_value` (and `micro_root_q`) against `final_outcome` vs against
+`value_target`, on the identical rows, so the two are directly
+comparable.
+
+BAR (discriminating, not win-rate, agreed with Verdi before running):
+- If r2 against `value_target` at [0,5) is materially higher (~0.5+)
+  than against `final_outcome` (0.06-0.07) -- the network is fitting
+  its actual target fine; the bug is in what the target IS
+  (`labels.rs`/`td_w`/bootstrap source), not the network. Attribution
+  shifts entirely upstream.
+- If r2 against `value_target` is ALSO low at [0,5) -- the network
+  fails to fit even its own, much easier, closer-horizon label. Points
+  to capacity/features/data, not a target-design problem.
+
+ACTUAL: r2 against `value_target` is barely different from r2 against
+`final_outcome` at turn [0,5) -- NOT the clean "network is fine, target
+is the problem" pattern the bar was designed to detect:
+
+  raw_value:        fo_r2=0.065  vt_r2=0.080  (vt_slope=0.506)
+  micro_root_q:      fo_r2=0.073  vt_r2=0.088  (vt_slope=0.461)
+
+Every later band shows the same modest gap (vt_r2 consistently ~0.05-
+0.10 above fo_r2, e.g. [15,20): 0.688 vs 0.758) -- `value_target` is a
+somewhat easier target than `final_outcome` throughout the game, which
+is expected (it has real per-step reward signal baked in), but the gap
+is nowhere near large enough to explain turn-3's poor fit. At [0,5)
+the network explains only 8% of variance in its OWN training label.
+
+The `vt_slope` numbers add a second, sharper finding: 0.506 (raw_value)
+and 0.461 (micro_root_q) at [0,5) mean that even on the rows where the
+signal does track value_target, its magnitude is roughly 2x too large
+relative to what the label actually calls for -- a systematic
+overconfidence measured directly against ground truth, not an artifact
+of comparing to a distant/unfair target. This lines up with EXP_ELO_135's
+bias-breakdown addendum: mean(raw_value) is positive for BOTH seats at
+[0,5) (p1=0.655, p2=0.534) -- "undifferentiated optimism" rather than
+real discrimination, present in the value_target comparison too.
+
+VERDICT: Verdi's structural point about the label is CONFIRMED and
+stands on its own (labels.rs's LAMBDA_RETURN=0.8 comment plus the
+geometric-weight math directly proves the ~5-turn-horizon,
+search-bootstrapped dominance) -- final_outcome genuinely is not what
+70%+ of the label is built from at turn 3, and this reframes WHY
+EXP_ELO_135's r2-against-final_outcome numbers look bad. But it does
+NOT rescue turn-3 confidence as "actually justified relative to what
+it was trained to predict" -- the network under-fits its own real
+label at that horizon too, and where it does fit, it over-shoots by
+~2x. Both things are true simultaneously: the target is intrinsically
+shorter-horizon than final_outcome (Verdi's point, correct), AND the
+network still isn't well-calibrated against even that shorter, easier
+target this early (the open problem, not explained away).
+
+REFRAMED OPEN QUESTION: given early-game states plausibly carry very
+little decision-relevant, already-diverged signal (few units, minimal
+map reveal, most games structurally similar before turn 5), an r2
+ceiling near 0.08 may reflect genuinely low available information
+this early for ANY predictor -- including `value_target` itself, which
+is still mostly unrealized future score. Under that reading the real
+pathology isn't "wrong target" or "can't fit," it's that the network's
+response to a low-information state is to emit a large, one-sided,
+mean-shifted number (vt_slope << 1, both-seats-positive bias) instead
+of shrinking toward 0 to express genuine uncertainty. That reframes
+the fix target from label engineering (six instances already closed,
+now this session's target-mismatch angle also closed) toward the
+network/representation side: whether early-game input features carry
+more separable signal than the value head currently extracts, or
+whether an explicit uncertainty/shrinkage mechanism is needed for
+low-information states. Not pursued further this session -- diagnostic
+only, no fix implemented or gauged; discussed with Verdi, no next step
+committed yet.
+
+**Addendum (same session): this mean-bias mechanism is EXP_ELO_021's
+finding, reproduced independently.** Follow-up check on the same dump
+(`mean(root_value)` by seat, since root_value is the actual bootstrap
+source, not just raw_value): [0,5) mean = 0.645 (p1) / 0.625 (p2) --
+BOTH seats read positive, nearly equally, before any real divergence.
+`mean(value_target)`: 0.709 (p1) / 0.375 (p2) at [0,5), vs
+`mean(final_outcome)` 0.356 (p1) / -0.269 (p2) (the seat gap there is
+the already-known score-ratio asymmetry, not this mechanism). This is
+EXACTLY EXP_ELO_021's "TD abs-progress positive bias" (Jul 24, 2026):
+`normalized_reward_wf`'s `delta_abs = (my_post - my_pre) / norm` term
+(weight `1 - label_rel_w`, production default `label_rel_w = REL_W =
+0.4`, so weight 0.6) is not zero-sum -- both players' absolute scores
+grow in almost any window, so it reads positive for both sides
+independent of who's actually ahead. EXP_ELO_021 measured the TD arm's
+implied mean at +0.42 from a July-era checkpoint; tonight's root_value
+reads ~+0.64 -- same mechanism, different point in training, not a new
+finding.
+
+**Both natural fixes for this exact mechanism are already closed:**
+- EXP_ELO_022 (`td_w` 0.7->0.3, paired with `outcome_scale` 1.5):
+  de-biased the mean as designed (+0.338->+0.213, toward the real
+  +0.13) but **discrimination did not move** (corr(raw, outcome)
+  stuck at ~0.40, unchanged from baseline and from EXP_ELO_021) and
+  **strength dropped** below the S0 floor (37.5% vs 45.9%). REJECTED.
+- EXP_ELO_005/006 (`label_rel_w`/in-tree `REL_W` 0.4->0.7, i.e. lean
+  MORE on the zero-sum relative term instead of the biased absolute
+  one): value head's own R² ceiling got WORSE (0.66->0.61-0.63).
+  Mechanism: ~75% of self-play is mirror games, where the relative
+  term carries almost no signal (both sides start identical), so
+  up-weighting it starves the head of the one channel (absolute
+  progress) that, biased or not, still carries real per-player
+  execution-quality signal. REJECTED.
+- A pure win/loss variant was also tried in the separate Jul 14-17
+  "tower" campaign (EXP_ELO_009 `TD_W=0`, EXP_ELO_011 `--wl-labels`)
+  and did not resolve the underlying strength problem either
+  (EXP_ELO_011's apparent improvement was later superseded as noise).
+
+EXP_ELO_022's standing conclusion, unchallenged by anything since:
+de-biasing the label's mean is not the same lever as fixing
+discrimination, and the over-confidence may be "a deeper value-head
+learning/capacity limit, or an inherent property of competitive
+net-vs-net self-play (mid-game leads are genuinely unstable ->
+outcomes noisy -> confident predictions are wrong)" rather than a
+target-construction defect. A THIRD reweighting variant (e.g.
+differencing the TD bootstrap cross-player instead of taking it
+independently per player) would be mechanistically distinct from
+005/006/022 but sits in the same family this ledger already scored
+0-for-3 on discrimination. Flagging for whoever picks this up next:
+don't re-run 022 or 005/006 again without a reason to expect a
+different discrimination result this time, not just a different mean.
+
+## EXP_ELO_138 — de-mean `delta_abs`'s own positive-sum bias against a
+measured baseline, instead of reweighting rel_w/td_w (pre-registered +
+smoke-tested Sep 8, 2026, Verdi-directed: "We cant afford to add micro
+search... I'm ok with corr=0.4... what I'm not ok with is the
+over-confidence... Ok lets try the delta_abs thing")
+
+CONTEXT. EXP_ELO_137 (and, independently, EXP_ELO_021 in July) located
+the value target's early-game mean bias in `normalized_reward_wf`'s
+`delta_abs = (my_post-my_pre)/norm` term: not zero-sum, since both
+players' scores grow in almost any window, so it reads positive
+regardless of who's ahead. Two prior fixes targeting this via
+REWEIGHTING (EXP_ELO_022: cut `td_w`; EXP_ELO_005/006: raise `rel_w`)
+both failed discrimination (corr stuck ~0.40) and one cost real fit
+(R² 0.66->0.61). This experiment instead SUBTRACTS a measured baseline
+from `delta_abs` directly -- a mechanistically distinct lever (removes
+a constant rather than changing a blend weight), motivated by the
+self-referential-bootstrap argument: `value_target`'s dominant early
+component bootstraps off the network's OWN future root_value, which
+is a fixed point with no external anchor except this term -- de-mean
+it and the loop has nothing left to converge to except the (already
+near-zero) actual outcome.
+
+CHANGE (label-only, opt-in, default 0.0 = byte-identical to
+production; does NOT touch `reward::normalized_reward_wf` or its
+in-tree callers in `gumbel_mcts/expand.rs`, avoiding the EXP_ELO_005
+shared-constant mistake):
+- `labels.rs`: new `ABS_GROWTH_PER_TURN: [f32; 25]` lookup table --
+  population-average normalized per-turn score growth, measured
+  directly from EXP_ELO_135's existing dump (n=45,543 rows / 120
+  games, iteration 23, Sep 7 2026): `(mean_my(t+1)-mean_my(t)) /
+  max(0.15*(mean_my(t)+mean_opp(t)), 600)` per turn t=0..24 (negative
+  readings past ~turn 19, where n drops below ~1,500, clamped to 0).
+  `expected_abs_growth(turn_start, dt)` sums this over the window,
+  clamping the turn index to the table's last entry beyond t=24
+  (avoids extrapolating the fitted range).
+- New `td_lambda_labels` parameter `label_abs_debias: f32` (dose
+  0.0-1.0): the per-window reward becomes `normalized_reward_wf(...) -
+  label_abs_debias * (1-label_rel_w) * expected_abs_growth(step.turn,
+  dt)`, applied only to the n-step window reward (not the terminal
+  return -- its dt can span the whole rest of the game, e.g. 25+
+  turns, well past the table's measured/trustworthy range, and its
+  weight is negligible early anyway at `label_rel_w=0.4`'s λ^N).
+- CLI `--label-abs-debias` (cli.rs, default 0.0), `LABEL_ABS_DEBIAS`
+  env var in run_training_loop.sh (mirrors `LABEL_REL_W`'s exact
+  pattern), CONFIG echo updated.
+- New test `label_abs_debias_subtracts_exactly_the_calibrated_growth_baseline`
+  (abs-only pricing, λ=0, zeroed bootstrap, isolates the window reward
+  to exactly `delta_abs` vs `delta_abs - expected_abs_growth`) --
+  passes. All 16 pre-existing `td_lambda_labels` call sites updated
+  with an explicit `0.0` (no behavior change); full `cargo test --lib
+  --bin self_play` green (384 + 25 lib/self_play tests).
+
+VERIFICATION (no training, no retained games -- run from an isolated
+scratch dir with a copied `model.safetensors`, never the repo root,
+since 26 unconsumed `games_*.safetensors` files there are live
+training-loop corpus this must not contaminate):
+1. Byte-identical-when-unset: n=4 games, fixed seed + `--seed-search`,
+   default args vs explicit `--label-abs-debias 0.0` -> `diff` clean.
+   Confirms the flag is a true no-op at its default.
+2. Matched-seed mean-shift check: n=30 games, same seed/config, one
+   arm `--label-abs-debias 1.0` vs baseline (unset), current
+   (unretrained) checkpoint, `--dump-value-calib` both arms.
+
+ACTUAL (check 2, n=30 games matched, current checkpoint, no
+retraining):
+| band | n | value_target base | value_target debiased(1.0) | Δ | final_outcome Δ |
+|---|---|---|---|---|---|
+| [0,5) | 1505 | 0.594 | 0.207 | **-0.387** | 0.000 |
+| [5,10) | 2376 | 0.466 | 0.207 | -0.259 | 0.000 |
+| [10,15) | 3298 | 0.492 | 0.354 | -0.138 | 0.000 |
+| [15,20) | 2836 | 0.543 | 0.505 | -0.039 | 0.000 |
+| [20,25) | 1825 | 0.597 | 0.579 | -0.018 | 0.000 |
+
+`final_outcome` is EXACTLY unchanged in every band (0.000 delta) --
+confirms the two arms played byte-identical games (label-only change,
+no search-side effect) and the debias correction landed purely on the
+label as designed. `value_target`'s [0,5) mean fell from 0.594 to
+0.207, a -0.387 move toward the actual near-zero `final_outcome` mean
+(0.104) at that band -- the largest, most decisive single-pass
+correction of any label experiment run this project (021: mean
+0.338->0.333, inert; 022: mean 0.338->0.213, but discrimination
+unmoved). Correction shrinks turn-by-turn as expected (largest early,
+where the abs-growth bias is largest per EXP_ELO_137's measured
+curve; smallest by [20,25), where `final_outcome` itself carries more
+weight and the game has genuinely diverged).
+
+Residual +0.207 (not 0) at [0,5) is the EXPECTED first-pass signature,
+not underperformance: this run used the CURRENT, unretrained
+checkpoint, so `root_value` (the bootstrap, ~65% of the target this
+early) still reflects the OLD biased labels this same network trained
+on previously -- the debias only corrects the window-reward term
+going forward; the self-referential bootstrap only converges toward
+the new, lower fixed point across actual RETRAINING iterations, not
+within one un-retrained measurement pass. This is exactly the "loop
+settles toward final_outcome" mechanism predicted before running.
+
+VERDICT (smoke test) -- CONFIRMED, mechanism verified as designed.
+No fix implemented incorrectly, no regression in games/final_outcome,
+first-pass mean correction lands exactly where predicted. NOT YET
+TESTED: whether this changes the TRAINED network's own calibration
+(requires real training iterations so the bootstrap converges) or
+costs strength (requires a win-rate gauge). Next decision (Verdi's,
+not run without explicit go-ahead): launch a real multi-iteration
+training arm (`LABEL_ABS_DEBIAS=1.0`) alongside a matched control,
+re-run the turn-banded calibration probe on the TRAINED checkpoint,
+and gauge vs Greedy to confirm strength holds -- per this ledger's
+standing discipline (EXP_ELO_022's exact failure mode: a label fix
+that improves the mean but costs strength is still a reject).
+
+### ACTUAL (real training, both arms, Sep 8 2026) -- the effect does
+NOT survive retraining, and costs win rate. REJECTED.
+
+METHOD (executed exactly as pre-registered above): both arms forked
+from `checkpoints/exp138_baseline_iter23.safetensors` (sha
+`34408874293071712e50c6fe41240f324aa2d244aa0be535c0796a7e4af0e985`),
+`MACRO_GEN=1 GOAL_CHANNELS=1 ITER_OFFSET=23`, 12 iterations at
+production budget (`-g 64 -n 64 -k 16`), sequentially (not concurrent,
+to avoid two processes sharing the one Metal device) so `model.safetensors`
+was sha-verified and restored to the baseline between arms. Control =
+run_id `1788849848` (label_abs_debias unset/0.0). Treatment = run_id
+`1788868011` (`LABEL_ABS_DEBIAS=1.0`). Both arms' 26 turns' worth of
+`games_*.safetensors` were correctly archived/consumed by the loop
+itself (no stray files after either arm -- confirms the earlier
+26-file pile in the repo root, quarantined before this run, was
+session diagnostic debris, not loop output). Final tips preserved:
+`checkpoints/exp138_control_iter12.safetensors` (sha `376e8a89...`),
+`checkpoints/exp138_treatment_iter12.safetensors` (sha `81c4842d...`).
+
+GAUGE WIN RATE (vs Greedy, n=64 per reading, both arms' in-loop
+periodic gauge -- confirmed the `GAUGE:` JSON line and the `===ARENA
+RESULTS===` text block are two renderings of the SAME measurement,
+not separate games):
+
+| iter | control (1788849848) | treatment (1788868011) | Δ |
+|---|---|---|---|
+| 5 | 70.3% (45/64) | 65.6% (42/64) | -4.7pp |
+| 10 | 70.3% (45/64) | 62.5% (40/64) | -7.8pp |
+| pooled (n=128/arm) | 70.3% (90/128) | 64.1% (82/128) | **-6.25pp** |
+
+Both readings favor control; this is directionally consistent but
+individually within each single reading's noise (this project's own
+±12pt/n=64 ruler) -- two consecutive same-direction readings is a real
+signal, not yet a statistically airtight one at this sample size.
+
+CALIBRATION ON THE ACTUALLY-TRAINED CHECKPOINTS (not the iter23 smoke
+test): fresh `--dump-value-calib` probe, n=60 games each, same seed
+(9001), same recipe, run against `exp138_control_iter12` and
+`exp138_treatment_iter12` respectively -- this is the real test the
+smoke test could only predict, since it measures the TRAINED network's
+own re-equilibrated `root_value`, not the old iter23 bootstrap:
+
+| band | n (c/t) | mean(value_target) c | mean(value_target) t | r2 vs final_outcome c | r2 vs final_outcome t |
+|---|---|---|---|---|---|
+| [0,5) | 3010/2985 | 0.564 | **0.542** | 0.008 | 0.024 |
+| [5,10) | 4757/4796 | 0.413 | 0.430 | 0.099 | 0.163 |
+| [10,15) | 6315/6487 | 0.403 | 0.451 | 0.421 | 0.407 |
+| [15,20) | 4929/5066 | 0.511 | 0.530 | 0.800 | **0.693** |
+| [20,25) | 1837/1628 | 0.538 | 0.508 | 0.793 | **0.644** |
+
+**The mean-bias correction the smoke test measured (-0.387 at [0,5))
+did NOT survive retraining -- treatment's [0,5) mean is 0.542 vs
+control's 0.564, a difference of only -0.022, nowhere near the smoke
+test's first-pass drop.** Mechanism: the smoke test held the network
+FIXED (iter23's own root_value as bootstrap) and only corrected the
+window-reward term going forward. Once the network was actually
+retrained on the corrected label for 12 iterations, it re-learned to
+produce a `root_value` that reconstructs almost the SAME elevated
+mean as before -- the debias table (a fixed, hand-calibrated constant
+per turn, fit once from iter23's own game distribution) doesn't hold
+the correction against a network that is free to re-inflate its own
+bootstrap to compensate, and/or the fixed table stops matching the
+score-growth distribution once self-play under the new label starts
+generating a different game population. This is a cleaner, sharper
+version of EXP_ELO_022's own finding ("de-biasing the mean doesn't
+fix discrimination") -- here, real retraining shows it doesn't even
+reliably hold the MEAN correction, let alone discrimination.
+
+Discrimination itself (r2 vs final_outcome) is a wash, not an
+improvement: treatment reads better at [0,5)/[5,10) (0.024/0.163 vs
+0.008/0.099 -- both still very low, arguably noise at this n) but
+WORSE at [15,20)/[20,25) (0.693/0.644 vs 0.800/0.793) -- and these
+later bands, where the game has actually started to resolve, carry
+more of the signal that matters for search. Net: no clear
+discrimination win, a real mean-bias regression back toward baseline,
+and a real (if not yet airtight) win-rate cost.
+
+VERDICT -- REJECTED. This closes the loop on the EXP_ELO_137
+reasoning chain: the mechanistically-fresh idea (de-mean `delta_abs`
+directly rather than reweighting `rel_w`/`td_w`) was the right kind of
+lever to try -- distinct from 005/006/022, avoided their specific
+failure modes (no mirror-noise injection, no TD-credit cut) -- but it
+still lands in the same place once real retraining is allowed to run:
+the self-referential bootstrap (`root_value` training toward its own
+past output) re-equilibrates around approximately the SAME fixed
+point regardless of a one-time constant subtracted from the window
+reward, because the correction doesn't scale with however the
+network's OWN output happens to drift. The label-reweighting family
+is now 0-for-4 on real training-time verification (005/006, 022, and
+this), even trying three genuinely different mechanisms within it.
+**Recommendation for whoever picks this up next: the fix has to act
+on `root_value` itself (the bootstrap SOURCE), not on the window
+reward that feeds into computing it once — e.g. re-center the
+bootstrap per-batch/per-generation against ITS OWN observed mean at
+training time (a moving target, not a fixed constant), or drop the
+self-referential bootstrap in favor of one that can't drift (pure MC,
+already tried and also rejected in the EXP_ELO_009/010/011 tower
+campaign for unrelated reasons -- worth being aware neither escape
+hatch is fully untested).** No further label-family experiment should
+assume a fixed constant can hold against a network that trains
+toward whatever its own output is regardless of the constant.
+
+DISPOSITION: `model.safetensors` restored to the sha-verified
+`exp138_baseline_iter23.safetensors` (production is untouched, exactly
+where it stood before this experiment) -- both trained tips
+(`exp138_control_iter12`, `exp138_treatment_iter12`) preserved in
+`checkpoints/` for reference/further analysis, not deployed. Decision
+on whether to pursue the bootstrap-re-centering follow-up is Verdi's.
+
+## EXP_ELO_139 — POV-consistency training loss, combined with the
+`delta_abs` label fix (pre-registered + implemented Sep 8, 2026,
+Verdi-directed: "Ok got it. Makes sense. Lets go ahead and do it
+then" / "Yes" to launching the real run)
+
+HYPOTHESIS. EXP_ELO_138's `root_value` bias (~+0.6 for BOTH seats at
+[0,5)) survives real retraining under a label-only fix because the
+bias's actual source -- `net(opponent, state)`, the counterfactual
+POV `NetAsym` evaluates at inference but which never receives a
+training label -- is untouched by any label reshaping. A training-time
+consistency loss penalizing `v(mover, state) + v(opponent, state)` for
+deviating from 0 directly supervises that call for the first time,
+which no label-side fix can do. Expected to be a COMPLEMENT to
+`LABEL_ABS_DEBIAS`, not a replacement: the label fix keeps the
+supervised side's mean honest; the consistency loss keeps the
+unsupervised side from drifting on its own. See the conversation
+mechanism writeup (macro_mcts.rs's `NetAsym` zero-sum-by-construction
+identity for a SHARED state vs. the asymmetric training support for
+`net(mover)` vs `net(opponent)` on that state).
+
+IMPLEMENTATION (see `plan_file` at the time:
+`yes-we-do-have-vectorized-possum.md`; full detail there, summarized
+here). Rust (`self_play`): every decision now also encodes the
+opponent's TRUE fog-of-war POV of the same state (`game.rs`, using
+`compute_macro_goal` for the opponent's own scripted goal, matching
+`NetAsym`'s inference-time convention exactly) -- threaded through
+`HistoryStep` -> `ShardBuffers` -> `flush_shard` as two new shard
+fields (`spatial_maps_opp`/`player_states_opp`), no row-level mask
+(always computable, a per-file AUX_DIMS-style presence concern).
+Python (`train.py`): new `POV_CONSISTENCY_W` env var (default 0.0,
+inert), `load_chunk` detects the new fields with the standard
+per-file zero-fill fallback for legacy archives, a second same-weights
+forward pass (exact precedent: the existing `MACRO_STANCE_W`
+"blind_spatial" pass) computes `net(opponent)`, new masked loss term
+`((v_win + opp_v_win)**2 * mask).sum()/mask.sum()` added to
+`total_loss` weighted by `POV_CONSISTENCY_W`. No `network.rs` changes
+-- training-only, reuses the existing `v_win` head.
+
+VERIFIED before running the real experiment: full Rust test suite
+green (384+ tests); real self-play run confirmed the new tensors
+(correct shapes, 0/1819 accidental copies between `spatial_maps` and
+`spatial_maps_opp`, no NaN); `train.py` control smoke run
+(`POV_CONSISTENCY_W` unset) clean with no `pov_consistency` output
+(true no-op); `train.py` treatment smoke run (`POV_CONSISTENCY_W=0.5`)
+clean, `pov_consistency_loss=0.4052`, all 1819/1819 rows supervised,
+no NaN/crash.
+
+METHOD. Dose: `POV_CONSISTENCY_W=0.5` -- a first-pass, uncalibrated
+choice (no prior tuning exists for this new knob); the smoke test's
+loss magnitude (~0.4) sits in the same range as `value_loss` (~1.0-1.7)
+at that same batch, i.e. neither negligible nor dominant relative to
+what it's competing against. Combined with `LABEL_ABS_DEBIAS=1.0`
+(kept on, per the "complement not replacement" reasoning -- this is
+NOT an isolated test of the consistency loss alone). Same fork point,
+budget, and sha-verify/restore discipline as EXP_ELO_138: forked from
+`checkpoints/exp138_baseline_iter23.safetensors` (sha
+`34408874293071712e50c6fe41240f324aa2d244aa0be535c0796a7e4af0e985`),
+`MACRO_GEN=1 GOAL_CHANNELS=1 ITER_OFFSET=23`, 12 iterations at
+production budget (`-g 64 -n 64 -k 16`).
+
+CONTROL: reused from EXP_138 rather than re-run -- its control arm
+(run_id `1788849848`, `LABEL_ABS_DEBIAS`/`POV_CONSISTENCY_W` both
+unset/off) is the exact same recipe this experiment's control would
+be (same fork point, same budget, same everything except the two new
+flags). Re-running an identical control would just burn another
+~10 hours for a number we already have (calibration probe:
+`scratchpad/exp138_control_calib/control_trained_calib.jsonl`; gauge:
+70.3%/70.3% at iters 5/10; final tip:
+`checkpoints/exp138_control_iter12.safetensors`). Per this project's
+own "size data runs to the question" discipline -- reuse it.
+
+TREATMENT: new run, `LABEL_ABS_DEBIAS=1.0 POV_CONSISTENCY_W=0.5`,
+otherwise identical recipe. Its calibration probe will use the exact
+same recipe as EXP_138's probes (n=60 games, seed 9001, iteration 35,
+`--goal-channels --macro-sims 64 --macro-k 6`) so the two are directly
+comparable, and comparable to EXP_138's own (label-only) treatment
+(`scratchpad/exp138_treatment_calib/treatment_trained_calib.jsonl`) --
+giving a three-way read: baseline vs. label-fix-alone vs.
+label-fix-plus-consistency-loss.
+
+BAR. Primary: does the turn-banded `mean(root_value)`/`mean(raw_value)`
+seat-split (both-positive pattern) actually shrink MORE than
+EXP_138's label-only treatment did (which mostly washed out: [0,5)
+mean moved only -0.022 after real retraining)? Secondary: does win
+rate vs Greedy hold at or above EXP_138 control's 70.3% (a repeat of
+EXP_138's own outcome -- calibration improving while strength drops
+is still a reject, per that experiment's exact precedent). Tertiary
+(informational, not a bar): discrimination (r2 vs final_outcome) in
+the mid-late bands, where EXP_138's label-only fix measured a real
+cost (0.79-0.80 down to 0.64-0.69) -- does adding the consistency loss
+make this better, worse, or unaffected.
+
+### ACTUAL (real training, Sep 8-9 2026). PRIMARY bar not clearly met;
+an unexpected, genuinely positive result on a DIFFERENT axis. Mixed
+verdict -- promising, not yet a clean win.
+
+METHOD (as pre-registered): treatment forked from
+`checkpoints/exp138_baseline_iter23.safetensors` (sha
+`34408874293071712e50c6fe41240f324aa2d244aa0be535c0796a7e4af0e985`),
+`MACRO_GEN=1 GOAL_CHANNELS=1 ITER_OFFSET=23 LABEL_ABS_DEBIAS=1.0
+POV_CONSISTENCY_W=0.5`, 12 iterations, production budget. Control
+reused from EXP_138 (run_id `1788849848`, both flags off) rather than
+re-run, per the pre-registration. Final tip preserved:
+`checkpoints/exp139_treatment_iter12.safetensors` (sha
+`2f2f35c68b7781d0d89ef275ba2c0f725c932fad6541f07db5823d7b2f367c1d`).
+`pov_consistency_loss` fell 0.4052 (smoke-test iter1) -> 0.1013 (final
+iter12) over training -- the network is genuinely learning to satisfy
+the constraint, not just adding inert noise to the loss.
+
+GAUGE WIN RATE (vs Greedy, n=64/reading):
+
+| iter | control (EXP_138, both flags off) | EXP_138 label-only | EXP_139 label+consistency |
+|---|---|---|---|
+| 5 | 70.3% (45/64) | 65.6% (42/64) | **71.9% (46/64)** |
+| 10 | 70.3% (45/64) | 62.5% (40/64) | **78.1% (50/64)** |
+| pooled | 70.3% (90/128) | 64.1% (82/128) | **75.0% (96/128)** |
+
+The combined fix reads +4.7pp ABOVE control pooled, and +10.9pp above
+the label-only arm -- the opposite direction from EXP_138's label-only
+result, and the first arm in this whole investigation (021/022/
+005/006/138) to read above baseline rather than at-or-below it.
+**Caveat, stated plainly: this is 2 readings at n=64 each** -- this
+project's own standing ±12pt/n=64 noise-floor discipline means this
+result, on its own, is suggestive, not proof. Both readings landing
+the same direction (and by a similar margin) makes pure noise a less
+likely explanation than for a single reading, but a confirmatory
+larger-n gauge (n=256, matching this project's own escalation
+convention for a "promising but not yet trusted" reading) is the
+right next step before treating this as settled.
+
+CALIBRATION -- THREE-WAY COMPARISON (fresh probes on all three trained
+checkpoints, n=60 games each, identical seed/recipe):
+
+`root_value` seat-split mean, base -> label-only -> label+consistency
+(p1/p2, sum in parentheses):
+| band | base | label-only | label+consistency |
+|---|---|---|---|
+| [0,5) | .742/.748 (1.49) | .729/.717 (1.45) | .714/.720 (1.43) |
+| [5,10) | .702/.609 (1.31) | .659/.535 (1.19) | .689/.641 (1.33) |
+| [10,15) | .588/.517 (1.11) | .608/.355 (0.96) | .649/.499 (1.15) |
+| [15,20) | .627/.545 (1.17) | .606/.499 (1.11) | .664/.543 (1.21) |
+| [20,25) | .663/.543 (1.21) | .541/.603 (1.14) | .723/.549 (1.27) |
+| [25,30) | .689/.591 (1.28) | .557/.557 (1.11) | .742/.536 (1.28) |
+
+**PRIMARY BAR NOT MET.** The pre-registered question was whether the
+both-seats-positive `root_value` sum shrinks MORE than EXP_138's
+label-only fix did. It does not, in most bands -- the combined arm's
+sum is comparable to or LARGER than the label-only arm's in 5 of 6
+well-supported bands ([5,10) through [25,30)), and only marginally
+smaller at [0,5) (1.43 vs 1.45, a trivial difference). The consistency
+loss did not deliver the specific mechanism this experiment was built
+to test: it has not visibly corrected the counterfactual-eval mean
+bias beyond what the label fix alone already achieved.
+
+`raw_value` r2 vs `final_outcome`, base -> label-only -> both:
+| band | n(base) | r2 base | r2 label-only | r2 both |
+|---|---|---|---|---|
+| [0,5) | 3010 | 0.008 | 0.024 | 0.013 |
+| [5,10) | 4757 | 0.099 | 0.163 | 0.156 |
+| [10,15) | 6315 | 0.421 | 0.407 | **0.583** |
+| [15,20) | 4929 | 0.800 | 0.693 | **0.838** |
+| [20,25) | 1837 | 0.793 | 0.644 | **0.919** |
+| [25,30) | 439 | 0.515 | 0.929 | **0.961** |
+
+**An unexpected, genuinely positive result on a DIFFERENT axis than
+the one this experiment targeted.** EXP_138's label-only fix cost real
+discrimination in the mid-late bands (0.800->0.693, 0.793->0.644) --
+adding the consistency loss doesn't just recover that cost, it goes
+well past the UNTOUCHED BASELINE too (0.800->0.838, 0.793->0.919,
+0.793->0.961 at [25,30)). This is the first intervention in this
+entire campaign (021/022/024/046/067-069/123/124/138) to show a real
+discrimination IMPROVEMENT in the well-supported mid-game bands rather
+than a wash or a cost, and it plausibly explains the positive win-rate
+read directly -- better mid-game discrimination (turns 10-30, where
+most of a 30-50-turn game's decisive action happens) means better
+search, means more wins. NOTE: this improvement is concentrated in
+turns 10-30; at [0,5)/[5,10) -- the earliest turns that motivated the
+whole investigation -- "both" is roughly level with or slightly BELOW
+the label-only arm (0.013 vs 0.024; 0.156 vs 0.163). **The original
+turn-3 overconfidence complaint is NOT resolved by this fix** -- r2
+there is still ~0.01, indistinguishable from baseline's 0.008.
+
+REINTERPRETATION. The consistency loss appears to be working, but
+likely NOT via the specific mechanism hypothesized (correcting the
+ungraded counterfactual call's mean, which would show up as a shrunk
+seat-split sum). What the data instead suggests: forcing
+`net(1,state)+net(2,state)` toward a genuine LEARNED consistency
+(not just NetAsym's post-hoc algebraic enforcement at inference) acts
+as a broad representation-quality regularizer on the shared trunk --
+extra real supervision on every training state, in effect -- which
+improved the value head's general discriminative quality in the
+turns where the game's true trajectory is already substantially
+determined, independent of whether it fixed the specific
+counterfactual-bias mechanism this experiment was built to test. The
+mechanism story from EXP_ELO_137/138 (root cause: `net(opponent)` is
+never graded) is not thereby falsified -- it may still be part of the
+true picture -- but this result does not confirm it as THE lever that
+moved win rate; a different, broader effect of the same loss term is
+at least as plausible an explanation for what was actually measured.
+
+VERDICT -- PROMISING, NOT YET A CLEAN WIN. Two of three pre-registered
+questions point in genuinely good directions (win rate: +4.7pp over
+control pooled; mid-game discrimination: the first real improvement,
+not just a wash, in this entire campaign) but the PRIMARY, specifically-
+hypothesized mechanism (seat-split mean reduction) did not clearly
+show up, and the original motivating complaint (turn-3 overconfidence)
+remains unaddressed. Given the win-rate result rests on only 2
+readings at n=64, and the mechanism story needs revision regardless of
+outcome, the responsible next step is a confirmatory larger-n gauge
+(n=256) before considering this for production, NOT an immediate ship
+decision off tonight's reads. `POV_CONSISTENCY_W=0.5` was also not
+tuned -- it was a first-pass guess (see METHOD above) -- so a dose
+sweep is a reasonable parallel follow-up if the confirmatory read
+holds up.
+
+DISPOSITION: `model.safetensors` restored to the sha-verified
+`exp138_baseline_iter23.safetensors` (production untouched). Trained
+tip preserved at `checkpoints/exp139_treatment_iter12.safetensors`,
+not deployed. Decision on running the confirmatory n=256 gauge, a dose
+sweep, or moving on is Verdi's.
+
+**CONFIRMATORY GAUGE (Sep 9, 2026, Verdi-directed: "Pls run the eval
+seed json to get a sense of skills. That should give us an accurate
+read with minimal noise.")** -- ran the project's own low-noise
+strength gauge (the `arena` binary against the full, fixed
+`eval_seeds.json` 100-seed/12-tribe-pair set, sides swapped = 200
+games per arm, same production macro-mcts/net-asym recipe the
+training loop's periodic gauge uses) for all three checkpoints,
+vs Greedy:
+
+| Config | Wins (pooled) | Win % | as P1 | as P2 |
+|---|---|---|---|---|
+| `exp138_baseline_iter23` (pre-fork) | 141/200 | 70.5% | 76/100 | 65/100 |
+| `exp138_control_iter12` (label fix only) | 140/200 | 70.0% | 72/100 | 68/100 |
+| `exp139_treatment_iter12` (label fix + POV-consistency) | 126/200 | **63.0%** | 67/100 | 59/100 |
+
+At n=200 per arm (this harness's max resolution against the fixed
+seed file, ~1-2pp per the EXP_ELO_127 design note, vs ~10pp+ for the
+n=64 in-training gauge reads this verdict was provisionally based on)
+the picture reverses cleanly: **treatment is 7.0-7.5pp WORSE than
+both control and the untouched pre-fork baseline**, not +4.7pp better.
+Baseline and control are statistically indistinguishable from each
+other (70.5% vs 70.0%, within this harness's own noise), so the label-
+only fix (EXP_138) is confirmed as roughly neutral on win rate here,
+consistent with its own verdict. The two small n=64 in-training reads
+that drove the "PROMISING" call (71.9%, 78.1%) were, in hindsight, an
+optimistic-direction noise excursion -- exactly the failure mode the
+ledger's own resolution-limit notes warn about, and exactly why this
+confirmatory step was flagged as required before shipping.
+
+VERDICT -- REJECTED (superseding "PROMISING, NOT YET A CLEAN WIN"
+above). The properly-powered read does not merely fail to confirm the
+win-rate gain; it shows a real regression. Combined with the earlier
+finding that the specifically-hypothesized mechanism (seat-split mean
+shrinkage) never showed up, and that the motivating turn-3
+overconfidence complaint stayed unresolved throughout, there is no
+surviving positive result to act on. The turns-10-30 discrimination
+improvement (raw_value r² vs `final_outcome`) may still be real -- it
+was never re-measured at this n and is a different axis than win rate
+-- but it did not translate into the win-rate improvement it was
+proposed to explain, so that explanation is now unsupported.
+`POV_CONSISTENCY_W` in its current form (dose 0.5, combined with the
+label fix) is not a ship candidate. The turn-3 value-head
+overconfidence problem remains OPEN; both label-side (EXP_138) and
+weights-side (EXP_139) fixes attempted this campaign are now
+REJECTED, and a different angle is needed.
+
+Two showcase replays of the treatment checkpoint vs Greedy, drawn from
+this same seed file (seeds 1787500020 and 312822346), were generated
+for inspection and saved to
+`replays/exp139_confirm_showcase/game_iter35_game{0,1}_seed*.replay.json`
+(watchable via the running server's Replay Mode). The incidental
+self-play data shard from generating them
+(`games_1788939201_p0.safetensors`) was quarantined to
+`quarantine_diagnostic_games/`, not left at repo root, since it was
+generated by a now-rejected checkpoint and would otherwise silently
+enter the next real training run's data mix.

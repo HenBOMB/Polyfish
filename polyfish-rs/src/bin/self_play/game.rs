@@ -511,6 +511,34 @@ pub(crate) fn play_single_game(
         )
         .and_then(|r| r.into_game_features(&device))
         .expect("BUG: Failed to create state tensor - game state is invalid");
+
+        // EXP_ELO_139: the SAME state, encoded from the opponent's own true
+        // POV (their own fog-of-war, not a channel-flip of ours) -- the
+        // counterfactual `NetAsym` calls at inference (macro_mcts.rs's `net`
+        // closure) but that never receives a training label. Uses the
+        // opponent's own scripted goal (matching NetAsym's "unaligned"
+        // branch), not the mover's `feat_goal`.
+        let opp_id_for_pov = game
+            .state
+            .tribes
+            .keys()
+            .copied()
+            .find(|id| *id != pov)
+            .unwrap_or(pov);
+        let opp_seat_for_pov = 1 - seat;
+        let opp_goal_for_pov = polyfish::ai::oracle_macro::compute_macro_goal(
+            &game.state,
+            opp_id_for_pov,
+            tier3_bought[opp_seat_for_pov],
+        );
+        let opp_state_t = features::state_to_cpu_features_goal(
+            &game.state,
+            opp_id_for_pov,
+            None,
+            Some(&opp_goal_for_pov),
+        )
+        .and_then(|r| r.into_game_features(&device))
+        .expect("BUG: Failed to create opponent-POV state tensor - game state is invalid");
         let step_trace = if trace_all {
             current_agent.take_trace()
         } else {
@@ -808,6 +836,7 @@ pub(crate) fn play_single_game(
                 .or(Some(calibrated_heur(heur_value_now)));
             game_history.push(HistoryStep {
                 features: state_t,
+                opp_features: opp_state_t,
                 policy: policy_data,
                 player_id: pov,
                 my_score: my_score_now,

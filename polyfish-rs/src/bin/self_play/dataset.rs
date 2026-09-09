@@ -27,6 +27,11 @@ pub(crate) struct ShardBuffers {
     // Aggregate results
     collected_spatial_maps: Vec<Tensor>,
     collected_player_states: Vec<Tensor>,
+    // EXP_ELO_139: opponent's-true-POV counterfactual of the SAME state --
+    // always computable (unlike rollout_value/eco_ceiling), a per-FILE
+    // presence concern (AUX_DIMS convention), not a per-row mask.
+    collected_spatial_maps_opp: Vec<Tensor>,
+    collected_player_states_opp: Vec<Tensor>,
 
     // Decomposed policy targets (7 heads)
     collected_action_type: Vec<Vec<f32>>,
@@ -101,6 +106,8 @@ impl ShardBuffers {
         Self {
             collected_spatial_maps: Vec::new(),
             collected_player_states: Vec::new(),
+            collected_spatial_maps_opp: Vec::new(),
+            collected_player_states_opp: Vec::new(),
             collected_action_type: Vec::new(),
             collected_source_spatial: Vec::new(),
             collected_target_spatial: Vec::new(),
@@ -144,6 +151,8 @@ impl ShardBuffers {
         let Self {
             collected_spatial_maps,
             collected_player_states,
+            collected_spatial_maps_opp,
+            collected_player_states_opp,
             collected_action_type,
             collected_source_spatial,
             collected_target_spatial,
@@ -192,6 +201,7 @@ impl ShardBuffers {
             args.label_rel_w,
             wl_z.as_ref(),
             args.td_missing_bootstrap,
+            args.label_abs_debias,
         );
 
         let spt_steps: Vec<SptStep> = result
@@ -243,6 +253,7 @@ impl ShardBuffers {
         for (step_idx, step) in result.history.into_iter().enumerate() {
             let HistoryStep {
                 features,
+                opp_features,
                 policy: policy_data,
                 player_id: p_id,
                 turn,
@@ -273,6 +284,18 @@ impl ShardBuffers {
                 .flatten_all()
                 .expect("BUG: Failed to flatten player state tensor");
             collected_player_states.push(flat_player);
+
+            // EXP_ELO_139: opponent's-true-POV counterfactual, same state.
+            let flat_map_opp = opp_features
+                .spatial_map
+                .flatten_all()
+                .expect("BUG: Failed to flatten opponent-POV spatial map tensor");
+            collected_spatial_maps_opp.push(flat_map_opp);
+            let flat_player_opp = opp_features
+                .player_state
+                .flatten_all()
+                .expect("BUG: Failed to flatten opponent-POV player state tensor");
+            collected_player_states_opp.push(flat_player_opp);
 
             collected_action_type.push(policy_data.action_type);
             collected_source_spatial.push(policy_data.source_spatial);
@@ -469,6 +492,8 @@ impl ShardBuffers {
         flush_shard(
             std::mem::take(&mut self.collected_spatial_maps),
             std::mem::take(&mut self.collected_player_states),
+            std::mem::take(&mut self.collected_spatial_maps_opp),
+            std::mem::take(&mut self.collected_player_states_opp),
             std::mem::take(&mut self.collected_action_type),
             std::mem::take(&mut self.collected_source_spatial),
             std::mem::take(&mut self.collected_target_spatial),
@@ -515,6 +540,8 @@ impl ShardBuffers {
         flush_shard(
             std::mem::take(&mut self.collected_spatial_maps),
             std::mem::take(&mut self.collected_player_states),
+            std::mem::take(&mut self.collected_spatial_maps_opp),
+            std::mem::take(&mut self.collected_player_states_opp),
             std::mem::take(&mut self.collected_action_type),
             std::mem::take(&mut self.collected_source_spatial),
             std::mem::take(&mut self.collected_target_spatial),

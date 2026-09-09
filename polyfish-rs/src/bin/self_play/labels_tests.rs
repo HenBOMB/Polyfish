@@ -47,13 +47,13 @@ use polyfish::types::{TechnologyType, UnitEffect};
         let final_scores = finals(&[(1, 1600), (2, 900)]);
         let expected = reward::normalized_reward(1000, 800, 1600, 900).clamp(-1.0, 1.0);
 
-        let mc = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None, MissingBootstrap::Mc);
+        let mc = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None, MissingBootstrap::Mc, 0.0);
         assert!(
             (mc[0] - expected).abs() < 1e-6,
             "mc label {} should be the pure terminal return {expected}",
             mc[0]
         );
-        let zero = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None, MissingBootstrap::Zero);
+        let zero = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None, MissingBootstrap::Zero, 0.0);
         assert!(
             (zero[0] - expected).abs() > 1e-6,
             "zero-bootstrap must still truncate (legacy semantics pinned elsewhere)"
@@ -72,9 +72,9 @@ use polyfish::types::{TechnologyType, UnitEffect};
         ];
         let final_scores = finals(&[(1, 5000), (2, 800)]);
 
-        let heur = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Heur);
-        let mc = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Mc);
-        let zero = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero);
+        let heur = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Heur, 0.0);
+        let mc = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Mc, 0.0);
+        let zero = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero, 0.0);
 
         let r = reward::normalized_reward(1000, 800, 1100, 800);
         let bootstrap = (HEUR_TO_OUTCOME_SLOPE * 0.3 + HEUR_TO_OUTCOME_INTERCEPT).clamp(-1.0, 1.0);
@@ -105,7 +105,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
         let expected = reward::normalized_reward(1000, 800, 1300, 900).clamp(-1.0, 1.0);
 
         for lambda in [0.0, 0.5, 0.8, 0.95] {
-            let out = td_lambda_labels(&history, &final_scores, lambda, reward::REL_W, None, MissingBootstrap::Zero);
+            let out = td_lambda_labels(&history, &final_scores, lambda, reward::REL_W, None, MissingBootstrap::Zero, 0.0);
             assert!(
                 (out[0] - expected).abs() < 1e-6,
                 "lambda={lambda}: got {}, expected {expected}",
@@ -128,7 +128,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
         ];
         let final_scores = finals(&[(1, 5000), (2, 800)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero);
+        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero, 0.0);
 
         let r = reward::normalized_reward(1000, 800, 1100, 800);
         let expected = (r + reward::GAMMA_TURN.powi(1) * 0.9).clamp(-1.0, 1.0);
@@ -141,7 +141,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
         // Sanity: changing turn 7's root_value must NOT move the lambda=0 label.
         let mut history2 = history.clone();
         history2[3].root_value = Some(12345.0);
-        let out2 = td_lambda_labels(&history2, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero);
+        let out2 = td_lambda_labels(&history2, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero, 0.0);
         assert!((out2[0] - out[0]).abs() < 1e-6);
     }
 
@@ -157,7 +157,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
         ];
         let final_scores = finals(&[(1, 300), (2, 100)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None, MissingBootstrap::Zero);
+        let out = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None, MissingBootstrap::Zero, 0.0);
 
         let n1 = reward::normalized_reward(100, 100, 300, 100) + reward::GAMMA_TURN.powi(1) * 0.6;
         let terminal = reward::normalized_reward(100, 100, 300, 100);
@@ -181,7 +181,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
         ];
         let final_scores = finals(&[(1, 1200), (2, 800)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero);
+        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero, 0.0);
         let expected = reward::normalized_reward(1000, 800, 1200, 800).clamp(-1.0, 1.0);
         assert!(
             (out[0] - expected).abs() < 1e-6,
@@ -201,10 +201,40 @@ use polyfish::types::{TechnologyType, UnitEffect};
         ];
         let final_scores = finals(&[(1, 1100), (2, 1200)]);
 
-        let abs_only = td_lambda_labels(&history, &final_scores, 0.0, 0.0, None, MissingBootstrap::Zero);
-        let rel_only = td_lambda_labels(&history, &final_scores, 0.0, 1.0, None, MissingBootstrap::Zero);
+        let abs_only = td_lambda_labels(&history, &final_scores, 0.0, 0.0, None, MissingBootstrap::Zero, 0.0);
+        let rel_only = td_lambda_labels(&history, &final_scores, 0.0, 1.0, None, MissingBootstrap::Zero, 0.0);
         assert!(abs_only[0] > 0.0, "abs-only label should be positive, got {}", abs_only[0]);
         assert!(rel_only[0] < 0.0, "rel-only label should be negative, got {}", rel_only[0]);
+    }
+
+    #[test]
+    fn label_abs_debias_subtracts_exactly_the_calibrated_growth_baseline() {
+        // Abs-only pricing (rel_w=0), lambda=0 isolates the single
+        // checkpoint's n-step return, root_value=Some(0.0) zeroes the
+        // bootstrap term -- the label is then exactly `delta_abs`
+        // (dose=0.0) or `delta_abs - expected_abs_growth(turn, dt)`
+        // (dose=1.0). Proves the flag reaches the window pricing and that
+        // dose=0.0 is an exact no-op (production default).
+        let history = vec![
+            step(1, 0, 600, 600, Some(0.0)),
+            step(1, 1, 700, 600, Some(0.0)),
+        ];
+        let final_scores = finals(&[(1, 700), (2, 600)]);
+
+        let undebiased =
+            td_lambda_labels(&history, &final_scores, 0.0, 0.0, None, MissingBootstrap::Zero, 0.0);
+        let debiased =
+            td_lambda_labels(&history, &final_scores, 0.0, 0.0, None, MissingBootstrap::Zero, 1.0);
+
+        let expected_baseline = expected_abs_growth(0, 1);
+        assert!(expected_baseline > 0.0, "sanity: turn-0 baseline should be positive");
+        assert!(
+            (undebiased[0] - debiased[0] - expected_baseline).abs() < 1e-5,
+            "debiasing should subtract exactly expected_abs_growth(0,1)={expected_baseline}, \
+             got undebiased={} debiased={}",
+            undebiased[0],
+            debiased[0]
+        );
     }
 
     #[test]
@@ -216,7 +246,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
         let z = finals(&[(1, 1), (2, -1)]);
 
         for lambda in [0.0, 0.5, 0.8, 0.95] {
-            let out = td_lambda_labels(&history, &final_scores, lambda, reward::REL_W, Some(&z), MissingBootstrap::Zero);
+            let out = td_lambda_labels(&history, &final_scores, lambda, reward::REL_W, Some(&z), MissingBootstrap::Zero, 0.0);
             assert!(
                 (out[0] - 1.0).abs() < 1e-6,
                 "lambda={lambda}: got {}, expected 1.0",
@@ -236,7 +266,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
         let final_scores = finals(&[(1, 300), (2, 100)]);
         let z = finals(&[(1, -1), (2, 1)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, Some(&z), MissingBootstrap::Zero);
+        let out = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, Some(&z), MissingBootstrap::Zero, 0.0);
         let expected = 0.5f32 * 0.6 + 0.5 * -1.0;
         assert!(
             (out[0] - expected).abs() < 1e-6,
@@ -249,7 +279,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
             step(1, 0, 5000, 1, Some(0.4)),
             step(1, 1, 9000, 1, Some(0.6)),
         ];
-        let out2 = td_lambda_labels(&history2, &final_scores, 0.5, reward::REL_W, Some(&z), MissingBootstrap::Zero);
+        let out2 = td_lambda_labels(&history2, &final_scores, 0.5, reward::REL_W, Some(&z), MissingBootstrap::Zero, 0.0);
         assert!((out2[0] - out[0]).abs() < 1e-6);
     }
 
@@ -264,7 +294,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
         let final_scores = finals(&[(1, 5000), (2, 800)]);
         let z = finals(&[(1, 1), (2, -1)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, Some(&z), MissingBootstrap::Zero);
+        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, Some(&z), MissingBootstrap::Zero, 0.0);
         assert!(
             (out[0] - 0.9).abs() < 1e-6,
             "got {}, expected undiscounted 0.9",

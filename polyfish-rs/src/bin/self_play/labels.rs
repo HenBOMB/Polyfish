@@ -108,6 +108,12 @@ pub(crate) fn checkpoints_by_player(history: &[LabelStep]) -> HashMap<PlayerId, 
 /// aligned 1:1. `label_rel_w` prices windows/terminal (EXP_ELO_006).
 /// With `wl_z` (EXP_ELO_025): ±1 win/loss terminal, zero window reward,
 /// undiscounted bootstrap through root values — a λ-blend of q-targets.
+/// `label_abs_debias` (EXP_ELO_138) subtracts `expected_abs_growth` from each
+/// window's `delta_abs` term, scaled by its own `1-label_rel_w` weight — 0.0
+/// (default) reproduces current production labels exactly; 1.0 fully removes
+/// the measured positive-sum baseline. Does not touch the terminal_return
+/// above (weight ~0 this early; untouched to avoid extrapolating the growth
+/// table past its measured turn range).
 /// What an n-step return does when its checkpoint has no root value (forced
 /// plies, or any backend that reports none).
 #[derive(Copy, Clone, PartialEq, Eq, Debug, clap::ValueEnum)]
@@ -146,6 +152,37 @@ pub(crate) fn calibrated_heur(v: f32) -> f32 {
     (HEUR_TO_OUTCOME_SLOPE * v + HEUR_TO_OUTCOME_INTERCEPT).clamp(-1.0, 1.0)
 }
 
+/// Population-average per-turn normalized score growth `(my_post-my_pre)/norm`
+/// (EXP_ELO_021/137): `delta_abs` inside `normalized_reward_wf` isn't zero-sum
+/// -- both players' scores grow in almost any window -- so it reads positive
+/// for both sides regardless of who's ahead, and that positive-sum term
+/// (weight `1-label_rel_w`) is the dominant driver of the value target's
+/// early-game mean bias (+0.54 at [0,5), turn-3 root_value ~0.64 for BOTH
+/// seats). Measured from EXP_ELO_135's dump (n=45,543 rows / 120 games,
+/// iteration 23, Sep 7 2026): `(mean_my(t+1)-mean_my(t)) / max(0.15*(mean_my(t)
+/// +mean_opp(t)), 600)`, indexed by turn. Negative readings (sampling noise
+/// past turn ~19, where n drops below ~1,500) are clamped to 0 -- a baseline
+/// shouldn't itself claim players expect to LOSE score. Index by turn,
+/// clamped to the last entry beyond the measured range.
+const ABS_GROWTH_PER_TURN: [f32; 25] = [
+    0.0957, 0.2320, 0.2672, 0.3974, 0.3626, 0.4217, 0.4312, 0.4096, 0.3783,
+    0.4411, 0.4349, 0.3687, 0.3476, 0.2906, 0.3912, 0.3200, 0.2012, 0.1574,
+    0.1124, 0.0, 0.0, 0.0835, 0.0189, 0.0373, 0.0835,
+];
+
+/// Sum of the expected per-turn normalized abs-growth baseline over
+/// `[turn_start, turn_start + dt)`, used to de-mean `delta_abs` in the TD(λ)
+/// window reward. Turn indices beyond the measured table clamp to its last
+/// entry rather than extrapolating.
+fn expected_abs_growth(turn_start: i32, dt: i32) -> f32 {
+    (0..dt.max(0))
+        .map(|k| {
+            let t = (turn_start + k).max(0) as usize;
+            ABS_GROWTH_PER_TURN[t.min(ABS_GROWTH_PER_TURN.len() - 1)]
+        })
+        .sum()
+}
+
 pub(crate) fn td_lambda_labels(
     history: &[LabelStep],
     final_scores: &HashMap<i32, f32>,
@@ -153,6 +190,7 @@ pub(crate) fn td_lambda_labels(
     label_rel_w: f32,
     wl_z: Option<&HashMap<i32, f32>>,
     missing: MissingBootstrap,
+    label_abs_debias: f32,
 ) -> Vec<f32> {
     let checkpoints = checkpoints_by_player(history);
 
@@ -199,14 +237,16 @@ pub(crate) fn td_lambda_labels(
                 let n_step_return = if wl_z.is_some() {
                     bootstrap
                 } else {
+                    let dt = (cp.turn - step.turn).max(0);
                     let r = reward::normalized_reward_wf(
                         step.my_score,
                         step.opp_score,
                         cp.my,
                         cp.opp,
                         label_rel_w,
-                    );
-                    let dt = (cp.turn - step.turn).max(0);
+                    ) - label_abs_debias
+                        * (1.0 - label_rel_w)
+                        * expected_abs_growth(step.turn, dt);
                     r + reward::GAMMA_TURN.powi(dt) * bootstrap
                 };
 
