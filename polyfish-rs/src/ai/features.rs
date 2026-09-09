@@ -42,7 +42,7 @@ pub const UNIT_COUNT: usize = 46;
 pub const CH_TERRAIN_START: usize = 0;
 pub const CH_TERRAIN_END: usize = CH_TERRAIN_START + TERRAIN_COUNT;
 
-// Tile flags (fixed count: 8)
+// Tile flags (fixed count: 10)
 pub const CH_TILE_FLAGS_START: usize = CH_TERRAIN_END;
 pub const CH_TILE_FLAGS_COUNT: usize = 10;
 pub const CH_TILE_FLAGS_END: usize = CH_TILE_FLAGS_START + CH_TILE_FLAGS_COUNT;

@@ -174,8 +174,8 @@ pub struct PolyZeroNet {
     res_blocks: Vec<ResBlock>,
 
     // Cross-Attention integration
-    player_feature_embeddings: Tensor, // [10, 64]
-    player_pos_embeddings: Tensor,     // [10, 64]
+    player_feature_embeddings: Tensor, // [16, 64]
+    player_pos_embeddings: Tensor,     // [16, 64]
     player_fc: Linear,
     cross_attention: CrossAttention,
 
@@ -209,7 +209,7 @@ impl PolyZeroNet {
         }
 
         // Player state tokenization
-        // Use vs.get to load the learnable embeddings [10, 64]
+        // Use vs.get to load the learnable embeddings [16, 64]
         let player_feature_embeddings =
             vs.get((player_state_dim, filters), "player_feature_embeddings")?;
         let player_pos_embeddings = vs.get((player_state_dim, filters), "player_pos_embeddings")?;
@@ -286,8 +286,8 @@ impl PolyZeroNet {
         // hypothesis_driven_improvements.md.
         let spatial_tokens = x.flatten_from(2)?.transpose(1, 2)?.contiguous()?;
 
-        // Player tokens: [B, 10, Filters]
-        // player_tokens = player_input[B, 10, 1] * embeddings[1, 10, 64]
+        // Player tokens: [B, 16, Filters]
+        // player_tokens = player_input[B, 16, 1] * embeddings[1, 16, 64]
         let p_tokens = player_input
             .unsqueeze(2)?
             .broadcast_mul(&self.player_feature_embeddings.unsqueeze(0)?)?;
