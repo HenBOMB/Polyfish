@@ -371,6 +371,18 @@ struct Node {
     /// fresh eval-server round trip. `None` for every edge with a real
     /// child, and for every edge before it's ever been frozen.
     edge_frozen: Vec<Option<f32>>,
+    /// Wave-batching (leaf_batch): per-edge virtual loss charged when a
+    /// descent claims this edge as a pending (not yet backed up) leaf
+    /// within the current wave, removed by `backup` once the real result
+    /// lands. Zero outside an in-flight wave -- always zero at
+    /// `leaf_batch == 1`, since a charge is applied and removed within one
+    /// descent before the next one starts. `select_edge` reduces to plain
+    /// UCT byte-for-byte whenever every entry here is 0.0.
+    edge_virtual_loss: Vec<f32>,
+    /// Sum of `edge_virtual_loss`, mirroring `visits` for the UCT
+    /// exploration term's `ln_n`/`sqrt_n`. Zero whenever `edge_virtual_loss`
+    /// is all-zero.
+    virtual_visits: f32,
 }
 
 impl Node {
@@ -425,6 +437,8 @@ impl Node {
             from,
             edge_prior: Vec::new(),
             edge_frozen: vec![None; n],
+            edge_virtual_loss: vec![0.0; n],
+            virtual_visits: 0.0,
         }
     }
 
@@ -442,18 +456,33 @@ impl Node {
     /// the existing UCT term (added, not replacing it), which IS genuinely
     /// continuous in `root_prior_w` — this is the only place the prior acts.
     fn select_edge(&self) -> usize {
-        if let Some(i) = self.edge_visits.iter().position(|&v| v == 0.0) {
+        // Cold start checks EFFECTIVE (real + virtual) visits: within one
+        // wave, an edge already claimed by an earlier descent (but not yet
+        // backed up) reads as "visited" here, so the next descent moves on
+        // to the next unvisited edge instead of repeating the same pick.
+        // All-zero virtual loss (always true at leaf_batch==1) makes this
+        // identical to a plain `edge_visits[i] == 0.0` check.
+        if let Some(i) = (0..self.edge_visits.len())
+            .find(|&i| self.edge_visits[i] + self.edge_virtual_loss[i] == 0.0)
+        {
             return i;
         }
-        let ln_n = self.visits.max(1.0).ln();
-        let sqrt_n = self.visits.max(1.0).sqrt();
+        let eff_n = self.visits + self.virtual_visits;
+        let ln_n = eff_n.max(1.0).ln();
+        let sqrt_n = eff_n.max(1.0).sqrt();
         let mut best = 0;
         let mut best_score = f32::NEG_INFINITY;
         for i in 0..self.candidates.len() {
-            let q01 = (self.edge_values[i] / self.edge_visits[i] + 1.0) / 2.0;
-            let mut score = q01 + EXPLORATION * (ln_n / self.edge_visits[i]).sqrt();
+            // A pending (not-yet-backed-up) visit is scored as a loss --
+            // value -1, the pessimistic end of the [-1,1] negamax range --
+            // same convention as `mcts_common::VIRTUAL_LOSS`. Zero virtual
+            // loss makes `ev`/`q01`/`score` reduce byte-for-byte to the
+            // plain-UCT formula this replaced.
+            let ev = self.edge_visits[i] + self.edge_virtual_loss[i];
+            let q01 = ((self.edge_values[i] - self.edge_virtual_loss[i]) / ev + 1.0) / 2.0;
+            let mut score = q01 + EXPLORATION * (ln_n / ev).sqrt();
             if let Some(&p) = self.edge_prior.get(i) {
-                score += p * sqrt_n / (1.0 + self.edge_visits[i]);
+                score += p * sqrt_n / (1.0 + ev);
             }
             if score > best_score {
                 best_score = score;
@@ -690,6 +719,8 @@ impl<'a> MacroMctsSearch<'a> {
         root.edge_values = vec![0.0; n];
         root.edge_shape = vec![0.0; n];
         root.edge_frozen = vec![None; n];
+        root.edge_virtual_loss = vec![0.0; n];
+        root.virtual_visits = 0.0;
 
         // War-room item 3: inject the macro policy head as a PUCT-style
         // prior at the root only, one eval call per real turn decision (not
@@ -1687,6 +1718,7 @@ mod tests {
             n.edge_values = vec![0.0];
             n.edge_shape = vec![shape];
             n.edge_frozen = vec![None];
+            n.edge_virtual_loss = vec![0.0];
             n.frozen_value = frozen;
             n
         };
@@ -2126,6 +2158,8 @@ mod tests {
         n.edge_visits = vec![0.0; candidates];
         n.edge_values = vec![0.0; candidates];
         n.edge_frozen = vec![None; candidates];
+        n.edge_virtual_loss = vec![0.0; candidates];
+        n.virtual_visits = 0.0;
         n
     }
 
