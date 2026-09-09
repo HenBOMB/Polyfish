@@ -300,4 +300,17 @@ pub(crate) struct Args {
     /// Same as --macro-rollout-nn-min-depth1, for config 2.
     #[arg(long, default_value_t = usize::MAX)]
     pub(crate) macro_rollout_nn_min_depth2: usize,
+
+    /// Leaves coalesced into one evaluator.evaluate() call per macro-mcts
+    /// wave (Path B / the cheap rollout estimator only), config 1. 1 =
+    /// today's strictly-sequential sim loop (default, safe, byte-
+    /// identical). >1 changes actual move-selection behavior via virtual
+    /// loss, not just throughput -- sweep before trusting a strength gauge
+    /// against it, same caveat as self_play's own --leaf-batch doc.
+    #[arg(long, default_value_t = 1)]
+    pub(crate) macro_leaf_batch1: usize,
+
+    /// Same as --macro-leaf-batch1, for config 2.
+    #[arg(long, default_value_t = 1)]
+    pub(crate) macro_leaf_batch2: usize,
 }

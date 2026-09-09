@@ -87,6 +87,14 @@ pub struct MacroParams {
     /// Defaults to `usize::MAX` so freezing never fires until explicitly
     /// enabled alongside `rollout_nn_w`.
     pub rollout_nn_min_depth: usize,
+    /// Leaves coalesced into one evaluator.evaluate() call per wave
+    /// (Path B / the cheap rollout estimator only -- `execute_turn`'s own
+    /// per-ply calls are untouched). `1` = today's strictly-sequential
+    /// sim loop, byte-identical -- the safe default and the regression-
+    /// test anchor. Values `>1` change actual move-selection behavior via
+    /// virtual loss, not just throughput; see `Node::select_edge`'s doc
+    /// comment and `MacroMctsSearch::collect_wave`.
+    pub leaf_batch: usize,
 }
 
 impl Default for MacroParams {
@@ -119,6 +127,7 @@ impl Default for MacroParams {
             root_prior_w: 0.0,
             rollout_nn_w: 0.0,
             rollout_nn_min_depth: usize::MAX,
+            leaf_batch: 1,
         }
     }
 }

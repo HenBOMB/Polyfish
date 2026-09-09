@@ -127,6 +127,7 @@ fn main() -> anyhow::Result<()> {
         root_prior_w: 0.0,
         rollout_nn_w: 0.0,
         rollout_nn_min_depth: usize::MAX,
+        leaf_batch: 1,
     };
     let macro_params1 = MacroParams {
         sims: args.macro_sims1.unwrap_or(args.macro_sims),
@@ -137,6 +138,7 @@ fn main() -> anyhow::Result<()> {
         rollout_nn_w: args.macro_rollout_nn_w1,
         rollout_nn_min_depth: args.macro_rollout_nn_min_depth1,
         leaf: args.macro_leaf1.unwrap_or(args.macro_leaf),
+        leaf_batch: args.macro_leaf_batch1,
         ..base_params
     };
     let macro_params2 = MacroParams {
@@ -148,6 +150,7 @@ fn main() -> anyhow::Result<()> {
         rollout_nn_w: args.macro_rollout_nn_w2,
         rollout_nn_min_depth: args.macro_rollout_nn_min_depth2,
         leaf: args.macro_leaf2.unwrap_or(args.macro_leaf),
+        leaf_batch: args.macro_leaf_batch2,
         ..base_params
     };
     if is_macro(args.backend1) || is_macro(args.backend2) {

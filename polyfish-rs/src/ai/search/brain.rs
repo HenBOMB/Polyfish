@@ -330,9 +330,13 @@ pub fn make_search_agent(
         SearchBackend::MacroLookahead => SearchAgent::MacroLookahead(
             MacroLookaheadAgent::new(evaluator, macro_params.unwrap_or_default()),
         ),
-        SearchBackend::MacroMcts => SearchAgent::MacroMcts(
-            crate::ai::macro_mcts::MacroMctsAgent::new(evaluator, macro_params.unwrap_or_default()),
-        ),
+        SearchBackend::MacroMcts => {
+            let mut params = macro_params.unwrap_or_default();
+            if let Some(b) = leaf_batch {
+                params.leaf_batch = b;
+            }
+            SearchAgent::MacroMcts(crate::ai::macro_mcts::MacroMctsAgent::new(evaluator, params))
+        }
     }
 }
 

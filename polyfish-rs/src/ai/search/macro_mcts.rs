@@ -8,6 +8,7 @@
 use crate::ai::macro_agent::{MacroLeaf, MacroParams, enumerate_candidates};
 use crate::ai::macro_exec::{self, TurnCounters};
 use crate::ai::oracle_macro::{LaneState, MacroGoal, StanceCommit, compute_macro_goal, commit_macro_goal};
+use crate::ai::search::mcts_common::VIRTUAL_LOSS;
 use crate::game::Game;
 use crate::moves::Move;
 use crate::states::{GameState, PlayerId};
@@ -629,6 +630,28 @@ fn leaf_value(
     crate::ai::evaluate_state(state, player)
 }
 
+/// One in-flight Path-B leaf within a wave: not yet backed up, waiting on
+/// its batched eval result. `count` lets a wave's repeat pick of the exact
+/// same (parent, edge) — a real, expected occurrence at low `k`/high
+/// `leaf_batch` — back up its one real result multiple times instead of
+/// re-extracting duplicate feature rows.
+struct PendingLeaf {
+    parent: usize,
+    edge: usize,
+    path: Vec<(usize, usize)>,
+    feat_offset: usize,
+    count: u32,
+}
+
+/// Outcome of one `descend_once` call.
+enum DescendOutcome {
+    /// A real value is already known — `backup` runs immediately.
+    Resolved(f32),
+    /// Queued into the wave (new `PendingLeaf`, or a repeat pick that
+    /// bumped an existing one's `count`) — resolved later by `resolve_wave`.
+    Deferred,
+}
+
 impl<'a> MacroMctsSearch<'a> {
     /// Run `sims` simulations from `root_game` (the acting player's fogged
     /// view) and return the winning root directive index. Root candidate 0
@@ -735,8 +758,21 @@ impl<'a> MacroMctsSearch<'a> {
             leaf,
             stats: MacroMctsStats::default(),
         };
-        for _ in 0..params.sims.max(1) {
-            search.simulate(0, root_turn, params);
+        // leaf_batch=1 (the default) makes this identical to a plain
+        // `for _ in 0..sims { search.simulate(...) }` loop, one wave per
+        // sim. leaf_batch>1 collects that many Path-B leaves per wave
+        // before making one batched eval call -- see `collect_wave`'s doc.
+        let total_sims = params.sims.max(1);
+        let batch = params.leaf_batch.max(1);
+        let mut done = 0usize;
+        while done < total_sims {
+            let want = (total_sims - done).min(batch);
+            let (immediate, pending, features) = search.collect_wave(0, root_turn, params, want);
+            done += immediate as usize;
+            if !pending.is_empty() {
+                done += pending.iter().map(|p| p.count as usize).sum::<usize>();
+                search.resolve_wave(pending, features, root_turn, params);
+            }
         }
         inspect(&search);
 
@@ -811,78 +847,21 @@ impl<'a> MacroMctsSearch<'a> {
     /// `execute_turn` on a fresh clone), then back the child's value up the
     /// path with one negation per level.
     fn simulate(&mut self, root_idx: usize, root_turn: i32, params: &MacroParams) {
-        let mut path: Vec<(usize, usize)> = Vec::new();
-        let mut idx = root_idx;
-        let value: f32;
-        loop {
-            if let Some(v) = self.nodes[idx].frozen_value {
-                value = v;
-                break;
-            }
-            if self.nodes[idx].candidates.is_empty() {
-                let n = &self.nodes[idx];
-                value = leaf_value(
-                    self.eval,
-                    self.leaf,
-                    &n.game.state,
-                    n.player,
-                    n.counters[seat(n.player)].tier3_bought,
-                    n.from.as_ref().map(|(p, g)| (*p, g)),
-                );
-                break;
-            }
-            let e = self.nodes[idx].select_edge();
-            path.push((idx, e));
-            if let Some(child) = self.nodes[idx].children[e] {
-                idx = child;
-                continue;
-            }
-            // EXP_ELO_125 (piece 4): an edge frozen by the cheap NN
-            // estimator on a previous visit -- reuse the cached value
-            // instead of re-querying the eval server every time.
-            if let Some(v) = self.nodes[idx].edge_frozen[e] {
-                value = v;
-                break;
-            }
-            let depth = path.len();
-            let mut frozen: Option<f32> = None;
-            if let Some(feat) = self.try_freeze_rollout(idx, e, depth, params) {
-                if let Some(raw_value) =
-                    self.eval.evaluate(vec![feat]).into_iter().next().and_then(|r| r.2.rollout_value)
-                {
-                    frozen = Some(-raw_value);
-                }
-            }
-            if let Some(v) = frozen {
-                self.nodes[idx].edge_frozen[e] = Some(v);
-                value = v;
-            } else {
-                let child = self.expand_execute(idx, e, root_turn, params);
-                let cn = &self.nodes[child];
-                value = cn.frozen_value.unwrap_or_else(|| {
-                    leaf_value(
-                        self.eval,
-                        self.leaf,
-                        &cn.game.state,
-                        cn.player,
-                        cn.counters[seat(cn.player)].tier3_bought,
-                        cn.from.as_ref().map(|(p, g)| (*p, g)),
-                    )
-                });
-            }
-            // The child's value is from the child's perspective; the edge we
-            // just descended belongs to the parent, so negate once here and
-            // once per level in the unwind below.
-            break;
+        let (_immediate, pending, features) = self.collect_wave(root_idx, root_turn, params, 1);
+        if !pending.is_empty() {
+            self.resolve_wave(pending, features, root_turn, params);
         }
-        self.backup(&path, value, 1);
     }
 
     /// Negamax unwind with edge-shaping rewards: `times` lets a wave's
     /// deduped repeat pick of the SAME (parent, edge) back up its one real
     /// result `times` times at once, instead of re-deriving it per pick.
-    /// `times=1` (today's only caller, until wave-batching lands) is
-    /// character-for-character today's loop.
+    /// `times=1` is character-for-character today's (pre-wave-batching)
+    /// loop. Removing `VIRTUAL_LOSS * times` here is always paired with an
+    /// equal charge made during the descent that produced this exact
+    /// `path` (see `descend_once`) — charged unconditionally on every edge
+    /// walked, whether the descent resolved immediately or was deferred to
+    /// a wave, so the charge/remove pairing holds regardless of which.
     fn backup(&mut self, path: &[(usize, usize)], mut value: f32, times: u32) {
         for &(pidx, e) in path.iter().rev() {
             // Negamax with edge rewards: the child's value arrives from the
@@ -894,8 +873,166 @@ impl<'a> MacroMctsSearch<'a> {
             node.visits += times as f32;
             node.edge_visits[e] += times as f32;
             node.edge_values[e] += value * times as f32;
+            node.edge_virtual_loss[e] -= VIRTUAL_LOSS * times as f32;
+            node.virtual_visits -= VIRTUAL_LOSS * times as f32;
         }
         self.stats.max_depth = self.stats.max_depth.max(path.len());
+    }
+
+    /// One full tree descent from `root_idx`: selects down (charging
+    /// `VIRTUAL_LOSS` on every edge walked, unconditionally, mirroring
+    /// Gumbel/Zero's own virtual-loss descent — the charge does not depend
+    /// on how the descent ends, so `backup`'s removal is always exactly
+    /// paired), then either resolves to a value immediately (frozen node,
+    /// no-candidate leaf, cached `edge_frozen`, or a full Path-C
+    /// `expand_execute` simulation — none of these need a batched eval) or
+    /// defers to the wave (Path B eligible: queues a `PendingLeaf` and its
+    /// feature row, or — a repeat pick of an edge another descent in this
+    /// SAME wave already queued — just bumps that entry's `count`).
+    fn descend_once(
+        &mut self,
+        root_idx: usize,
+        root_turn: i32,
+        params: &MacroParams,
+        dedup: &mut std::collections::HashMap<(usize, usize), usize>,
+        pending: &mut Vec<PendingLeaf>,
+        features: &mut Vec<crate::ai::features::RawFeatures>,
+    ) -> (Vec<(usize, usize)>, DescendOutcome) {
+        let mut path: Vec<(usize, usize)> = Vec::new();
+        let mut idx = root_idx;
+        loop {
+            if let Some(v) = self.nodes[idx].frozen_value {
+                return (path, DescendOutcome::Resolved(v));
+            }
+            if self.nodes[idx].candidates.is_empty() {
+                let n = &self.nodes[idx];
+                let v = leaf_value(
+                    self.eval,
+                    self.leaf,
+                    &n.game.state,
+                    n.player,
+                    n.counters[seat(n.player)].tier3_bought,
+                    n.from.as_ref().map(|(p, g)| (*p, g)),
+                );
+                return (path, DescendOutcome::Resolved(v));
+            }
+            let e = self.nodes[idx].select_edge();
+            path.push((idx, e));
+            let node = &mut self.nodes[idx];
+            node.edge_virtual_loss[e] += VIRTUAL_LOSS;
+            node.virtual_visits += VIRTUAL_LOSS;
+            if let Some(child) = self.nodes[idx].children[e] {
+                idx = child;
+                continue;
+            }
+            // EXP_ELO_125 (piece 4): an edge frozen by the cheap NN
+            // estimator on a previous visit -- reuse the cached value
+            // instead of re-querying the eval server every time.
+            if let Some(v) = self.nodes[idx].edge_frozen[e] {
+                return (path, DescendOutcome::Resolved(v));
+            }
+            if let Some(&pi) = dedup.get(&(idx, e)) {
+                pending[pi].count += 1;
+                return (path, DescendOutcome::Deferred);
+            }
+            let depth = path.len();
+            if let Some(feat) = self.try_freeze_rollout(idx, e, depth, params) {
+                let offset = features.len();
+                features.push(feat);
+                dedup.insert((idx, e), pending.len());
+                pending.push(PendingLeaf { parent: idx, edge: e, path: path.clone(), feat_offset: offset, count: 1 });
+                return (path, DescendOutcome::Deferred);
+            }
+            let child = self.expand_execute(idx, e, root_turn, params);
+            let cn = &self.nodes[child];
+            let v = cn.frozen_value.unwrap_or_else(|| {
+                leaf_value(
+                    self.eval,
+                    self.leaf,
+                    &cn.game.state,
+                    cn.player,
+                    cn.counters[seat(cn.player)].tier3_bought,
+                    cn.from.as_ref().map(|(p, g)| (*p, g)),
+                )
+            });
+            return (path, DescendOutcome::Resolved(v));
+        }
+    }
+
+    /// Collects up to `budget` simulations' worth of work in one wave:
+    /// repeated `descend_once` calls, backing up immediate resolutions in
+    /// place and accumulating Path-B-eligible leaves (plus their feature
+    /// rows) for one batched eval call. Path C (`expand_execute`) is
+    /// untouched by wave-batching — it resolves synchronously inside
+    /// `descend_once` exactly as before. Returns the count of immediately-
+    /// resolved sims plus whatever's left pending for `resolve_wave`.
+    fn collect_wave(
+        &mut self,
+        root_idx: usize,
+        root_turn: i32,
+        params: &MacroParams,
+        budget: usize,
+    ) -> (u32, Vec<PendingLeaf>, Vec<crate::ai::features::RawFeatures>) {
+        let mut immediate = 0u32;
+        let mut pending: Vec<PendingLeaf> = Vec::new();
+        let mut features: Vec<crate::ai::features::RawFeatures> = Vec::new();
+        let mut dedup: std::collections::HashMap<(usize, usize), usize> = std::collections::HashMap::new();
+        loop {
+            let done = immediate as usize + pending.iter().map(|p| p.count as usize).sum::<usize>();
+            if done >= budget {
+                break;
+            }
+            let (path, outcome) =
+                self.descend_once(root_idx, root_turn, params, &mut dedup, &mut pending, &mut features);
+            if let DescendOutcome::Resolved(v) = outcome {
+                self.backup(&path, v, 1);
+                immediate += 1;
+            }
+        }
+        (immediate, pending, features)
+    }
+
+    /// The one batched `evaluator.evaluate()` call for a wave's pending
+    /// Path-B leaves, then backs up each one's real result (`leaf.count`
+    /// times, undoing exactly the virtual loss its `count` descents
+    /// charged). A checkpoint that predates the rollout-value head returns
+    /// `None` for every row — falls back to `expand_execute`'s full
+    /// simulation per repeat pick, mirroring `descend_once`'s own
+    /// Path-C-fallthrough for the non-wave-batched case.
+    fn resolve_wave(
+        &mut self,
+        pending: Vec<PendingLeaf>,
+        features: Vec<crate::ai::features::RawFeatures>,
+        root_turn: i32,
+        params: &MacroParams,
+    ) {
+        let results = self.eval.evaluate(features);
+        for leaf in pending {
+            match results.get(leaf.feat_offset).and_then(|r| r.2.rollout_value) {
+                Some(raw_value) => {
+                    let v = -raw_value;
+                    self.nodes[leaf.parent].edge_frozen[leaf.edge] = Some(v);
+                    self.backup(&leaf.path, v, leaf.count);
+                }
+                None => {
+                    for _ in 0..leaf.count {
+                        let child = self.expand_execute(leaf.parent, leaf.edge, root_turn, params);
+                        let cn = &self.nodes[child];
+                        let v = cn.frozen_value.unwrap_or_else(|| {
+                            leaf_value(
+                                self.eval,
+                                self.leaf,
+                                &cn.game.state,
+                                cn.player,
+                                cn.counters[seat(cn.player)].tier3_bought,
+                                cn.from.as_ref().map(|(p, g)| (*p, g)),
+                            )
+                        });
+                        self.backup(&leaf.path, v, 1);
+                    }
+                }
+            }
+        }
     }
 
     /// EXP_ELO_125 (piece 4) gate + feature extraction only -- no eval call,
@@ -2161,6 +2298,7 @@ mod tests {
         n.children = vec![None; candidates];
         n.edge_visits = vec![0.0; candidates];
         n.edge_values = vec![0.0; candidates];
+        n.edge_shape = vec![0.0; candidates];
         n.edge_frozen = vec![None; candidates];
         n.edge_virtual_loss = vec![0.0; candidates];
         n.virtual_visits = 0.0;
@@ -2270,5 +2408,186 @@ mod tests {
             "second visit should add the SAME cached value again: {got2} != {}",
             2.0 * rollout_value
         );
+    }
+
+    /// The cold-start fix: within one wave, `collect_wave` must claim K
+    /// DISTINCT edges when K <= the number of candidates, not repeat the
+    /// same first-unvisited edge every time (which is exactly what plain
+    /// `edge_visits[i] == 0.0` would do with no intervening backup).
+    #[test]
+    fn collect_wave_gathers_k_distinct_edges_when_budget_fits() {
+        let game = generated_game(7);
+        let root_turn = game.state.settings.turn;
+        let mut params = MacroParams::default();
+        params.rollout_nn_w = 1.0;
+        params.rollout_nn_min_depth = 0; // Path B eligible at the root's own edges
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new().with_rollout_value(0.3));
+        let root = bare_node(&game, root_turn, 4);
+        let mut search = MacroMctsSearch {
+            nodes: vec![root],
+            pov: 1,
+            eval: &evaluator,
+            leaf: crate::ai::macro_agent::MacroLeaf::Heuristic,
+            stats: MacroMctsStats::default(),
+        };
+        let (immediate, pending, features) = search.collect_wave(0, root_turn, &params, 4);
+        assert_eq!(immediate, 0, "all 4 are Path-B eligible -- none should resolve immediately");
+        assert_eq!(pending.len(), 4, "4 distinct edges, not duplicates");
+        assert_eq!(features.len(), 4);
+        let mut edges: Vec<usize> = pending.iter().map(|p| p.edge).collect();
+        edges.sort_unstable();
+        assert_eq!(edges, vec![0, 1, 2, 3]);
+        for p in &pending {
+            assert_eq!(p.count, 1);
+        }
+    }
+
+    /// When the wave's budget exceeds the number of real candidates, a
+    /// repeat pick of an already-pending edge must dedup (bump `count`,
+    /// no new feature row) rather than silently duplicate work.
+    #[test]
+    fn collect_wave_dedups_repeat_picks_when_budget_exceeds_candidates() {
+        let game = generated_game(7);
+        let root_turn = game.state.settings.turn;
+        let mut params = MacroParams::default();
+        params.rollout_nn_w = 1.0;
+        params.rollout_nn_min_depth = 0;
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new().with_rollout_value(0.3));
+        let root = bare_node(&game, root_turn, 2);
+        let mut search = MacroMctsSearch {
+            nodes: vec![root],
+            pov: 1,
+            eval: &evaluator,
+            leaf: crate::ai::macro_agent::MacroLeaf::Heuristic,
+            stats: MacroMctsStats::default(),
+        };
+        let (immediate, pending, features) = search.collect_wave(0, root_turn, &params, 5);
+        assert_eq!(immediate, 0);
+        assert!(pending.len() <= 2, "at most 2 distinct edges exist");
+        assert_eq!(features.len(), pending.len(), "one feature row per DISTINCT leaf, not per repeat");
+        let total: u32 = pending.iter().map(|p| p.count).sum();
+        assert_eq!(total, 5, "counts must sum to the full requested budget");
+    }
+
+    /// Whole-tree invariant: after any number of complete waves (mirroring
+    /// `run_with`'s own loop), every edge's virtual loss and every node's
+    /// `virtual_visits` must be exactly zero -- every charge made during a
+    /// descent (`descend_once`) must be matched by exactly one removal
+    /// (`backup`), regardless of how many waves it took.
+    #[test]
+    fn virtual_loss_is_fully_zeroed_after_a_complete_search() {
+        let game = generated_game(9);
+        let root_turn = game.state.settings.turn;
+        let mut params = MacroParams::default();
+        params.rollout_nn_w = 1.0;
+        params.rollout_nn_min_depth = 0;
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new().with_rollout_value(0.4));
+        let root = bare_node(&game, root_turn, 4);
+        let mut search = MacroMctsSearch {
+            nodes: vec![root],
+            pov: 1,
+            eval: &evaluator,
+            leaf: crate::ai::macro_agent::MacroLeaf::Heuristic,
+            stats: MacroMctsStats::default(),
+        };
+        let (total, batch) = (32usize, 8usize);
+        let mut done = 0usize;
+        while done < total {
+            let want = (total - done).min(batch);
+            let (immediate, pending, features) = search.collect_wave(0, root_turn, &params, want);
+            done += immediate as usize;
+            if !pending.is_empty() {
+                done += pending.iter().map(|p| p.count as usize).sum::<usize>();
+                search.resolve_wave(pending, features, root_turn, &params);
+            }
+        }
+        for n in &search.nodes {
+            for &vl in &n.edge_virtual_loss {
+                assert_eq!(vl, 0.0, "edge_virtual_loss must be fully removed after a complete search");
+            }
+            assert_eq!(n.virtual_visits, 0.0, "virtual_visits must be fully removed after a complete search");
+        }
+    }
+
+    /// Direct analogue of `mcts_common`'s `backprop_removes_virtual_loss_
+    /// only_on_path`, adapted to macro-mcts's edge-array-on-parent shape:
+    /// backing up through one edge must clear only that edge's charge.
+    #[test]
+    fn backup_removes_virtual_loss_only_on_the_path_taken() {
+        let game = generated_game(11);
+        let root_turn = game.state.settings.turn;
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+        let mut root = bare_node(&game, root_turn, 2);
+        root.edge_virtual_loss = vec![VIRTUAL_LOSS, VIRTUAL_LOSS];
+        root.virtual_visits = 2.0 * VIRTUAL_LOSS;
+        let mut search = MacroMctsSearch {
+            nodes: vec![root],
+            pov: 1,
+            eval: &evaluator,
+            leaf: crate::ai::macro_agent::MacroLeaf::Heuristic,
+            stats: MacroMctsStats::default(),
+        };
+        search.backup(&[(0, 0)], 0.0, 1);
+        assert_eq!(
+            search.nodes[0].edge_virtual_loss,
+            vec![0.0, VIRTUAL_LOSS],
+            "only edge 0's virtual loss must clear"
+        );
+        assert_eq!(search.nodes[0].virtual_visits, VIRTUAL_LOSS, "drops by exactly one charge");
+    }
+
+    /// A checkpoint predating the rollout-value head (or one where the
+    /// eval-server just doesn't produce it) must still get a real child via
+    /// `expand_execute`, matching pre-wave-batching behavior, at
+    /// `leaf_batch == 1`.
+    #[test]
+    fn path_b_miss_falls_back_to_expand_execute() {
+        let game = generated_game(13);
+        let root_turn = game.state.settings.turn;
+        let mut params = MacroParams::default();
+        params.rollout_nn_w = 1.0;
+        params.rollout_nn_min_depth = 0; // eligible, but the Dummy has no rollout_value
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+        let root = bare_node(&game, root_turn, 1);
+        let mut search = MacroMctsSearch {
+            nodes: vec![root],
+            pov: 1,
+            eval: &evaluator,
+            leaf: crate::ai::macro_agent::MacroLeaf::Heuristic,
+            stats: MacroMctsStats::default(),
+        };
+        search.simulate(0, root_turn, &params);
+        assert!(search.nodes[0].children[0].is_some(), "Path-B miss must fall through to a real child");
+        assert!(search.nodes[0].edge_frozen[0].is_none(), "must not be frozen when the head is absent");
+    }
+
+    /// Same fallback, but deferred through a real wave (`leaf_batch > 1`):
+    /// `try_freeze_rollout` only checks eligibility (gate + feature
+    /// extraction), not whether the head actually produces a value, so all
+    /// edges get deferred into the wave; the fallback only kicks in once
+    /// `resolve_wave` sees `rollout_value: None` come back from the batch.
+    #[test]
+    fn path_b_miss_falls_back_to_expand_execute_within_a_wave() {
+        let game = generated_game(13);
+        let root_turn = game.state.settings.turn;
+        let mut params = MacroParams::default();
+        params.rollout_nn_w = 1.0;
+        params.rollout_nn_min_depth = 0;
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+        let root = bare_node(&game, root_turn, 3);
+        let mut search = MacroMctsSearch {
+            nodes: vec![root],
+            pov: 1,
+            eval: &evaluator,
+            leaf: crate::ai::macro_agent::MacroLeaf::Heuristic,
+            stats: MacroMctsStats::default(),
+        };
+        let (immediate, pending, features) = search.collect_wave(0, root_turn, &params, 3);
+        assert_eq!(immediate, 0, "still deferred -- eligibility doesn't require the head to actually respond");
+        assert_eq!(pending.len(), 3);
+        search.resolve_wave(pending, features, root_turn, &params);
+        for i in 0..3 {
+            assert!(search.nodes[0].children[i].is_some(), "edge {i}: Path-B miss must fall through to a real child");
+        }
     }
 }
