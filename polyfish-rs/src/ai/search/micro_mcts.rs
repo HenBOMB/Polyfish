@@ -129,6 +129,42 @@ pub fn micro_mcts_params() -> Option<MicroParams> {
     })
 }
 
+/// EXP_ELO_136 (Experiment B): turn-conditional PUCT trust ramp. Value-head
+/// discrimination is genuinely poor before turn ~10 (EXP_ELO_135: r2
+/// 0.06-0.35 vs `final_outcome`, worse than the heuristic's own 0.14-0.40 in
+/// the same bands) and only becomes load-bearing from turn ~10-20 onward
+/// (r2 0.61-0.72). PUCT's `s = q + u` makes trust-weighting Q algebraically
+/// equivalent to dividing `c_puct` by that same weight, so low trust is
+/// implemented as a HIGHER `c_puct` (more exploration, less Q-reliance) --
+/// `early` is the LARGER number, ramping DOWN to `late` as turn increases.
+/// Returns `base` unchanged (today's exact behavior, byte-identical) unless
+/// all four env vars parse; caller overrides its own `MicroParams.c_puct`
+/// copy with the result right before calling `micro_search_pick`.
+pub fn turn_conditional_c_puct(turn: i32, base: f32) -> f32 {
+    static RAMP: std::sync::OnceLock<Option<(f32, f32, f32, f32)>> = std::sync::OnceLock::new();
+    let ramp = RAMP.get_or_init(|| {
+        let early: f32 = std::env::var("POLYFISH_MICRO_MCTS_CPUCT_EARLY").ok()?.parse().ok()?;
+        let late: f32 = std::env::var("POLYFISH_MICRO_MCTS_CPUCT_LATE").ok()?.parse().ok()?;
+        let turn_start: f32 = std::env::var("POLYFISH_MICRO_MCTS_CPUCT_TURN_START").ok()?.parse().ok()?;
+        let turn_end: f32 = std::env::var("POLYFISH_MICRO_MCTS_CPUCT_TURN_END").ok()?.parse().ok()?;
+        Some((early, late, turn_start, turn_end))
+    });
+    match *ramp {
+        None => base,
+        Some((early, late, turn_start, turn_end)) => {
+            let t = turn as f32;
+            if t <= turn_start {
+                early
+            } else if t >= turn_end {
+                late
+            } else {
+                let frac = (t - turn_start) / (turn_end - turn_start);
+                early + frac * (late - early)
+            }
+        }
+    }
+}
+
 /// Diagnostic (temporary, not a standing feature): how often the tree's
 /// argmax-visits pick actually disagrees with `rank_view`'s own top-ranked
 /// candidate (index 0). If this stays at 0 across real games, the search is
@@ -191,6 +227,19 @@ struct MicroChild {
     mv: Box<dyn Move>,
     prior: f32,
     node: Option<MicroNode>,
+}
+
+/// Debug-only snapshot of one root child, before vs. after the PUCT search:
+/// the prior it was seeded with, and its post-search visit count/backed-up Q
+/// (`None` if the search never visited it). Verdi, Sep 7 2026 -- added for
+/// per-ply debugging traceability (root-seed vs. post-search), not read by
+/// any production decision path.
+#[derive(Clone, Debug)]
+pub struct MicroChildTrace {
+    pub mv: String,
+    pub prior: f32,
+    pub visits: u32,
+    pub q: Option<f32>,
 }
 
 struct MicroNode {
@@ -383,12 +432,16 @@ fn select_and_expand(
 /// of discarding a ply's search every ply).
 /// Returns `(index into `ranked` the search prefers, subtree to carry into
 /// the NEXT ply if the caller ends up actually playing that pick, the
-/// picked child's own backed-up Q)`. The index is `None` when there's
-/// nothing to search (a lone EndTurn, or too few candidates); the carry and
-/// Q are `None` whenever no search ran. The Q is `tree(V_net)` -- leaves are
-/// scored by the trained value head (see `leaf_value`), so this is a
-/// genuine per-ply self-distillation target, computed on nearly every real
-/// ply already (search runs regardless; only the return value was new).
+/// picked child's own backed-up Q, a per-root-child debug trace)`. The index
+/// is `None` when there's nothing to search (a lone EndTurn, or too few
+/// candidates); the carry and Q are `None` whenever no search ran. The Q is
+/// `tree(V_net)` -- leaves are scored by the trained value head (see
+/// `leaf_value`), so this is a genuine per-ply self-distillation target,
+/// computed on nearly every real ply already (search runs regardless; only
+/// the return value was new). The trace vec is empty exactly when no search
+/// ran, one entry per root child otherwise -- cheap to build (already-owned
+/// data, no new allocation of note next to the sims loop itself), so it's
+/// unconditional rather than flag-gated; callers that don't trace just drop it.
 #[allow(clippy::too_many_arguments)]
 pub fn micro_search_pick(
     view: &Game,
@@ -401,9 +454,9 @@ pub fn micro_search_pick(
     params: &MicroParams,
     carry: Option<MicroTreeCarry>,
     root_already_net_ranked: bool,
-) -> (Option<usize>, Option<MicroTreeCarry>, Option<f32>) {
+) -> (Option<usize>, Option<MicroTreeCarry>, Option<f32>, Vec<MicroChildTrace>) {
     if ranked.len() < 2 || ranked[0].1.move_type() == MoveType::EndTurn {
-        return (None, None, None);
+        return (None, None, None, Vec::new());
     }
     if root_already_net_ranked {
         MICRO_MCTS_NET_DERIVED_ROOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -563,11 +616,24 @@ pub fn micro_search_pick(
         .as_ref()
         .filter(|n| n.visits > 0)
         .map(|n| n.q().clamp(-1.0, 1.0));
+    // Snapshot every root child's prior/visits/Q BEFORE consuming
+    // `root.children[best_idx].node` below -- this is root-seed-vs-post-search,
+    // not just the winner, so it has to happen before the `.take()`.
+    let child_trace: Vec<MicroChildTrace> = root
+        .children
+        .iter()
+        .map(|c| MicroChildTrace {
+            mv: c.mv.serialize().to_string(),
+            prior: c.prior,
+            visits: c.node.as_ref().map_or(0, |n| n.visits),
+            q: c.node.as_ref().filter(|n| n.visits > 0).map(|n| n.q().clamp(-1.0, 1.0)),
+        })
+        .collect();
     let mv_key = root.children[best_idx].mv.serialize();
     let grandchildren = root.children[best_idx].node.take().map(|node| node.children).unwrap_or_default();
     let next_carry =
         if grandchildren.is_empty() { None } else { Some(MicroTreeCarry { mv_key, children: grandchildren }) };
-    (Some(picked_orig_idx), next_carry, picked_q)
+    (Some(picked_orig_idx), next_carry, picked_q, child_trace)
 }
 
 #[cfg(test)]
@@ -682,7 +748,7 @@ mod tests {
             }
             let heur_top = ranked.len().min(4);
             ran_any = true;
-            let (picked, _, _) =
+            let (picked, _, _, _) =
                 micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, false);
             if let Some(idx) = picked {
                 assert!(
@@ -722,7 +788,7 @@ mod tests {
             }
             let heur_top = ranked.len().min(4);
             ran_any = true;
-            let (picked, _, _) = micro_search_pick(
+            let (picked, _, _, _) = micro_search_pick(
                 &view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, true,
             );
             if let Some(idx) = picked {
@@ -831,7 +897,7 @@ mod tests {
 
             let evaluator = Evaluator::Dummy(DummyEvalHandle::new().with_policy(policy));
             let params = MicroParams { sims: 1, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 1.0 };
-            let (picked, _, _) =
+            let (picked, _, _, _) =
                 micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, false);
             assert_eq!(
                 picked,

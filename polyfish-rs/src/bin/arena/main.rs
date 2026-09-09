@@ -645,6 +645,20 @@ fn main() -> anyhow::Result<()> {
         total_games as f32 / arena_elapsed.as_secs_f32(),
         arena_elapsed.as_secs_f32() / total_games as f32,
     );
+    // EXP_ELO_136 mechanism gate: same counters self_play's summary.rs
+    // prints, never surfaced by arena before -- needed to confirm a
+    // POLYFISH_MICRO_MCTS_CPUCT_* ramp actually changed micro-mcts's
+    // picks rather than being a no-op at the tested sims budget.
+    let micro_mcts_calls =
+        polyfish::ai::search::micro_mcts::MICRO_MCTS_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+    let micro_mcts_overrides = polyfish::ai::search::micro_mcts::MICRO_MCTS_OVERRIDES
+        .load(std::sync::atomic::Ordering::Relaxed);
+    println!(
+        "micro-mcts calls: {} total, {} overrode rank_view's top pick ({:.1}%)",
+        micro_mcts_calls,
+        micro_mcts_overrides,
+        micro_mcts_overrides as f64 / (micro_mcts_calls as f64).max(1.0) * 100.0
+    );
 
     // Deterministic teardown, matching self_play: drop the evaluator handles
     // first (the only remaining request-channel senders) so each eval

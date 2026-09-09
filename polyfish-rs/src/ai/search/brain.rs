@@ -214,9 +214,15 @@ impl<'a> SearchAgent<'a> {
         }
     }
 
+    /// Raw NN root value of the most recent search (value-head calibration
+    /// diagnostic). MacroMcts's own copy is opt-in
+    /// (`POLYFISH_MACRO_ROOT_OWN_VALUE=1`, see `macro_root_own_value_enabled`)
+    /// -- `None` unless that flag is set, matching this backend's zero-cost
+    /// default everywhere else.
     fn last_root_own_value(&self) -> Option<f32> {
         match self {
             SearchAgent::Gumbel(a) => a.last_root_own_value(),
+            SearchAgent::MacroMcts(a) => a.last_root_own_value(),
             _ => None,
         }
     }
@@ -247,9 +253,16 @@ impl<'a> SearchAgent<'a> {
     /// Clear the cached root value from the previous search. Useful when
     /// an early return (e.g. forced move) bypasses the search engine but
     /// keeps the agent alive for tree reuse.
+    ///
+    /// Also clears MacroMcts's `last_root_own_value` (Sep 7 2026): without
+    /// this, a forced-move ply -- no search runs at all -- would let
+    /// `game.rs`'s unconditional `last_root_own_value()` read silently leak
+    /// the PREVIOUS ply's raw value through as if it were this ply's.
     fn clear_last_root_value(&mut self) {
-        if let SearchAgent::Gumbel(a) = self {
-            a.clear_last_root_value();
+        match self {
+            SearchAgent::Gumbel(a) => a.clear_last_root_value(),
+            SearchAgent::MacroMcts(a) => a.clear_last_root_own_value(),
+            _ => {}
         }
     }
 }

@@ -72,14 +72,18 @@ fn net_root_heuristic_blend_w() -> f32 {
     })
 }
 
-/// `POLYFISH_PLY_RANKER_ROLLOUTS=0` disables the net path for macro-mcts's
-/// own root-candidate-turn rollouts specifically, independent of the real-
-/// per-ply decision (`rank_view_net_or_cpu`) -- same idiom as
-/// `macro_exec`'s `endturn_hard_gate`. On by default whenever a ranker is
-/// loaded at all.
-pub fn net_rollouts_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("POLYFISH_PLY_RANKER_ROLLOUTS").as_deref() != Ok("0"))
+/// EXP_ELO_133 (Part B, B1): which net feeds the real-per-ply root-candidate
+/// builder. `POLYFISH_NET_ROOT_SOURCE=main_net` switches `rank_view_net_or_cpu`
+/// from the default dedicated `PlyRanker` to the existing production
+/// `Evaluator` policy heads -- zero new training, since `model.safetensors`
+/// is already trained. Unrelated to `execute_turn_net_greedy`, which (Sep 7
+/// 2026) unconditionally uses the main net for macro-mcts's own rollouts
+/// regardless of this setting. Any other value of this env var (including
+/// unset) keeps A6's `ply_ranker`-or-CPU-fallback behavior for the real-ply
+/// path only.
+fn net_root_source_is_main_net() -> bool {
+    static MAIN_NET: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *MAIN_NET.get_or_init(|| std::env::var("POLYFISH_NET_ROOT_SOURCE").as_deref() == Ok("main_net"))
 }
 
 /// Diagnostic: how many times this module's builder ran and how many
@@ -151,11 +155,12 @@ pub fn net_rank_root_candidates(
 }
 
 /// Real-per-ply-trajectory candidate builder: net-direct when a `PlyRanker`
-/// is loaded, verbatim `rank_plies` otherwise. The returned `bool` is `true`
-/// iff the candidates came from the net path -- threaded into
-/// `micro_search_pick` so its own second-forward-pass widening logic knows
-/// it has nothing left to add (see `MicroParams::net_prior_w`'s doc
-/// comment).
+/// is loaded (or, under EXP_ELO_133's `POLYFISH_NET_ROOT_SOURCE=main_net`,
+/// via the existing production policy heads instead), verbatim `rank_plies`
+/// otherwise. The returned `bool` is `true` iff the candidates came from the
+/// net path -- threaded into `micro_search_pick` so its own second-forward-
+/// pass widening logic knows it has nothing left to add (see
+/// `MicroParams::net_prior_w`'s doc comment).
 #[allow(clippy::too_many_arguments)]
 pub fn rank_view_net_or_cpu(
     view: &mut Game,
@@ -166,6 +171,7 @@ pub fn rank_view_net_or_cpu(
     lambda: f32,
     unit_goals: Option<&UnitGoalStore>,
     eco_plan: Option<&EcoPlanCommit>,
+    evaluator: &Evaluator,
 ) -> (Vec<(f32, Box<dyn Move>)>, bool) {
     observe_lane_state(&view.state, pov, lane_state);
     let aux = compute_goal_aux(
@@ -178,17 +184,15 @@ pub fn rank_view_net_or_cpu(
     );
     let gate = tech_discipline_active(&view.state, pov, goal);
 
-    if let Some(ranker) = crate::ai::ply_ranker::ply_ranker() {
-        if let Some(v) = net_rank_root_candidates(
-            view,
-            pov,
-            goal,
-            &aux,
-            gate,
-            RootRankerSource::Ply(ranker),
-            unit_goals,
-            eco_plan,
-        ) {
+    let source = if net_root_source_is_main_net() {
+        Some(RootRankerSource::MainNet(evaluator))
+    } else {
+        crate::ai::ply_ranker::ply_ranker().map(RootRankerSource::Ply)
+    };
+    if let Some(source) = source {
+        if let Some(v) =
+            net_rank_root_candidates(view, pov, goal, &aux, gate, source, unit_goals, eco_plan)
+        {
             return (v, true);
         }
     }
@@ -198,19 +202,21 @@ pub fn rank_view_net_or_cpu(
     )
 }
 
-/// Greedy net-driven playout of one macro-mcts root-candidate turn --
-/// `execute_turn`'s net-path sibling, kept as a separate function rather
-/// than a branch inside `execute_turn`/`execute_turn_recorded` themselves:
-/// those are shared by `belief/mod.rs`'s fog-of-war rollouts and
-/// `MacroLookaheadAgent::replan`, which must stay byte-identical regardless
-/// of whether a ranker is loaded.
+/// Greedy net-driven playout of one macro-mcts root-candidate turn -- one
+/// main-net forward pass per ply (`net_rank_root_candidates`), no search, no
+/// `rank_plies` in any form (not even as a failure fallback: a feature/
+/// forward-pass hiccup stops the rollout where it is, the same "anomaly
+/// leaves the state where it stopped" convention `execute_turn` itself
+/// already uses, rather than reaching for the CPU path). Verdi, Sep 7 2026:
+/// rank_plies is gone from macro-mcts's own root-candidate rollouts,
+/// unconditionally -- no env-var, no A/B toggle.
 pub fn execute_turn_net_greedy(
     game: &mut Game,
     player: PlayerId,
     goal: &MacroGoal,
     lane_state: &mut LaneState,
     counters: &mut TurnCounters,
-    ranker: &PlyRanker,
+    evaluator: &Evaluator,
 ) -> bool {
     for _ in 0..MAX_EXEC_PLIES {
         if game.state.settings._game_over || game.state.settings.current_player_turn_id != player {
@@ -228,20 +234,17 @@ pub fn execute_turn_net_greedy(
         let gate = tech_discipline_active(&game.state, player, goal);
         // Rollouts never see the real trajectory's UnitGoalStore/EcoPlanCommit
         // -- same convention `execute_turn_recorded` already uses.
-        let ranked = match net_rank_root_candidates(
+        let Some(ranked) = net_rank_root_candidates(
             game,
             player,
             goal,
             &aux,
             gate,
-            RootRankerSource::Ply(ranker),
+            RootRankerSource::MainNet(evaluator),
             None,
             None,
-        ) {
-            Some(v) => v,
-            // A hiccup must never crash a rollout -- fall back for this one
-            // ply only and keep walking the turn.
-            None => macro_exec::rank_plies(game, player, goal, &aux, gate, 1.0, None, None),
+        ) else {
+            return false;
         };
         let Some((_, best)) = ranked.into_iter().next() else {
             break;

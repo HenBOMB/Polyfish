@@ -37,6 +37,18 @@ fn turn_goal_debug() -> bool {
     *ON.get_or_init(|| std::env::var("POLYFISH_DEBUG_TURN_GOAL").is_ok())
 }
 
+/// Value-head-calibration diagnostic (Sep 7 2026): `POLYFISH_MACRO_ROOT_OWN_VALUE=1`
+/// enables one extra forward pass per real ply to populate
+/// `MacroMctsAgent::last_root_own_value` -- the RAW, pre-search value-head
+/// output, which `--dump-value-calib`'s `raw_value` field has always silently
+/// fallen back away from under this backend (see `SearchAgent::
+/// last_root_own_value`'s Gumbel-only match arm). Off by default: zero cost,
+/// byte-identical production behavior when unset.
+fn macro_root_own_value_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("POLYFISH_MACRO_ROOT_OWN_VALUE").as_deref() == Ok("1"))
+}
+
 fn dump_ply_decision(
     path: &str,
     turn: i32,
@@ -45,6 +57,7 @@ fn dump_ply_decision(
     candidates: Vec<serde_json::Value>,
     unit_goals: Vec<serde_json::Value>,
     chosen: &dyn Move,
+    micro_trace: &[crate::ai::search::micro_mcts::MicroChildTrace],
 ) {
     let row = serde_json::json!({
         "turn": turn,
@@ -64,6 +77,16 @@ fn dump_ply_decision(
             "move_type": format!("{:?}", chosen.move_type()),
             "move": chosen.serialize(),
         },
+        // Debug traceability (Sep 7 2026): micro-mcts's own root-seed prior
+        // vs. post-search visits/Q per candidate it considered -- empty when
+        // micro-mcts didn't run. `candidates` above is `rank_view`'s scores
+        // BEFORE micro touches them; this is what micro did with them.
+        "micro": micro_trace.iter().map(|c| serde_json::json!({
+            "move": c.mv,
+            "prior": c.prior,
+            "visits": c.visits,
+            "q": c.q,
+        })).collect::<Vec<_>>(),
     });
     if let Ok(s) = serde_json::to_string(&row) {
         use std::io::Write;
@@ -903,36 +926,22 @@ impl<'a> MacroMctsSearch<'a> {
         };
         // An executor anomaly leaves the state where it stopped; the node is
         // still scoreable, so treat it like any other boundary.
-        // EXP_ELO_061: rollout_lambda, not lambda -- this runs up to `sims`
-        // times per real turn (once per node expansion), vs the real
-        // per-ply commit's one call in select_move.
         //
-        // `net_root` rework: net-driven greedy playout when a `PlyRanker` is
-        // loaded AND rollouts aren't specifically disabled
-        // (`POLYFISH_PLY_RANKER_ROLLOUTS=0`, independent of the real-ply
-        // toggle) -- `execute_turn`/`execute_turn_recorded` themselves stay
-        // untouched since they're shared by `belief/mod.rs`'s fog-of-war
-        // rollouts and `MacroLookaheadAgent::replan`.
-        let _ = match crate::ai::ply_ranker::ply_ranker()
-            .filter(|_| crate::ai::search::net_root::net_rollouts_enabled())
-        {
-            Some(ranker) => crate::ai::search::net_root::execute_turn_net_greedy(
-                &mut game,
-                player,
-                &goal,
-                &mut lane_states[s],
-                &mut counters[s],
-                ranker,
-            ),
-            None => macro_exec::execute_turn(
-                &mut game,
-                player,
-                &goal,
-                &mut lane_states[s],
-                &mut counters[s],
-                params.rollout_lambda,
-            ),
-        };
+        // Verdi, Sep 7 2026: rank_plies is gone from macro-mcts's own
+        // root-candidate rollouts, unconditionally -- no env-var, no CPU
+        // fallback. `execute_turn`/`execute_turn_recorded` (the old
+        // rank_plies-driven path) stay untouched as functions since they're
+        // still shared by `belief/mod.rs`'s fog-of-war rollouts and
+        // `MacroLookaheadAgent::replan`, but this call site no longer uses
+        // them at all.
+        let _ = crate::ai::search::net_root::execute_turn_net_greedy(
+            &mut game,
+            player,
+            &goal,
+            &mut lane_states[s],
+            &mut counters[s],
+            self.eval,
+        );
         let shape = match &shape_pre {
             Some((pre, aux)) => {
                 let post =
@@ -1036,6 +1045,16 @@ pub struct MacroMctsAgent<'a> {
     /// `None` whenever micro-mcts didn't run this ply (too few candidates,
     /// disabled via `POLYFISH_MICRO_MCTS_SIMS=0`, or a lone EndTurn).
     last_micro_root_q: Option<f32>,
+    /// Value-head-calibration diagnostic (Sep 7 2026): this ply's RAW,
+    /// pre-search main-net value-head output at the (pre-move) root state,
+    /// painted with the ply's own committed goal -- zero tree processing,
+    /// unlike `last_micro_root_q`/`last_root_q_raw`. Only populated when
+    /// `POLYFISH_MACRO_ROOT_OWN_VALUE=1` (see `macro_root_own_value_enabled`)
+    /// -- `None` otherwise, byte-identical to today. Mirrors
+    /// `GumbelMctsAgent::last_root_own_value`'s role for the macro-mcts
+    /// backend, which never had an equivalent (see `SearchAgent::
+    /// last_root_own_value`'s `_ => None` fallthrough this closes).
+    last_root_own_value: Option<f32>,
 }
 
 /// EXP_ELO_038: how many recent picked directives stay on the ballot.
@@ -1252,6 +1271,7 @@ impl<'a> MacroMctsAgent<'a> {
             unit_goals: crate::ai::search::unit_goals::UnitGoalStore::default(),
             micro_carry: None,
             last_micro_root_q: None,
+            last_root_own_value: None,
         }
     }
 
@@ -1301,6 +1321,21 @@ impl<'a> MacroMctsAgent<'a> {
     /// which evaluator scores the macro tree's own leaves.
     pub fn micro_root_q(&self) -> Option<f32> {
         self.last_micro_root_q
+    }
+
+    /// This ply's RAW pre-search value-head output -- see
+    /// `last_root_own_value`'s field doc. `None` unless
+    /// `POLYFISH_MACRO_ROOT_OWN_VALUE=1`.
+    pub fn last_root_own_value(&self) -> Option<f32> {
+        self.last_root_own_value
+    }
+
+    /// Companion to `SearchAgent::clear_last_root_value` (Gumbel-only today):
+    /// a forced-move ply (no search runs at all) must not let a stale value
+    /// from the PREVIOUS ply leak through `game.rs`'s unconditional
+    /// `last_root_own_value()` read.
+    pub fn clear_last_root_own_value(&mut self) {
+        self.last_root_own_value = None;
     }
 
     /// The current turn's root ballot: candidate directives and the tree's
@@ -1471,6 +1506,13 @@ impl<'a> MacroMctsAgent<'a> {
             }
         }
         let goal = self.turn_goal.clone().unwrap_or_default();
+        self.last_root_own_value = macro_root_own_value_enabled()
+            .then(|| {
+                crate::ai::features::state_to_cpu_features_goal(&view.state, pov, None, Some(&goal))
+                    .ok()
+                    .and_then(|f| self.evaluator.evaluate(vec![f]).into_iter().next().map(|r| r.0))
+            })
+            .flatten();
         let unit_status =
             crate::ai::search::unit_goals::reconcile_unit_goals(&view.state, pov, &goal, &mut self.unit_goals);
         let (mut ranked, net_derived) = crate::ai::search::net_root::rank_view_net_or_cpu(
@@ -1482,13 +1524,23 @@ impl<'a> MacroMctsAgent<'a> {
             self.params.lambda,
             Some(&self.unit_goals),
             Some(&self.eco_plan_commit),
+            self.evaluator,
         );
         let mut pending_micro_carry: Option<(
             serde_json::Value,
             crate::ai::search::micro_mcts::MicroTreeCarry,
         )> = None;
         self.last_micro_root_q = None;
-        if let Some(micro_params) = crate::ai::search::micro_mcts::micro_mcts_params() {
+        // Debug traceability (Verdi, Sep 7 2026): root-seed prior vs.
+        // post-search visits/Q per candidate, threaded into the
+        // POLYFISH_PLY_TRACE dump below. Empty whenever micro-mcts didn't
+        // run (params off, or nothing to search).
+        let mut micro_child_trace: Vec<crate::ai::search::micro_mcts::MicroChildTrace> = Vec::new();
+        if let Some(mut micro_params) = crate::ai::search::micro_mcts::micro_mcts_params() {
+            micro_params.c_puct = crate::ai::search::micro_mcts::turn_conditional_c_puct(
+                game.state.settings.turn,
+                micro_params.c_puct,
+            );
             let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
             let aux = crate::ai::search::goal_aux::compute_goal_aux(
                 &view.state,
@@ -1498,7 +1550,7 @@ impl<'a> MacroMctsAgent<'a> {
                 self.counters.tier3_bought,
                 Some(&self.lane_state),
             );
-            let (pick, next_carry, picked_q) = crate::ai::search::micro_mcts::micro_search_pick(
+            let (pick, next_carry, picked_q, child_trace) = crate::ai::search::micro_mcts::micro_search_pick(
                 &view,
                 pov,
                 &goal,
@@ -1511,6 +1563,7 @@ impl<'a> MacroMctsAgent<'a> {
                 net_derived,
             );
             self.last_micro_root_q = picked_q;
+            micro_child_trace = child_trace;
             if let Some(idx) = pick {
                 let predicted_key = ranked[idx].1.serialize();
                 ranked.swap(0, idx);
@@ -1570,7 +1623,7 @@ impl<'a> MacroMctsAgent<'a> {
             self.micro_carry = pending_micro_carry
                 .filter(|(key, _)| *key == m.serialize())
                 .map(|(_, carry)| carry);
-            dump_ply_decision(path, turn, pov, &goal, candidates, unit_goals_trace, m.as_ref());
+            dump_ply_decision(path, turn, pov, &goal, candidates, unit_goals_trace, m.as_ref(), &micro_child_trace);
             self.counters.count(m.as_ref());
             return Some(m);
         }
