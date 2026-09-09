@@ -330,13 +330,18 @@ pub fn make_search_agent(
         SearchBackend::MacroLookahead => SearchAgent::MacroLookahead(
             MacroLookaheadAgent::new(evaluator, macro_params.unwrap_or_default()),
         ),
-        SearchBackend::MacroMcts => {
-            let mut params = macro_params.unwrap_or_default();
-            if let Some(b) = leaf_batch {
-                params.leaf_batch = b;
-            }
-            SearchAgent::MacroMcts(crate::ai::macro_mcts::MacroMctsAgent::new(evaluator, params))
-        }
+        // Deliberately does NOT consult the generic `leaf_batch` parameter
+        // above: that value is driven by self_play's `--leaf-batch` flag,
+        // which already defaults to `Some(4)` for the Zero/Gumbel backends
+        // (a separately-tuned, unrelated default -- see that flag's own
+        // doc comment). Reusing it here would silently activate
+        // leaf_batch>1 for macro-mcts in every production run with no
+        // opt-in. `macro_params.leaf_batch` is instead threaded from each
+        // binary's own dedicated flag (self_play's `--macro-leaf-batch`,
+        // arena's `--macro-leaf-batch1/2`), defaulting to 1.
+        SearchBackend::MacroMcts => SearchAgent::MacroMcts(
+            crate::ai::macro_mcts::MacroMctsAgent::new(evaluator, macro_params.unwrap_or_default()),
+        ),
     }
 }
 

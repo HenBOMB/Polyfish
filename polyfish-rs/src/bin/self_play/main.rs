@@ -143,6 +143,7 @@ fn main() -> anyhow::Result<()> {
         root_prior_w: args.macro_root_prior_w,
         rollout_nn_w: args.macro_rollout_nn_w,
         rollout_nn_min_depth: args.macro_rollout_nn_min_depth,
+        leaf_batch: args.macro_leaf_batch,
         ..MacroParams::default()
     };
 

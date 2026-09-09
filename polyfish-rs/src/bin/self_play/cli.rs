@@ -294,6 +294,18 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = 1)]
     pub(crate) macro_rollout_nn_min_depth: usize,
 
+    /// Leaves coalesced into one evaluator.evaluate() call per macro-mcts
+    /// wave (Path B / the cheap rollout estimator only -- see
+    /// `MacroParams::leaf_batch`'s doc comment). Default 1 = today's
+    /// strictly-sequential sim loop, byte-identical -- deliberately its
+    /// OWN dedicated flag, not the generic `--leaf-batch` above (which
+    /// defaults to 4 for the Zero/Gumbel backends and must not silently
+    /// start applying to macro-mcts too). Values >1 change actual
+    /// move-selection behavior, not just throughput -- do not change this
+    /// default without a paired strength gauge.
+    #[arg(long, default_value_t = 1)]
+    pub(crate) macro_leaf_batch: usize,
+
     /// What an n-step return does when its checkpoint reports no root
     /// value. `zero` bootstraps with 0.0 (legacy); `mc` carries the
     /// weight to the terminal return instead of pulling the label toward
