@@ -629,37 +629,6 @@ fn leaf_value(
     crate::ai::evaluate_state(state, player)
 }
 
-/// EXP_ELO_125 (piece 4): cheap NN estimate of a candidate directive's
-/// post-turn value, WITHOUT executing it (no `execute_turn`/`rank_plies`
-/// call) — reads the `pi_rollout_value` head off the PARENT's pre-execution
-/// state with the candidate's own goal painted. `None` when the checkpoint
-/// predates this head or the active backend doesn't produce it; caller must
-/// fall back to full simulation in that case, same convention as
-/// `RawPolicyOutput::fog`/`macro_stance`.
-///
-/// Returns the value in `player`'s OWN perspective (matching the label this
-/// head is trained on: real per-ply rows where `pov` = the mover) — the
-/// caller must negate once to match `leaf_value`'s convention for a real
-/// child (`cn.player` = `other(player)`); see the sign-convention test.
-fn rollout_nn_value(
-    eval: &crate::ai::eval_server::Evaluator,
-    state: &crate::states::GameState,
-    player: PlayerId,
-    goal: &MacroGoal,
-) -> Option<f32> {
-    let feats = crate::ai::features::state_to_cpu_features_goal(state, player, None, Some(goal)).ok()?;
-    let raw = eval.evaluate(vec![feats]).into_iter().next()?.2;
-    raw.rollout_value
-}
-
-/// Outcome of `MacroMctsSearch::expand`: either a real child node (full
-/// `execute_turn` simulation ran) or a frozen edge (the cheap NN estimator
-/// scored it directly, no child `Node`/`GameState` exists for it).
-enum ExpandOutcome {
-    Node(usize),
-    Frozen(f32),
-}
-
 impl<'a> MacroMctsSearch<'a> {
     /// Run `sims` simulations from `root_game` (the acting player's fogged
     /// view) and return the winning root directive index. Root candidate 0
@@ -844,7 +813,7 @@ impl<'a> MacroMctsSearch<'a> {
     fn simulate(&mut self, root_idx: usize, root_turn: i32, params: &MacroParams) {
         let mut path: Vec<(usize, usize)> = Vec::new();
         let mut idx = root_idx;
-        let mut value: f32;
+        let value: f32;
         loop {
             if let Some(v) = self.nodes[idx].frozen_value {
                 value = v;
@@ -876,30 +845,45 @@ impl<'a> MacroMctsSearch<'a> {
                 break;
             }
             let depth = path.len();
-            match self.expand(idx, e, root_turn, params, depth) {
-                ExpandOutcome::Node(child) => {
-                    let cn = &self.nodes[child];
-                    value = cn.frozen_value.unwrap_or_else(|| {
-                        leaf_value(
-                            self.eval,
-                            self.leaf,
-                            &cn.game.state,
-                            cn.player,
-                            cn.counters[seat(cn.player)].tier3_bought,
-                            cn.from.as_ref().map(|(p, g)| (*p, g)),
-                        )
-                    });
+            let mut frozen: Option<f32> = None;
+            if let Some(feat) = self.try_freeze_rollout(idx, e, depth, params) {
+                if let Some(raw_value) =
+                    self.eval.evaluate(vec![feat]).into_iter().next().and_then(|r| r.2.rollout_value)
+                {
+                    frozen = Some(-raw_value);
                 }
-                ExpandOutcome::Frozen(v) => {
-                    self.nodes[idx].edge_frozen[e] = Some(v);
-                    value = v;
-                }
+            }
+            if let Some(v) = frozen {
+                self.nodes[idx].edge_frozen[e] = Some(v);
+                value = v;
+            } else {
+                let child = self.expand_execute(idx, e, root_turn, params);
+                let cn = &self.nodes[child];
+                value = cn.frozen_value.unwrap_or_else(|| {
+                    leaf_value(
+                        self.eval,
+                        self.leaf,
+                        &cn.game.state,
+                        cn.player,
+                        cn.counters[seat(cn.player)].tier3_bought,
+                        cn.from.as_ref().map(|(p, g)| (*p, g)),
+                    )
+                });
             }
             // The child's value is from the child's perspective; the edge we
             // just descended belongs to the parent, so negate once here and
             // once per level in the unwind below.
             break;
         }
+        self.backup(&path, value, 1);
+    }
+
+    /// Negamax unwind with edge-shaping rewards: `times` lets a wave's
+    /// deduped repeat pick of the SAME (parent, edge) back up its one real
+    /// result `times` times at once, instead of re-deriving it per pick.
+    /// `times=1` (today's only caller, until wave-batching lands) is
+    /// character-for-character today's loop.
+    fn backup(&mut self, path: &[(usize, usize)], mut value: f32, times: u32) {
         for &(pidx, e) in path.iter().rev() {
             // Negamax with edge rewards: the child's value arrives from the
             // child's perspective; the edge belongs to the parent, so
@@ -907,14 +891,46 @@ impl<'a> MacroMctsSearch<'a> {
             // reducing to the plain negation this replaced (EXP_ELO_036b).
             value = self.nodes[pidx].edge_shape[e] - value;
             let node = &mut self.nodes[pidx];
-            node.visits += 1.0;
-            node.edge_visits[e] += 1.0;
-            node.edge_values[e] += value;
+            node.visits += times as f32;
+            node.edge_visits[e] += times as f32;
+            node.edge_values[e] += value * times as f32;
         }
         self.stats.max_depth = self.stats.max_depth.max(path.len());
     }
 
-    fn expand(&mut self, parent: usize, edge: usize, root_turn: i32, params: &MacroParams, depth: usize) -> ExpandOutcome {
+    /// EXP_ELO_125 (piece 4) gate + feature extraction only -- no eval call,
+    /// no mutation. Returns the one feature row to price if `edge` is
+    /// eligible for the cheap rollout estimator (depth-gated variance
+    /// control; a candidate's goal is exactly as "uncommitted" here as at
+    /// the root, so root-adjacent edges always get full `execute_turn`
+    /// simulation instead). `None` when ineligible -- caller falls through
+    /// to `expand_execute`'s full simulation, same as an eval/feature
+    /// failure once the caller actually queries the evaluator.
+    fn try_freeze_rollout(
+        &self,
+        parent: usize,
+        edge: usize,
+        depth: usize,
+        params: &MacroParams,
+    ) -> Option<crate::ai::features::RawFeatures> {
+        if !(params.rollout_nn_w > 0.0 && depth > params.rollout_nn_min_depth) {
+            return None;
+        }
+        let p = &self.nodes[parent];
+        crate::ai::features::state_to_cpu_features_goal(
+            &p.game.state,
+            p.player,
+            None,
+            Some(&p.candidates[edge]),
+        )
+        .ok()
+    }
+
+    /// Full `execute_turn_net_greedy` simulation of `edge` off `parent`'s
+    /// state, creating and linking in a real child `Node`. This is Path C
+    /// (untouched by wave-batching) -- runs whenever `try_freeze_rollout`
+    /// didn't apply or its eval call came back empty.
+    fn expand_execute(&mut self, parent: usize, edge: usize, root_turn: i32, params: &MacroParams) -> usize {
         let (mut game, player, mut counters, mut lane_states, goal) = {
             let p = &self.nodes[parent];
             (
@@ -925,18 +941,6 @@ impl<'a> MacroMctsSearch<'a> {
                 p.candidates[edge].clone(),
             )
         };
-        // EXP_ELO_125 (piece 4): depth-gated cheap rollout estimator. A
-        // variance/importance control, NOT a fix for the root-painting-
-        // mismatch risk (a candidate's goal is exactly as "uncommitted" at
-        // this depth as at the root) -- root-adjacent edges (depth <=
-        // rollout_nn_min_depth) always get full execute_turn simulation,
-        // since root-level accuracy directly determines the real per-turn
-        // commit and piece 3's own root prior already covers the root.
-        if params.rollout_nn_w > 0.0 && depth > params.rollout_nn_min_depth {
-            if let Some(raw_value) = rollout_nn_value(self.eval, &game.state, player, &goal) {
-                return ExpandOutcome::Frozen(-raw_value);
-            }
-        }
         let s = seat(player);
         // EXP_ELO_036b: pre-move potential of THIS edge's directive, with one
         // GoalAux for both sides of the difference (the executor's
@@ -1016,7 +1020,7 @@ impl<'a> MacroMctsSearch<'a> {
                 child_state,
             );
         }
-        ExpandOutcome::Node(child_idx)
+        child_idx
     }
 }
 
