@@ -6,7 +6,7 @@ Currently it basically sits inside the game and "scrapes" what happens in replay
 
 ## 🛠 What it does
 - **Auto-Replay**: Opens and runs through replays on its own.
-- **Fast Forward**: Speeds up the game logic by 20x to get through games quickly.
+- **Fast Forward**: Logic speedup (up to 40x; experimental and currently commented out in `src/PolyfishAI.cs:42` to maintain animation timing stability during capture).
 - **Data Capture**: Sends game states and moves to a local server.
 
 ## 📥 How to use it

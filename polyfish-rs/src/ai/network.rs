@@ -183,7 +183,7 @@ pub struct PolyZeroNet {
     p_pool_conv: Conv2d,
     p_fc_shared: Linear,
 
-    pi_action: Linear, // Action type (12)
+    pi_action: Linear, // Action type (11)
     pi_source: Conv2d, // Spatial source
     pi_target: Conv2d, // Spatial target
     pi_option: Linear, // Unified 192 options head

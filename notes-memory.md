@@ -29,13 +29,15 @@ No per-turn decay pass. Store raw observations; compute decay at encode time
 from `turn - last_seen_turn`. Update is upsert-only + pruning.
 
 ```rust
-// states.rs
+// states.rs (implemented in polyfish-rs/src/states.rs:364-369)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MemUnit {
+    #[serde(rename = "type")]
     pub unit_type: UnitType,
-    pub health: f32,          // as last seen
-    pub owner: PlayerId,
+    pub hp_norm: f32,          // normalized health (health / max_hp as last seen)
     pub last_seen_turn: i32,
+    // Note: owner was omitted because memory maps are stored privately per-tribe.
 }
 
 // TribeState — both fields #[serde(default)] so old JSON/replays/mod captures load.

@@ -10,7 +10,7 @@ Polyfish is an AlphaZero-style AI (MCTS + neural network) that plays *The Battle
 
 - `polyfish-rs/` — Rust game engine, AI, web backend, and all training code. This is where ~all work happens.
 - `src/public/` — static web UI (JS/HTML/CSS), served by the Rust `polyfish` binary at `http://localhost:3000`.
-- `polyfish-ui/` — newer Vite/TypeScript UI. Note it contains a **forked copy** of the static UI under `polyfish-ui/public/simulator/`; the Rust server serves `src/public`, not either copy here. Check which one you're editing.
+- `polyfish-ui/` — newer Vite/TypeScript UI. Note it contains a **forked copy** of the static UI under `polyfish-ui/public/simulator/`; the Rust server serves the built `polyfish-ui/dist` (with `src/public` as a legacy fallback), not either source copy. Check which one you're editing.
 - `polyfish-mod/` — C# mod (BepInEx/PolyMod) that runs inside the real Steam game to auto-play replays and POST captured game states to the local server.
 - `polyfish-scraper/` — TypeScript utilities for gathering game data/assets.
 - `polyfish-reader` — the C++ process-memory ripper. **Not checked into this repo**; `scan.sh` compiles and invokes it against a running `Polytopia.exe`.
@@ -20,11 +20,11 @@ Polyfish is an AlphaZero-style AI (MCTS + neural network) that plays *The Battle
 
 All `cargo` commands run from `polyfish-rs/`. The root `run-server.sh` and `polyfish-rs/run_training_loop.sh` `cd` there for you.
 
-**Run the web server / simulator** (port 3000, serves `src/public`):
+**Run the web server / simulator** (port 3000, serves the built `polyfish-ui/dist` with `src/public` as fallback):
 ```bash
 ./run-server.sh                      # from repo root; kills :3000, then `cargo run --bin polyfish`
 ```
-On startup `main.rs` tries to load game state from `live_game.json`, `saved_state.json`, then the newest `replays/mod_replay_*.json`, before falling back to a generated map.
+On startup `main.rs` tries to load game state from `live_game.json`, `saved_state.json`, then the newest `replays/*.replay.json`, before falling back to a generated map.
 
 **Build the training binaries** (release is required for any real training):
 ```bash
@@ -96,7 +96,7 @@ Pass `--seed` for anything you intend to compare: without it `arena` seeds from 
 - `mapper.rs` — `DecomposedMapper` / `DecomposedTargets`: the policy is decomposed into four heads — `action_type`, `source_spatial` (H·W), `target_spatial` (H·W), and a unified `move_option` (192, with offset blocks for structures/units/techs/abilities). This decomposition exists because raw legal-move ordering is non-deterministic across states, so moves are mapped to stable semantic coordinates instead of a flat action index.
 - `evaluator/` — heuristic state evaluation split by concern: `economy.rs`, `army.rs`, `research.rs`, `exploration.rs`, `expansion.rs`, `gamestate.rs`, `player.rs`. Used to shape/guide self-play and for non-NN play.
 - `reward.rs` — the shared per-move reward used by both TD value labels and reward-aware MCTS backup. `reward::REL_W` is now the **single** relative-vs-absolute constant, read by both the TD body and self_play's final-outcome tail (`self_play.rs`'s separate `FINAL_OUTCOME_REL_W` is gone). It is 1.0 = pure relative, because the backup negates across every player-turn boundary and that is only valid for an antisymmetric value. Read the comment block on the constant before lowering it; `GOOD_BOT_FINAL_SCORE` is the absolute yardstick it would reintroduce.
-- `book.rs` — opening-move library; `ordering.rs` — move ordering; `policy_composer.rs` — assembles head outputs into a move distribution; `decision_trace.rs` — search introspection.
+- `book.rs` — opening-move library; `scoring.rs` — move ordering & heuristics; `policy_composer.rs` — assembles head outputs into a move distribution; `decision_trace.rs` — search introspection.
 
 ### Inference backends
 Four implementations read the same `model.safetensors`, selected by Cargo feature:
@@ -118,7 +118,7 @@ If you change layer shapes, channel counts, or head sizes in one, you must mirro
 
 **Resolved trap, kept as context:** `network.rs` used to export `NUM_ACTION_TYPES = 12` for the self-play/replay writers while building `pi_action` with a hardcoded `11` in both `network.rs` and `train.py` — so every target the writers produced was one column wider than the head, because `mapper.rs` maps `MoveType::Resign → 11`. Both sides now derive from the constant (`network.rs:10`, layer at `:227`; `train.py:96`, layer at `:165`), a const assertion keeps `Resign` inside the head (`network.rs:20`), and `tests/parity_widths.rs` fails the build if the Rust and Python widths ever disagree again. Add the same kind of assertion for any new width you introduce. Note `ResignMove` is still never emitted by `generate_legal_moves`, so slot 11 gets no self-play gradient — widening the head did not make resignation learnable.
 
-**Exception:** the `aux_*` heads (train.py `AUX_DIMS`: ownership/fog/SPT+5/opp-tech) are training-only and deliberately NOT mirrored in Rust — every Rust backend loads weights by name and ignores the extra keys. Do not add them to `network.rs`, and never save `model.safetensors` from `src/bin/train.rs` (candle `VarMap::save` strips them; it saves to `model_candle.safetensors` instead).
+**Exception:** the auxiliary head in train.py (`v_ownership`, predicting end-of-game per-tile ownership; previously multi-aux `AUX_DIMS` on branch `add-aux-heads-to-model`) is training-only and deliberately NOT mirrored in Rust — every Rust backend loads weights by name and ignores extra keys. Do not add them to `network.rs`, and never save `model.safetensors` from `src/bin/train.rs` (candle `VarMap::save` strips them; it saves to `model_candle.safetensors` instead).
 
 ### Runtime switch: adversarial in-tree search
 `game::adversarial_search()` decides whether an in-tree `EndTurn` hands control to the next player (adversarial) or cycles straight back to the mover, deleting the opponent's turn (the legacy single-player behaviour). **Default off.** Enable with `POLYFISH_ADVERSARIAL_SEARCH=1`, `game::set_adversarial_search(true)`, or `arena --adversarial`; it is process-wide and read on every in-tree `EndTurn`, so tests that touch it must serialize. With it on, `clone_for_mcts` also confines the in-tree opponent to the root player's vision, so the opponent it searches against is a belief-state army, not the real one. Nothing in `run_training_loop.sh` sets it — it is an unmeasured arm, registered as EXP_SEARCH_001.

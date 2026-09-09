@@ -25,7 +25,7 @@ Score is all that matters?
 - Captures (enemy capitals -> ruins -> cities -> villages)
 - Unit attacks and kills
 - [IMPLEMENTED] Harvest & Builds that generate instant pop gain:
-  - Unified logic in `ordering.rs` [IMPLEMENTED]
+  - Unified logic in `scoring.rs` [IMPLEMENTED]
   - Prioritizes moves that complete a city level-up (+5.0 bonus) over moves that
     don't (-4.0 penalty).
 - [IMPLEMENTED] Adjacency structures sorted by most gain (Lonely=-2, 2adj=+5,
@@ -65,7 +65,9 @@ Score is all that matters?
 
 ```text
 maxExploration = 0.8
-formula: (explored - total * (1 - maxExploration)) / (total * maxExploration)
+minThreshold = 1 - maxExploration = 0.2
+spread = maxExploration - minThreshold = 0.6
+formula: (explored - total * minThreshold) / (total * spread)
     Will reward 1 when exploring (maxExploration * 100)% of the map
 ```
 
@@ -98,7 +100,7 @@ formula: (explored - total * (1 - maxExploration)) / (total * maxExploration)
   - Mid game: Balanced
   - Late game: Military Dominance
 
-### Rewards: [IMPLEMENTED] (Via `ordering::score_reward` — context-aware per slot)
+### Rewards: [IMPLEMENTED] (Via `scoring::score_reward` — context-aware per slot)
 
 - **Workshop:** Safest best, +1 SPT.
 - **Explorer**: Not best on the first turn, unless there are many tribes to gain
@@ -133,7 +135,7 @@ formula: (explored - total * (1 - maxExploration)) / (total * maxExploration)
 
 ### Structures
 
-- Sawmill, Forge, Market, Windmill: [IMPLEMENTED] (Via `ordering.rs` adjacency
+- Sawmill, Forge, Market, Windmill: [IMPLEMENTED] (Via `scoring.rs` adjacency
   count scoring — lonely=-2, 2adj=+5, 3adj=+12, 4+=+18)
   - Always build these in the spots where you can maximise the amount of
     population gained.
@@ -145,7 +147,7 @@ formula: (explored - total * (1 - maxExploration)) / (total * maxExploration)
   - Bonus scales with existing prerequisites surrounding the same hub-spot (+2.5
     per prerequisite).
 
-- Roads: [IMPLEMENTED] (Via `ordering.rs` `score_road()` — manhattan-distance
+- Roads: [IMPLEMENTED] (Via `scoring.rs` `score_road()` — manhattan-distance
   path scoring between city pairs, unconnected city bonus +8, on-path +5, adj
   road +2, adj city +3)
   - Prioritize roads that connect unconnected cities to capital
@@ -154,7 +156,7 @@ formula: (explored - total * (1 - maxExploration)) / (total * maxExploration)
 
 - Temple Timing: [IMPLEMENTED] IN PERFECTION MODE, build temples by **Turn 19**
   to ensure they reach max level (Level 5) by Turn 30. Temples built on Turn
-  29/30 are useless for leveling. (Via `ordering.rs` temple bonus in
+  29/30 are useless for leveling. (Via `scoring.rs` temple bonus in
   `MoveType::Build`)
 
 ### Military

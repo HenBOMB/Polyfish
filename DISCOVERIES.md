@@ -9,8 +9,8 @@ Every discovery documented below carries exact citations to the repository files
 ## 1. Search & MCTS Tree Dynamics
 
 ### 1.1 The Value Backpropagation Sign Error
-* **Discovered by**: Verdi Kapuku
-* **Citation**: [notes.md:79-87](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes.md#L79-L87)
+* **Discovered by**: Diagnosed by Claude Fable ([expert_review.md:11-13](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/expert_review.md#L11-L13)); Verified & Fixed by Verdi Kapuku ([notes.md:79-87](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes.md#L79-L87))
+* **Citations**: [expert_review.md:11-13, 72-99](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/expert_review.md#L11-L13), [notes.md:79-87](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes.md#L79-L87)
 * **Finding**: In standard two-player games (like Chess), acting players alternate every move. In Polytopia, a player makes ~8–15 sequential moves per turn before calling `EndTurn`. MCTS backpropagation was negating the value sign on every tree edge (`value = -value`). As a consequence, during selection parents frequently preferred children whose evaluations were destructive to the acting player.
 * **Fix**: Value polarity was anchored to player ID transitions across `EndTurn` boundaries rather than edge depth parity.
 

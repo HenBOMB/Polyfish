@@ -65,7 +65,7 @@ Instrumentation, not behavior. The first-village metric counted a no-capture gam
 Separate capture *rate* from capture *speed*; make the turn-4.5–5.5 bar directly measurable per tribe pair.
 
 ### Actual Results
-Revealed the old model's rate was ~0.8 — censoring alone inflated t2c by ~1.5–2 turns, and Oumaji/rider pairs run ~5.5 while warrior pairs ran 7–8. New CSV columns (`villages_first_rate`, `villages_t2c_first_cond`, `tribes`) + dashboard lines. **Verdict: COMMITTED.**
+Revealed the old model's rate was ~0.8 — censoring alone inflated t2c by ~1.5–2 turns, and Oumaji/rider pairs run ~5.5 while warrior pairs ran 7–8. New CSV columns (`villages_first_rate`, `villages_t2c_first_cond`, `tribes`) + dashboard lines were evaluated; in the canonical training log header ([polyfish-rs/training_log.py:53](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/training_log.py#L53)), first-village timing was consolidated into `villages_t2c_first`. **Verdict: COMMITTED.**
 
 ## EXP 3: Deeper search — Gumbel 64 → 256 sims
 *Jul 10, 2026 · REJECTED*
