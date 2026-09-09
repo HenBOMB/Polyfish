@@ -112,12 +112,12 @@ Every discovery documented below carries exact citations to the repository files
 
 ### 4.2 BatchNorm to GroupNorm Migration
 * **Discovered by**: Verdi Kapuku
-* **Citations**: [CLAUDE.md:76](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/CLAUDE.md#L76), commit `d8e45d12`
+* **Citations**: [CLAUDE.md:150-153](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/CLAUDE.md#L150-L153), commit `d8e45d12`
 * **Finding**: BatchNorm created severe evaluation-time discrepancies due to mismatched running statistics between single-leaf inference and large training batches. Replaced with GroupNorm (`GN_GROUPS = 8`), unifying forward pass behavior across training and self-play.
 
 ### 4.3 Linear Pooling Paths (Dying ReLU Prevention)
 * **Discovered by**: HenBOMB
-* **Citation**: [CLAUDE.md:76](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/CLAUDE.md#L76), commit `7c994745`
+* **Citation**: [CLAUDE.md:150-153](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/CLAUDE.md#L150-L153), commit `7c994745`
 * **Finding**: The 1-channel spatial pooling convolutions (`p_pool_conv`) originally used un-normalized ReLU activations, which caused irreversible dead-neuron collapse. Kept the pooling convs fully linear (no norm, no activation).
 
 ---
@@ -158,5 +158,5 @@ Every discovery documented below carries exact citations to the repository files
 
 ### 6.3 Live Steam Game Injection
 * **Discovered by**: HenBOMB
-* **Citation**: Commit `b0da6111` on branch `test-bot-execution`, [PolyfishBot.cs:1-50](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-mod/src/PolyfishBot.cs#L1-L50)
+* **Citation**: Commit `b0da6111` on branch `test-bot-execution` (`polyfish-mod/src/PolyfishBot.cs:1-50`)
 * **Finding**: Implemented `SendCommand` integration inside the C# BepInEx/PolyMod suite, proving the trained engine can play the live commercial Steam game in real time.
