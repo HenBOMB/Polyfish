@@ -301,3 +301,18 @@ natively (a native binary gives clean symbolicated sample/Instruments output,
 which the Rosetta run couldn't) before touching the tree internals — the game
 logic vs. tree-bookkeeping split may look quite different at native speed, and
 tree reuse + eval cache likely beat micro-optimizing either one.
+
+---
+
+> **⚠️ STALENESS DISCLAIMER (Sep 2026):** This review is a point-in-time
+> snapshot and several claims no longer match the current codebase:
+> - `default_max_score()` is now **20000**, not 5000 (§2c).
+> - The value target formula (`tanh(score_diff / 5000)`) has been entirely
+>   replaced by a TD-lambda + win/loss outcome mixing system.
+> - `NUM_CHANNELS` is now **142**, not the 154 cited in §CPU Speedup.
+> - The `--features cuda` flag (§1.1) has been enabled in
+>   `run_training_loop.sh`.
+> - The sign bug (§2a) and terminal-leaf-returns-0 (§2b) have been fixed.
+> - Book-move pollution (§2d) and temperature sampling have been addressed.
+>
+> Treat this document as historical context, not current guidance.
