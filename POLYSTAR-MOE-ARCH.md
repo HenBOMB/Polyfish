@@ -58,6 +58,11 @@ $$\mathbf{X} = [\mathbf{M}_{0..120}; \, \mathbf{U}_{0..31}; \, \mathbf{C}_{0..15
 
 ### 3.1 Spatial Map Tokens ($M \in \mathbb{R}^{121 \times 384}$, Slice `0..121`)
 - **Input Channels**: 142 channels preserving [`features.rs:128`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/features.rs#L128) and [`train.py:397`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/train.py#L397), including 6 fog memory channels ([`features.rs:116-125`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/features.rs#L116-L125)).
+- **Unsigned Normalization & `uint8` Quantization**: To support compact `uint8` storage without negative truncation or underflow, owner channels (`CH_TILE_OWNER`, `CH_UNIT_OWNER`, `CH_CITY_OWNER`; [`features.rs:399-405, 488-490, 589-591`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/features.rs#L399-L405)) are remapped from legacy $\{-1.0, 0.0, 1.0\}$ to non-negative floats:
+  - $\text{Self} / \text{Friendly} = 1.0$ (quantized to $255$)
+  - $\text{Enemy} = 0.5$ (quantized to $128$)
+  - $\text{Neutral} / \text{Unoccupied} = 0.0$ (quantized to $0$)
+  This bounds all 142 channels strictly into $[0.0, 1.0]$. In Rust, spatial maps are serialized as `uint8` via `(feat * 255.0).round().clamp(0.0, 255.0) as u8`. In PyTorch, they are dequantized to float via `spatial_maps = spatial_maps.float() / 255.0`.
 - **Projection**: $1 \times 1$ pointwise convolution maps $142 \to 384$ (`conv_spatial`).
 - **Position Embedding**: Learnable spatial positional embedding table $\mathbf{E}_{\text{pos}} \in \mathbb{R}^{121 \times 384}$ indexed per tile $(x, y) \in [0, 10] \times [0, 10]$ ([`features.rs:17`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/features.rs#L17)). This positional table is shared with unit and city tokens to ground entities directly into map coordinates.
 
@@ -180,6 +185,10 @@ $$\mathbf{X}^{(l)} = \mathbf{M} \odot \left( \mathbf{X}' + [\mathbf{H}_{\text{sp
 
 Applying the composite mask $\mathbf{M}$ after **both** attention and FFN residuals guarantees that inactive query outputs cannot pollute padded entity slots, preventing bias accumulation and phantom activations across the 12 Transformer layers. In self-attention, inactive key slots are masked with $-\infty$ so active tokens never attend to padded entities. Furthermore, multiplying each expert FFN output by $\mathbf{M}_U$ / $\mathbf{M}_C$ ensures that the LayerNorm bias $\beta$ evaluated on padded zero vectors is strictly suppressed before reaching the residual stream.
 
+*Dual-Stack Attention Mask Convention*:
+- **PyTorch (`nn.MultiheadAttention`)**: `key_padding_mask` expects a boolean tensor where `True` indicates values that must be **ignored** (masked out) and `False` indicates positions that participate in attention. Therefore, PyTorch code must pass the logical negation of the sequence mask: `key_padding_mask = ~composite_mask.bool()` (or `composite_mask == 0`).
+- **Rust Candle**: Operates via additive attention logit biases before softmax: `let scores = scores.broadcast_add(&attn_bias)?;`, where active tokens have `0.0` and padded tokens have `-1e9` (or `-f32::INFINITY`).
+
 ### 4.2 Expert Specifications
 Each expert MLP consists of two linear projections with GELU activation:
 $$\text{MLP}_e(\mathbf{z}) = \mathbf{W}_{e, 2} \, \text{GELU}(\mathbf{W}_{e, 1} \, \mathbf{z} + \mathbf{b}_{e, 1}) + \mathbf{b}_{e, 2}$$
@@ -220,12 +229,14 @@ Each token activates only one expert MLP per layer, delivering the full represen
 This mechanism resolves the head multiplication collapse in [`policy_composer.rs:69-105`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/policy_composer.rs#L69-L105) and fixes the state-independent logit defect for target-only moves (`Build`, `Harvest`, `Reward`).
 
 ### 5.1 Appended Null Representation for Branchless Gather
-To prevent out-of-bounds indexing in tensor evaluation, the output representations of the final Transformer layer $\mathbf{X}^{(12)} \in \mathbb{R}^{B \times 170 \times 384}$ are first normalized by the final Pre-LN layer `norm_f`:
-$$\mathbf{X}_{\text{norm}} = \text{norm\_f}(\mathbf{X}^{(12)}) \in \mathbb{R}^{B \times 170 \times 384}$$
+To prevent out-of-bounds indexing in tensor evaluation, the output representations of the final Transformer layer $\mathbf{X}^{(12)} \in \mathbb{R}^{B \times 170 \times 384}$ are first normalized by the final Pre-LN layer `norm_f` and masked with the composite mask $\mathbf{M}$:
+$$\mathbf{X}_{\text{norm}} = \mathbf{M} \odot \text{norm\_f}(\mathbf{X}^{(12)}) \in \mathbb{R}^{B \times 170 \times 384}$$
 and then appended with an explicit all-zero token at index $170$:
 $$\mathbf{X}_{\text{eval}} = [\mathbf{X}_{\text{norm}}; \, \mathbf{0}_{B \times 1 \times 384}] \in \mathbb{R}^{B \times 171 \times 384}$$
 
-*Critical Order Invariant*: The null token $\mathbf{0}$ must be appended **after** `norm_f`. If $\mathbf{0}$ were appended before `norm_f`, evaluating $\text{LayerNorm}(\mathbf{0})$ would produce the learnable bias $\beta_{\text{norm\_f}} \ne \mathbf{0}$. This would corrupt the null token into a non-zero vector, causing linear projections $\mathbf{W}_S, \mathbf{W}_T, \mathbf{W}_{ST}$ to emit non-zero activations at index 170 and destroying the branchless zeroing of inactive affordances.
+*Critical Order Invariant*: The composite mask $\mathbf{M}$ is applied immediately after `norm_f` ($\mathbf{X}_{\text{norm}} = \mathbf{M} \odot \text{norm\_f}(\mathbf{X}^{(12)})$) before appending the null token at index 170. This accomplishes two strict invariants:
+1. It suppresses the LayerNorm bias $\beta_{\text{norm\_f}}$ evaluated on zero vectors across inactive entity slots $[121, 168]$, ensuring that unused entity slots remain strictly $\mathbf{0}$.
+2. The null token $\mathbf{0}$ is appended **after** `norm_f`, avoiding the learnable bias $\beta_{\text{norm\_f}} \ne \mathbf{0}$ from corrupting index 170 into a non-zero vector. This guarantees that gathering index 170 or inactive entity slots through unbiased linear projections $\mathbf{W}_S, \mathbf{W}_T, \mathbf{W}_{ST}$ mathematically yields zero activations without branch conditions.
 
 1. The Rust engine queries legal moves $L(s) = [m_1, \dots, m_K]$ via `game.legal_moves()`.
 2. Each legal move $m_i$ provides:
@@ -233,7 +244,9 @@ $$\mathbf{X}_{\text{eval}} = [\mathbf{X}_{\text{norm}}; \, \mathbf{0}_{B \times 
    - Option index $o \in [0, 192]$ ([`train.py:148`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/train.py#L148), [`mapper.rs:38-43`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/mapper.rs#L38-L43)), where $[0, 191]$ embed structures, units, techs, abilities, and rewards, while reserved index $o = 192$ represents `NO_OPTION` for non-option plies, preventing gradient pollution into structure slot 0.
    - Source token index $s_i \in [0, 170]$: points to unit entity slot in $[121, 152]$ (slice `121..153`), city entity slot in $[153, 168]$ (slice `153..169`), or null token index $170$.
    - Target token index $t_i \in [0, 170]$: points to destination tile in $[0, 120]$ (slice `0..121`) (e.g. `Step`, `Build`, `Harvest`, tile-targeted abilities), target enemy unit in $[121, 152]$ (slice `121..153`) for `Attack`, city entity in $[153, 168]$ (slice `153..169`) for `Reward`, or null token index $170$. Under the selection priority in Section 3.2, in-range enemy units are guaranteed entity slots, ensuring $t_i$ for `Attack` strictly resolves to a unit token $[121, 152]$ and preventing semantic manifold conflict with spatial tile tokens.
-   - **Engine-to-Token Index Resolution**: Because [`Move::source_idx()`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/mapper.rs#L104-L107) and [`Move::target_idx()`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/mapper.rs#L109-L112) in the Rust engine return raw board tile indices ($0..120$ on an $11 \times 11$ map; e.g. [`moves/reward.rs:196-198`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/moves/reward.rs#L196-L198), [`moves/summon.rs:74-76`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/moves/summon.rs#L74-L76)), the feature extractor builds two reverse-lookup tables: `tile_to_unit_slot: [Option<usize>; 121]` and `tile_to_city_slot: [Option<usize>; 121]`. These map board tile coordinates to unit slots $[121, 152]$ or city slots $[153, 168]$, resolving moves into candidate token indices $s_i, t_i$ branchlessly.
+   - **Engine-to-Token Index Resolution**: Because [`Move::source_idx()`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/mapper.rs#L104-L107) and [`Move::target_idx()`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/mapper.rs#L109-L112) in the Rust engine return raw board tile indices ($0..120$ on an $11 \times 11$ map; e.g. [`moves/reward.rs:196-198`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/moves/reward.rs#L196-L198), [`moves/summon.rs:74-76`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/moves/summon.rs#L74-L76)), the feature extractor builds two reverse-lookup tables: `tile_to_unit_slot: [Option<usize>; 121]` and `tile_to_city_slot: [Option<usize>; 121]`.
+     - **City vs Unit Fallback for `MoveType::Summon`**: In the Rust engine, naval unit upgrades (`UpgradeMove` in [`moves/upgrade.rs:29, 74`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/moves/upgrade.rs#L29)) reuse `MoveType::Summon`, but act on an existing unit (e.g. Boat $\to$ Ship in water), reporting the unit's tile coordinate via `source_idx()`. Therefore, `MoveType::Summon` resolves $s_i$ by checking `tile_to_city_slot[src_tile]` first, and if `None`, falling back to `tile_to_unit_slot[src_tile]` (resolving naval upgrades to the unit entity slot $[121, 152]$), with final fallback to raw tile `src_tile` in $[0, 120]$.
+     - **Ability Move Asymmetry**: In the engine, `BreakIceMove` ([`moves/abilities/break_ice.rs:88-90`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/moves/abilities/break_ice.rs#L88-L90)) reports the ice tile as `source_idx` with null target ($s_i \in [0, 120], t_i = 170$), whereas `ClearForestMove` ([`moves/abilities/forest.rs:55-57`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/moves/abilities/forest.rs#L55-L57)) reports the forest tile as `target_idx` with null source ($s_i = 170, t_i \in [0, 120]$). The extractor handles both conventions branchlessly through candidate coordinate assignment.
 3. The move query representation is computed from learned embedding tables:
    $$\mathbf{q}(m_i) = \mathbf{E}_{\text{action}}[a] + \mathbf{E}_{\text{option}}[o] \in \mathbb{R}^{384}$$
 4. The move logit evaluates four contextual interactions, scaled by $\frac{1}{\sqrt{d_{\text{model}}}}$ to ensure stable logit variance and prevent premature softmax saturation:
@@ -274,12 +287,14 @@ Because $\mathbf{X}_{\text{eval}}[170] = \mathbf{0}$ and $\mathbf{W}_S, \mathbf{
   $s_i = 170, t_i = 170 \implies \mathbf{h}_{\text{source}} = \mathbf{0}, \mathbf{h}_{\text{target}} = \mathbf{0}$.
   $$\text{logit}(m_i) = \mathbf{q}(\text{EndTurn}, 192)^T \mathbf{W}_G \mathbf{h}_G$$
   Dynamically evaluates whether to end the turn based on whether remaining stars or unmoved units can deliver further advantage, using reserved option index $192$.
-- **`MoveType::Summon` / `Train` at City $C$ ([`types.rs:708`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/types.rs#L708))**:
-  $s_i \in [153, 168] \implies \mathbf{h}_{\text{source}} = \mathbf{h}_{\text{city}}, \, t_i = 170 \implies \mathbf{h}_{\text{target}} = \mathbf{0}$.
-  $$\text{logit}(m_i) = \mathbf{q}(\text{Summon}, u)^T \mathbf{W}_G \mathbf{h}_G + \mathbf{q}(\text{Summon}, u)^T \mathbf{W}_S \mathbf{h}_{\text{city}}$$
-  Balances empire budget against local city production and defense needs.
-- **`MoveType::Ability` (Promote, Heal, Freeze, Convert, Disband)**:
-  $s_i \in [121, 152] \implies \mathbf{h}_{\text{source}} = \mathbf{h}_{\text{unit}}$. If untargeted (Promote, Disband, Recover, Explode), $t_i = 170$; if unit-targeted (Freeze enemy, Heal ally, Convert), $t_i \in [121, 152]$; if tile-targeted (BreakIce, BurnForest, ClearForest), $t_i \in [0, 120]$.
+- **`MoveType::Summon` / `Train` / Naval `Upgrade` ([`types.rs:708`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/types.rs#L708))**:
+  For land summoning, $s_i \in [153, 168] \implies \mathbf{h}_{\text{source}} = \mathbf{h}_{\text{city}}, \, t_i = 170 \implies \mathbf{h}_{\text{target}} = \mathbf{0}$. For naval `UpgradeMove` ([`moves/upgrade.rs:29, 74`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/moves/upgrade.rs#L29)), $s_i \in [121, 152] \implies \mathbf{h}_{\text{source}} = \mathbf{h}_{\text{unit}}, \, t_i = 170 \implies \mathbf{h}_{\text{target}} = \mathbf{0}$.
+  $$\text{logit}(m_i) = \mathbf{q}(\text{Summon}, u)^T \mathbf{W}_G \mathbf{h}_G + \mathbf{q}(\text{Summon}, u)^T \mathbf{W}_S \mathbf{h}_{\text{source}}$$
+  Balances empire budget against local city production needs or upgrading an existing naval unit.
+- **`MoveType::Ability`**:
+  - **Untargeted Unit Abilities** (`Promote`, `Disband`, `Recover`, `Explode`, `FreezeArea`, `HealOthers`): $s_i \in [121, 152] \implies \mathbf{h}_{\text{source}} = \mathbf{h}_{\text{unit}}, \, t_i = 170 \implies \mathbf{h}_{\text{target}} = \mathbf{0}$. In the engine, `FreezeAreaMove` ([`moves/abilities/freeze_area.rs:9`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/moves/abilities/freeze_area.rs#L9)) and `HealOthersMove` ([`moves/abilities/heal_others.rs:9`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/moves/abilities/heal_others.rs#L9)) are AoE abilities centered on the acting unit with no target coordinate ($t_i = 170$).
+  - **Unit-Targeted Abilities** (`ConvertMove` in [`moves/abilities/convert.rs:7`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/moves/abilities/convert.rs#L7)): $s_i \in [121, 152]$ (MindBender), $t_i \in [121, 152]$ (enemy unit).
+  - **Tile-Targeted Abilities**: `ClearForestMove` ([`moves/abilities/forest.rs:12, 55`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/moves/abilities/forest.rs#L12)) and `BurnForestMove` have no unit source ($s_i = 170$) and target tile $t_i \in [0, 120]$. `BreakIceMove` ([`moves/abilities/break_ice.rs:9, 88`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/moves/abilities/break_ice.rs#L9)) reports the ice tile as `source_idx`, which resolves as $s_i \in [0, 120], t_i = 170$.
 - **`MoveType::Step` / `MoveType::Attack` ([`types.rs:705-706`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/types.rs#L705-L706))**:
   $o = 192$. For `Step`, $t_i \in [0, 120]$ targets destination tile; for `Attack`, $t_i \in [121, 152]$ targets the enemy unit entity. All four terms fire, simultaneously evaluating campaign strategy ($\mathbf{h}_G$), acting unit role ($\mathbf{h}_{\text{source}}$), destination/enemy affordance ($\mathbf{h}_{\text{target}}$), and mutual source-target combat interaction ($\mathbf{h}_{\text{source}}^T \mathbf{W}_{ST} \mathbf{h}_{\text{target}}$).
 
@@ -287,7 +302,7 @@ Because $\mathbf{X}_{\text{eval}}[170] = \mathbf{0}$ and $\mathbf{W}_S, \mathbf{
 
 ## 6. Critic Value Head & Alternating Two-Player GAE
 
-The Critic pools representations from the normalized sequence $\mathbf{X}_{\text{norm}} = \text{norm\_f}(\mathbf{X}^{(12)}) \in \mathbb{R}^{B \times 170 \times 384}$ (prior to null vector appending):
+The Critic pools representations from the normalized sequence $\mathbf{X}_{\text{norm}} = \mathbf{M} \odot \text{norm\_f}(\mathbf{X}^{(12)}) \in \mathbb{R}^{B \times 170 \times 384}$ (prior to null vector appending):
 $$\mathbf{z}_{\text{val}} = \text{GELU}(\mathbf{W}_2 \text{GELU}(\mathbf{W}_1 [\mathbf{h}_G; \, \bar{\mathbf{h}}_M; \, \bar{\mathbf{h}}_U; \, \bar{\mathbf{h}}_C]))$$
 $$V(s) = \tanh(\mathbf{w}_{\text{win}}^T \mathbf{z}_{\text{val}}) \in [-1, +1]$$
 where:
@@ -363,6 +378,16 @@ For Phase 2 PPO rollouts and alternating GAE, trajectory buffers record both sta
   - `player_ids`: $[B]$ (`uint8`, acting player id, required for alternating GAE sign flips and trainee masking)
   - `dones`: $[B]$ (`uint8`, `1` at game termination, resetting GAE advantage accumulation)
 
+*PyTorch Ingestion & Type Casting*:
+- **Spatial Map Dequantization**: `spatial_maps` are packed as `uint8` (with $1.0 \to 255, 0.5 \to 128, 0.0 \to 0$) and dequantized upon batch loading via `spatial_maps = batch["spatial_maps"].float() / 255.0`.
+- **Candidate Index LongTensor Conversion**: Although candidate indices (`cand_actions`, `cand_options`, `cand_source_idx`, `cand_target_idx`) are packed as `uint8` to conserve disk and host memory, PyTorch `nn.Embedding` and `torch.gather` strictly require `torch.int64` (`torch.long`). Training code must cast them via `.long()`:
+  ```python
+  cand_actions = batch["cand_actions"].long()
+  cand_options = batch["cand_options"].long()
+  cand_source_idx = batch["cand_source_idx"].long()
+  cand_target_idx = batch["cand_target_idx"].long()
+  ```
+
 ### 7.2 Phase 1: Joint Supervised Behavioral Cloning & Critic Warmup
 - **Storage-Optimized Data Generation**: Storing spatial maps and candidate indices as `uint8` reduces the storage footprint per step from ~76 KB down to ~19 KB. An extraction run of 12,000 games played between heuristic bots (`ai/evaluator/`) and baseline checkpoints generates ~1,000,000 training steps requiring only ~19 GB of disk storage, comfortably fitting within the host machine's 50 GB storage budget.
 - **Joint Warmup Objective**: Train for 15 epochs minimizing joint behavioral cloning policy cross-entropy and critic outcome loss:
@@ -417,19 +442,19 @@ As required by [`CLAUDE.md:135-165`](file:///mnt/hen480/henry/Escritorio/Coding/
 ### Sequential Rollout Milestones:
 1. **Step 1 (`polyfish-rs/src/ai/features.rs`)**:
    Implement `state_to_moe_features`:
-   - Spatial map tensor ($142 \times 11 \times 11$, `uint8`).
+   - Spatial map tensor ($142 \times 11 \times 11$, `uint8`, owner channels remapped to $\text{self}=1.0, \text{enemy}=0.5, \text{neutral}=0.0$, serialized via `(feat * 255.0).round().clamp(0.0, 255.0) as u8`).
    - Unit entity synchronized tensors: continuous features `unit_features` ($32 \times 10$ `float32`), categorical `unit_types` ($32$ `int64`), `unit_owners` ($32$ `int64`), `unit_tiles` ($32$ `int64`), and boolean entity mask `unit_mask` ($32$ `uint8`).
    - City entity synchronized tensors: continuous features `city_features` ($16 \times 8$ `float32`), categorical `city_owners` ($16$ `int64`), `city_tiles` ($16$ `int64`), and boolean entity mask `city_mask` ($16$ `uint8`), querying discovered cities and neutral villages from `state.structures`.
    - Global context vector ($30$ `float32`).
-   - Reverse-lookup tables `tile_to_unit_slot: [Option<usize>; 121]` and `tile_to_city_slot: [Option<usize>; 121]` to resolve raw engine move coordinates into entity tokens.
+   - Reverse-lookup tables `tile_to_unit_slot: [Option<usize>; 121]` and `tile_to_city_slot: [Option<usize>; 121]` to resolve raw engine move coordinates into entity tokens, supporting city/unit fallback for `UpgradeMove` (`MoveType::Summon`) and asymmetry between `BreakIceMove` and `ClearForestMove`.
 2. **Step 2 (`polyfish-rs/src/ai/network.rs` & `train_moe.py`)**:
-   Implement `PolyStarMoeNet` (12-layer, $d=384$ Pre-LN Transformer with 3 sliced expert MLPs, composite mask application, scaled bilinear pointer, pure $V_{\text{win}}$ value head, and branchless null vector padding appended after `norm_f`) in Candle and PyTorch.
+   Implement `PolyStarMoeNet` (12-layer, $d=384$ Pre-LN Transformer with 3 sliced expert MLPs, composite mask application, scaled bilinear pointer, pure $V_{\text{win}}$ value head, dual-stack attention mask compatibility with inverted PyTorch `key_padding_mask`, and branchless null vector padding appended after `M`-masked `norm_f`) in Candle and PyTorch.
 3. **Step 3 (`polyfish-rs/src/ai/policy_composer.rs`)**:
    Implement `compute_moe_pointer_priors` evaluating legal candidate logits via vectorized gather and scaled four-component bilinear formulations ($\mathbf{W}_G, \mathbf{W}_S, \mathbf{W}_T, \mathbf{W}_{ST}$).
 4. **Step 4 (`polyfish-rs/src/bin/self_play.rs`)**:
    Add `--backend moe-policy` mode to execute rollouts using batched reactive policy evaluation without MCTS simulation loops, serializing candidate tensors (`cand_actions`, `cand_options`, `cand_source_idx`, `cand_target_idx`, `cand_mask` as `uint8`, `chosen_cand_idx` as `int64`) and trajectory metadata (`old_log_prob`, `values`, `rewards` as `float32`, `player_ids`, `dones` as `uint8`) into compressed `games_*.safetensors`.
 5. **Step 5 (`polyfish-rs/train_moe.py`)**:
-   Implement the PyTorch PPO training loop with alternating-turn GAE trajectory buffers, trainee advantage normalization, pure terminal $V_{\text{win}}$ surrogate minimization loss, and 3-tier league matchmaker.
+   Implement the PyTorch PPO training loop with `spatial_maps` dequantization (`/ 255.0`), candidate indices LongTensor casting (`.long()`), alternating-turn GAE trajectory buffers, trainee advantage normalization, pure terminal $V_{\text{win}}$ surrogate minimization loss, and 3-tier league matchmaker.
 
 ---
 
