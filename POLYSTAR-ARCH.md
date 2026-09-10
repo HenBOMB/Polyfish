@@ -1,171 +1,186 @@
-# PolyStar: Next-Generation Hierarchical & Autoregressive Architecture for Polytopia
+# PolyStar v2: 20M Entity-Transformer & League Reinforcement Learning Architecture
 
-This document specifies the **PolyStar** architecture—a hierarchical, autoregressive, and contrastively ranked neural network designed to overcome the structural failure modes of the legacy PolyZero architecture.
+This document specifies the **PolyStar v2** architecture—a 20-million parameter hybrid Entity-Map Transformer and model-free reinforcement learning pipeline designed to succeed the legacy PolyZero architecture. 
 
----
-
-## 1. Executive Summary & Root-Cause Diagnosis
-
-The legacy network [`PolyZeroNet`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/network.rs#L145) plateaued between ~600 and 743 Elo in [elo_ratings.json:2-157](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/elo_ratings.json#L2-L157) despite extensive tuning. The root cause is not raw model capacity or training iterations; it is a fundamental architectural mismatch with the game mechanics of *The Battle of Polytopia*.
-
-### Fatal Flaws in the Legacy Architecture
-
-1. **The Frankenstein Trunk (Gradient Interference)**:
-   In [network.rs:161-170](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/network.rs#L161-L170) and [train.py:406-409](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/train.py#L406-L409), up to 12 distinct prediction heads (4 decomposed policy heads, 2 value heads, 4 auxiliary task heads, and experimental macro heads) were attached to a single 64-channel ResNet backbone. Conflicting gradient updates from micro-action cross-entropy, auxiliary fog reconstruction, and scalar game outcomes destroyed the trunk's representation.
-
-2. **Open-Loop Micro Policy (Goal Blindness)**:
-   While macro heads were prototyped on branch `origin/exp-elo-005-raise-relative-weight-in-value-targets`, the micro move generator remained unconditioned on the macro intent. The micro policy evaluated board states in isolation, while the macro head acted as an auxiliary prediction rather than an operational constraint.
-
-3. **Value Head Calibration vs. Discrimination Breakdown**:
-   As documented in commit `27055090` (`EXP_ELO_069`), training value heads with Mean Squared Error (MSE) regression produced aggregate calibration ($R^2 \approx 0.972$ on late-game states) but failed at local ranking discrimination. The value head was unable to reliably rank immediate candidate moves, dropping net win rates by 13 percentage points against hand-written heuristics.
-
-4. **Multi-Ply Temporal Amnesia**:
-   In [features.rs:116-128](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/features.rs#L116-L128), state encoding is strictly Markovian, relying only on 6 static decayed channels for fog memory. Between sequential plies in a ~440-move game, the network has no internal latent memory of its ongoing multi-turn plans, causing intention drift across turns.
-
-5. **Single-Pass Action Decomposition Failure**:
-   In [network.rs:161-164](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/network.rs#L161-L164), four independent policy heads (`pi_action`, `pi_source`, `pi_target`, `pi_option`) make blind parallel predictions that [policy_composer.rs:1-50](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/policy_composer.rs#L1-L50) multiplies together. The source head must guess which action type will be picked, while the target head predicts destinations without knowing which unit was selected.
+It synthesizes the architectural post-mortems in [`BOTTLENECK.md`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/BOTTLENECK.md) and [`FAILURES.md`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/FAILURES.md), resolving the structural bottlenecks that stalled Polyfish at ~743 Elo in [`elo_ratings.json:2-157`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/elo_ratings.json#L2-L157).
 
 ---
 
-## 2. The PolyStar Architecture Overview
+## 1. Executive Summary & Paradigm Shift
 
-PolyStar refactors state evaluation into a **two-tier hierarchical pipeline** with **autoregressive micro-decisions** and **contrastive pairwise value ranking**.
+Standard AlphaZero/MCTS fails on *The Battle of Polytopia* due to domain mismatches:
+1. **The Intra-Turn Depth Trap**: A single turn requires 8–15 atomic plies ending in `MoveType::EndTurn` ([`polyfish-rs/src/types.rs:714`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/types.rs#L714)). A 64-simulation MCTS path exhausts its budget permuting intra-turn move orders without penetrating into opponent turns ([`BOTTLENECK.md:21-42`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/BOTTLENECK.md#L21-L42)).
+2. **Planar Representation Flattening**: Forcing non-spatial Directed Acyclic Graphs (the Tech Tree in [`settings/technology.rs:460-485`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/settings/technology.rs#L460-L485)), global star counters, and discrete unit entities into a 2D convolutional grid destroys relational structure ([`BOTTLENECK.md:47-58`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/BOTTLENECK.md#L47-L58)).
+3. **The Multi-Task Frankenstein Trunk**: Adding 12 auxiliary macro heads to a 64-channel ResNet backbone ([`network.rs:161-170`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/network.rs#L161-L170)) induced negative gradient transfer (EXP_ELO_069), dropping win rates by 13 percentage points ([`FAILURES.md:46-50`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/FAILURES.md#L46-L50)).
+4. **Policy Decomposition Collapse**: Multiplying unconditioned marginal head distributions in [`policy_composer.rs:16-41`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/policy_composer.rs#L16-L41) causes source and target coordinates to mismatch.
+5. **Passivity Collapse in Pure Self-Play**: Tabula rasa self-play with a single network degenerates into mutual non-aggression ([`FAILURES.md:28-31`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/FAILURES.md#L28-L31)).
 
-```
-                ┌────────────────────────────────────────┐
-                │        Raw Board Features (142x11x11)  │
-                └───────────────────┬────────────────────┘
-                                    │
-                         ┌──────────▼──────────┐
-                         │   Spatial Backbone  │ (ConvNeXt-Tiny / Swin-T)
-                         │     128 Channels    │
-                         └──────────┬──────────┘
-                                    │
-         ┌──────────────────────────┴──────────────────────────┐
-         │                                                     │
-┌────────▼─────────────────────┐             ┌─────────────────▼─────────────────┐
-│     Macro Goal Generator     │             │     Contrastive Ranker Head       │
-│  (Evaluates ONCE per turn)   │             │   (Trained on pairwise ranking:   │
-│  Outputs K Strategic Tokens: │             │     Bradley-Terry Preference)     │
-│  [Expand(3,4), Train(0,0)]   │             └───────────────────────────────────┘
-└────────┬─────────────────────┘
-         │ (K goal tokens: G_T)
-         │
-         │   ┌──────────────────────────────────────────────┐
-         └───►  Cross-Attention: Micro Policy conditioned   │
-             │                 on Goal Tokens               │
-             └──────────────────────┬───────────────────────┘
-                                    │
-                      ┌─────────────▼──────────────┐
-                      │ Autoregressive Micro Head  │
-                      │  Pass 1: P(ActionType | S) │
-                      │  Pass 2: P(Unit | Action)  │
-                      │  Pass 3: P(Target | Unit)  │
-                      └────────────────────────────┘
-```
+**PolyStar v2 replaces flat MCTS with a direct reactive 20M Entity-Transformer policy** trained via **Supervised Behavioral Cloning Warmup followed by PPO League Play** (inspired by DeepMind AlphaStar and OpenAI Five).
 
 ---
 
-## 3. Four Core Architectural Pillars
+## 2. Architectural Comparison
 
-### Pillar 1: Closed-Loop Goal Conditioning (Macro $\to$ Micro)
-* **Turn-Level Intent Generation**: At the beginning of player turn $T$ (triggered by `EndTurn`), the spatial trunk routes features into a dedicated Macro Transformer block that emits $K=4$ **Goal Tokens**:
-  $$G_T = \{g_{\text{expansion}}, g_{\text{military}}, g_{\text{economy}}, g_{\text{exploration}}\} \subset \mathbb{R}^{d_{\text{model}}}$$
-  Each token encodes both categorical intent and spatial coordinates (e.g., $g_{\text{expansion}}$ binds to tile $(3, 4)$ where an uncaptured village is situated).
-* **Tactical Cross-Attention**: During intra-turn plies, the micro policy network conditions its feature maps on $G_T$ via Multi-Head Cross-Attention:
-  $$\text{Query} = \text{MicroSpatialTokens}, \quad \text{Key/Value} = G_T$$
-  The micro policy cannot select actions without attending to the active turn objectives, preventing units from wandering aimlessly.
-
-### Pillar 2: Autoregressive Action Tokenization
-Instead of parallel independent heads, the micro policy decomposes the move probability autoregressively:
-$$P(\text{Move} \mid s, G_T) = P(a_{\text{type}} \mid s, G_T) \cdot P(u_{\text{source}} \mid s, G_T, a_{\text{type}}) \cdot P(t_{\text{target}} \mid s, G_T, a_{\text{type}}, u_{\text{source}})$$
-
-1. **Step 1 (`pi_action`)**: Outputs a distribution over 11 action classes (`Step`, `Attack`, `Train`, `Harvest`, etc.).
-2. **Step 2 (`pi_source`)**: The selected `ActionType` is embedded and injected into the spatial map to predict the active source unit. Invalid units for the selected action are masked to $-\infty$.
-3. **Step 3 (`pi_target`)**: The chosen `(ActionType, SourceUnit)` pair is embedded, and spatial cross-attention predicts valid target coordinates (destination tile, attack target, structure placement).
-
-This eliminates the head-multiplication collapse in [policy_composer.rs:1-50](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/policy_composer.rs#L1-L50) and guarantees valid, coherent action proposals.
-
-### Pillar 3: Contrastive Preference Ranking for Value
-To resolve the calibration vs. discrimination breakdown observed in commit `27055090`, the value head discards pure MSE regression on scalar outcomes. It is trained via **Bradley-Terry Pairwise Preference Loss**:
-
-$$\mathcal{L}_{\text{rank}} = -\log \sigma\left( V(s_{\text{winner}}) - V(s_{\text{loser}}) \right)$$
-
-* **Data Generation**: During MCTS rollouts, sibling states expanded from the same root node are paired based on search visit counts and final Q-values.
-* **Objective**: The value head is explicitly trained to discriminate which of two local tactical board states is superior, providing sharp, high-frequency gradients for leaf evaluation.
-
-### Pillar 4: Latent Recurrent Core (Temporal Persistence)
-To address the POMDP / Fog-of-War amnesia documented in [notes-memory.md:1-15](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes-memory.md#L1-L15):
-* A 128-dimensional recurrent hidden state $h_t$ is propagated across plies and turns:
-  $$h_{t+1} = \text{GRUCell}(h_t, \text{Pooling}(\text{BackboneOut}_t))$$
-* This gives the agent a persistent memory of concealed enemy units, ongoing multi-turn expansion paths, and long-range strategic commitments.
-
----
-
-## 4. Parameter & Channel Budget
-
-| Component | Legacy PolyZero | PolyStar | Rationale |
+| Dimension | Legacy PolyZero ([`network.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/network.rs)) | PolyStar v2 (Entity-Transformer PPO) | Rationale |
 | :--- | :--- | :--- | :--- |
-| **Input Channels** | 142 ([features.rs:128](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/features.rs#L128)) | 142 (Preserves [states.rs](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/states.rs) compatibility) | Keeps engine feature encoding stable |
-| **Backbone Filters** | 64 channels (6 ResBlocks) | 128 channels (4 ConvNeXt / Modern ResBlocks) | Prevents trunk representation saturation |
-| **Normalization** | GroupNorm (8 groups) | GroupNorm (16 groups) or LayerNorm | Stable batch-independent inference |
-| **Macro Mechanism** | Disconnected auxiliary heads | 4 Goal Tokens ($d=128$) via Cross-Attention | Closed-loop strategic steering |
-| **Micro Action Policy** | 4 parallel heads multiplied blindly | 3-step autoregressive decoder | Eliminates combinatorial move conflicts |
-| **Value Head** | Scalar MSE ($L_2$ regression) | Contrastive Pairwise Bradley-Terry Ranker | Fixes tactical leaf discrimination |
-| **Temporal Memory** | None (Static Markovian snapshot) | 128-dim recurrent latent state ($h_t$) | Solves multi-ply intention drift |
-| **Total Parameters** | ~320,000 (~1.2 MB safetensors) | ~1,850,000 (~7.4 MB safetensors) | Feasible on RunPod / modern GPUs |
+| **Search Paradigm** | 64-iteration Gumbel MCTS | Model-Free Reactive Policy (Single Pass) | Bypasses intra-turn depth trap ([`BOTTLENECK.md:32`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/BOTTLENECK.md#L32)) |
+| **Total Parameters** | ~320,000 (~1.2 MB safetensors) | **~21,500,000 (~86 MB safetensors)** | Overcomes model capacity deficit ([`BOTTLENECK.md:59-71`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/BOTTLENECK.md#L59-L71)) |
+| **Backbone Structure** | 6 ResBlocks, 64 channels | 12-layer Transformer ($d=384$, 6 heads, Pre-LN) | ViT-Small class; deep relational attention |
+| **Sequence Length** | N/A (Planar 2D Convolutions) | 170 tokens ($121\text{ map} + 32\text{ units} + 16\text{ cities} + 1\text{ global}$) | Unified entity-spatial attention |
+| **Unit Tracking** | Anonymous grid cells | Persistent Unit IDs ([`states.rs:256`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/states.rs#L256)) | Preserves unit identity across plies |
+| **Move Scoring** | 4 multiplied marginal heads | Single-Pass Bilinear Move Pointer | Fixes multiplication collapse ([`policy_composer.rs:16-41`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/policy_composer.rs#L16-L41)) |
+| **Training Engine** | Policy distillation + scalar MSE | Behavioral Cloning Warmup $\to$ PPO + GAE | Smooth RL convergence without tabula rasa collapse |
+| **Opponent Pool** | Single-checkpoint self-play | 3-Tier League (Anchors + Pool + Exploiters) | Eliminates cyclical forgetting ([`FAILURES.md:33-35`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/FAILURES.md#L33-L35)) |
+| **Move Throughput** | ~578 moves/s ([`expert_boost_throughput.md:36`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/expert_boost_throughput.md#L36)) | **2,500+ moves/s (Batched GPU)** | 64× FLOP dividend from dropping MCTS |
 
 ---
 
-## 5. Dual-Stack Implementation Plan
+## 3. The 20M Hybrid Entity-Map Architecture
 
-As required by [CLAUDE.md:71-78](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/CLAUDE.md#L71-L78), all layer definitions and parameter shapes must remain byte-compatible between the Rust inference engine and Python training script:
+```
+[11x11 Spatial Map]           [Discrete Entity Tokens]           [Global Context Token]
+  (Terrain, Roads,               (Units: up to 32,                 (Tech DAG Bitmask,
+   Structures, FOW)                Cities: up to 16)                Stars, Score, Turn)
+         │                                │                                  │
+         ▼                                ▼                                  ▼
+ Patch Conv (Patch 1x1)            Entity Projector                 Global MLP Projector
+ [121 tokens x 384]               [48 tokens x 384]                   [1 token x 384]
+         │                                │                                  │
+         └────────────────────────┬───────┴──────────────────────────────────┘
+                                  ▼
+             Concatenated Token Sequence [170 tokens x 384]
+                                  │
+                                  ▼
+             12-Layer Pre-LN Transformer Backbone (6 heads, d=384, MLP=1536)
+                                  │
+                  ┌───────────────┴───────────────┐
+                  ▼                               ▼
+      Actor (Move Pointer)              Critic (Value Head)
+   Bilinear Legal Move Softmax         Scalar Win [-1, 1] + Progress
+```
 
-1. **Rust Implementation (`polyfish-rs/src/ai/network.rs`)**:
-   * Implement `PolyStarNet` in Candle.
-   * Provide `forward_macro(state) -> GoalTokens` and `forward_micro(state, goals, h_t) -> (ActionDist, Value, h_{t+1})`.
-   * Preserve the headless evaluation path for high-throughput batching in [expert_boost_throughput.md:28-40](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/expert_boost_throughput.md#L28-L40).
+### 3.1 Tokenization Specification
 
-2. **Python Implementation (`polyfish-rs/train.py`)**:
-   * Implement PyTorch `PolyStarNet` mirroring the Candle layer names and tensor dimensions.
-   * Add the pairwise ranking loss $\mathcal{L}_{\text{rank}}$ to the replay buffer sampling logic.
-   * Supervise Macro Goal Tokens using high-level targets (city expansion vectors and military rally points).
+1. **Spatial Map Tokens ($M \in \mathbb{R}^{121 \times 384}$)**:
+   - Input channels: 142 channels preserving [`features.rs:128`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/features.rs#L128) and [`train.py:397`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/train.py#L397) (including 6 fog memory channels from [`notes-memory.md:1-26`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes-memory.md#L1-L26)).
+   - A $1 \times 1$ pointwise conv maps $142 \to 384$, added with 2D learnable spatial positional embeddings.
+
+2. **Unit Entity Tokens ($U \in \mathbb{R}^{32 \times 384}$)**:
+   - For each unit in `tribe.units` ([`states.rs:408`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/states.rs#L408)):
+     $$\text{Token}_u = \text{Embed}(\text{owner}) + \text{Embed}(\text{unit\_type}) + \text{Linear}(\text{hp}, \text{veteran}, \text{kills}, \text{moved}, \text{attacked}) + \text{PosEmbed}(\text{coords})$$
+   - Unused unit slots (up to 32) are zero-padded and attention-masked.
+
+3. **City Entity Tokens ($C \in \mathbb{R}^{16 \times 384}$)**:
+   - For each city in `tribe.cities` ([`states.rs:406`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/states.rs#L406)):
+     $$\text{Token}_c = \text{Embed}(\text{owner}) + \text{Linear}(\text{level}, \text{production}, \text{progress}, \text{border\_size}) + \text{PosEmbed}(\text{city.idx})$$
+   - Unused city slots (up to 16) are zero-padded and attention-masked.
+
+4. **Global Context Token ($G \in \mathbb{R}^{1 \times 384}$)**:
+   - Binary bitmask of 25 researched vanilla technologies ([`settings/technology.rs:460-485`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/settings/technology.rs#L460-L485)).
+   - Continuous normalized scalars: current stars ([`states.rs:389`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/states.rs#L389)), current score ([`states.rs:387`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/states.rs#L387)), game turn, and relative score delta.
+
+### 3.2 Transformer Core Specifications
+- **Layers**: 12 Pre-LayerNorm Transformer encoder blocks.
+- **Hidden Dim ($d_{\text{model}}$)**: 384.
+- **Attention Heads**: 6 ($d_{\text{head}} = 64$).
+- **Feedforward Hidden Dim**: 1,536 ($4 \times d_{\text{model}}$) with GELU activations.
+- **Parameters**:
+  - Attention projections: $12 \times (4 \times 384^2) \approx 7.08\text{M}$.
+  - MLP projections: $12 \times (2 \times 384 \times 1536) \approx 14.16\text{M}$.
+  - Embeddings & heads: $\approx 0.25\text{M}$.
+  - **Total**: **~21.5 Million Parameters**.
 
 ---
 
-## 6. Experimental Validation Roadmap (Protocol Compliance)
+## 4. Single-Pass Bilinear Move Pointer
 
-In accordance with [hypothesis_driven_improvements.md:9-19](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/hypothesis_driven_improvements.md#L9-L19):
+To eliminate the head multiplication breakdown in [`policy_composer.rs:16-41`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/policy_composer.rs#L16-L41) without adding serial autoregressive GPU stalls:
 
-* **Fast-Loop Verification (n=32)**:
-  * Benchmark PolyStar vs Greedy on fixed Bardur+Imperius seeds.
-  * Target Metric: Third-city rate $\ge 0.80$ by turn 13 and Army Value $\ge 25$ by turn 12 (surpassing the bottlenecks identified in [hypothesis_driven_improvements.md:198-205](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/hypothesis_driven_improvements.md#L198-L205)).
-* **Slow-Loop Verification (Elo Ladder)**:
-  * Deploy on RunPod using [run_training_runpod.sh](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/run_training_runpod.sh).
-  * Success Criterion: Break the 742 Elo plateau in [elo_ratings.json:14-25](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/elo_ratings.json#L14-L25), targeting $\ge 1,000$ Elo against the frozen Greedy anchor.
+1. The Rust engine extracts all legal moves $L(s) = [m_1, \dots, m_K]$ via `game.legal_moves()`.
+2. Each legal move $m_i$ identifies:
+   - Action type $a \in \{0, \dots, 10\}$ (`Step`, `Attack`, `Train`, etc.).
+   - Source token latent $\mathbf{h}_{\text{source}} \in \mathbb{R}^{384}$ (from active unit or city token; null vector for non-spatial moves).
+   - Target token latent $\mathbf{h}_{\text{target}} \in \mathbb{R}^{384}$ (from target map tile or target enemy unit token).
+   - Move option index $o \in \{0, \dots, 191\}$ ([`train.py:148`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/train.py#L148)).
+3. The move logit is computed via bilinear interaction:
+   $$\text{logit}(m_i) = \mathbf{w}_{\text{action}}[a] + \frac{\langle \mathbf{h}_{\text{source}}(m_i), \, \mathbf{h}_{\text{target}}(m_i) \rangle}{\sqrt{d_{\text{model}}}} + \mathbf{w}_{\text{option}}[o]$$
+4. Softmax is evaluated directly over the legal moves:
+   $$P(m_i \mid s) = \frac{\exp(\text{logit}(m_i) / \tau)}{\sum_{j=1}^K \exp(\text{logit}(m_j) / \tau)}$$
+
+**Properties**:
+- Single GPU forward pass evaluates the full latent state.
+- Candidate scoring is evaluated in microseconds in Rust.
+- Conditioning destination on source is exact via $\langle \mathbf{h}_{\text{source}}, \mathbf{h}_{\text{target}} \rangle$.
 
 ---
 
-## 7. Source Catalog & Evidence Concordance
+## 5. Critic Value Head & Anchoring
 
-Every claim, empirical finding, failure mode, and parameter dimension in this document is verified in the repository. The table below provides the ground-truth concordance:
+The Critic head pools the global context token and mean-pooled entity latents through a 2-layer MLP:
+$$V(s) = \mathbf{w}_{\text{val}}^T \text{GELU}(\mathbf{W}_2 \text{GELU}(\mathbf{W}_1 [\mathbf{h}_G; \bar{\mathbf{h}}_E]))$$
+- Primary output: $V_{\text{win}}(s) \in [-1, +1]$ (hyperbolic tangent activation).
+- Secondary output: $V_{\text{progress}}(s) \in [0, 1]$ (sigmoid activation).
 
-| Finding / Specification | Source Location in Repository | Commit / Context |
+Trained with Generalized Advantage Estimation (GAE):
+$$\delta_t = r_t + \gamma V(s_{t+1}) - V(s_t), \quad \hat{A}_t = \sum_{l=0}^\infty (\gamma \lambda)^l \delta_{t+l}$$
+where $\gamma = 0.99, \lambda = 0.95$.
+
+---
+
+## 6. Training Protocol: Supervised Warmup + PPO League
+
+To prevent the tabula rasa passivity collapse in [`FAILURES.md:28-31`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/FAILURES.md#L28-L31) and anchor curriculum fadeout collapse in [`FAILURES.md:33-35`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/FAILURES.md#L33-L35):
+
+### Phase 1: Supervised Behavioral Cloning Kickstart (The AlphaStar Strategy)
+- Train the 20M Transformer for 15–20 epochs on offline game datasets from [`archive/games_*.safetensors`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/train.py#L374) and games played against the Greedy heuristic engine ([`ai/evaluator/`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/evaluator/)).
+- Cross-entropy loss over legal move choices:
+  $$\mathcal{L}_{\text{BC}} = -\sum_{i} \log P_\theta(m_i^* \mid s_i)$$
+- **Outcome**: The 20M network enters RL with an established ~800 Elo tactical baseline, knowing how to conquer villages, buy techs, and attack efficiently.
+
+### Phase 2: PPO League Play
+Rollout workers generate games against a 3-tier league matchmaker:
+1. **Greedy Heuristic Anchor (25% of matches)**: Prevents economic drift and passive opening degeneration.
+2. **Historical Checkpoint Pool (50% of matches)**: Uniform sampling from past iterations, permanently fixing cyclical forgetting ([`FAILURES.md:33-35`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/FAILURES.md#L33-L35)).
+3. **Main Exploiters (25% of matches)**: Policies conditioned or tuned for aggressive early combat to punish defensive turtling.
+
+PPO Clipped Objective:
+$$\mathcal{L}_{\text{PPO}}(\theta) = \hat{\mathbb{E}}_t \left[ \min\left( \frac{P_\theta(m_t \mid s_t)}{P_{\theta_{\text{old}}}(m_t \mid s_t)} \hat{A}_t, \, \text{clip}\left(\frac{P_\theta(m_t \mid s_t)}{P_{\theta_{\text{old}}}(m_t \mid s_t)}, 1-\epsilon, 1+\epsilon\right) \hat{A}_t \right) \right]$$
+with $\epsilon = 0.20$ and entropy bonus coefficient $c_{\text{ent}} = 0.01$.
+
+---
+
+## 7. Dual-Stack Implementation Roadmap
+
+As required by [`CLAUDE.md:71-78`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/CLAUDE.md#L71-L78), layer definitions and tensor shapes must remain strictly byte-compatible between Rust Candle and Python PyTorch:
+
+1. **Step 1 (`polyfish-rs/src/ai/features.rs`)**:
+   Implement `state_to_entity_features` extracting spatial map ($142 \times 11 \times 11$), unit entity matrix ($32 \times D_u$), city entity matrix ($16 \times D_c$), and global context vector.
+2. **Step 2 (`polyfish-rs/src/ai/network.rs` & `train_ppo.py`)**:
+   Implement `PolyEntityNet` (12-layer, $d=384$ Pre-LN Transformer) in Candle and PyTorch with matching state dict keys:
+   `transformer_blocks.{0..11}.attn.*`, `transformer_blocks.{0..11}.mlp.*`, `map_conv.*`, `actor_pointer.*`, `critic.*`.
+3. **Step 3 (`polyfish-rs/src/ai/policy_composer.rs`)**:
+   Implement `compute_move_pointer_priors` evaluating legal candidate logits via bilinear dot products.
+4. **Step 4 (`polyfish-rs/src/bin/self_play.rs`)**:
+   Add `--backend ppo-policy` mode to execute rollouts using direct policy sampling without MCTS simulation loops.
+5. **Step 5 (`polyfish-rs/train_ppo.py`)**:
+   Implement the PyTorch PPO training loop with GAE trajectory buffers, clipped surrogate loss, and league model checkpoints.
+
+---
+
+## 8. Source Catalog & Evidence Concordance
+
+| Specification / Empirical Grounding | Source Location in Repository | Evidence Context |
 | :--- | :--- | :--- |
-| **Legacy `PolyZeroNet` Structure & Heads** | [network.rs:145-187](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/network.rs#L145-L187) | 6-block ResNet trunk, 64 channels, 4 parallel policy heads |
-| **PyTorch Architecture & Aux Heads** | [train.py:397-409](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/train.py#L397-L409) | `SPATIAL_CHANNELS = 142`, 4 aux supervision heads |
-| **Independent Policy Head Product Collapse** | [policy_composer.rs:1-50](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/policy_composer.rs#L1-L50) | Multiplicative combination of uncoordinated logits |
-| **Input Spatial Channels (142)** | [features.rs:116-128](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/features.rs#L116-L128) | Dynamic `NUM_CHANNELS = CH_MEM_END` (142 channels) |
-| **Fog-of-War Memory Specifications** | [notes-memory.md:1-145](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes-memory.md#L1-L145) | 6 decaying observation channels for enemy units in fog |
-| **Elo Plateau Ratings (~600–743)** | [elo_ratings.json:2-157](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/elo_ratings.json#L2-L157) | Greedy baseline 571.6, iter156 peak 742.9, iter264 at 700.9 |
-| **Search Horizon Limitation (~8 plies/turn)** | [notes.md:74-75](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes.md#L74-L75), [notes.md:180-186](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes.md#L180-L186) | 64 sims reach 2–3 plies; single-turn horizon blind spot |
-| **Search Depth Failure on First Capture** | [hypothesis_driven_improvements.md:43-53](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/hypothesis_driven_improvements.md#L43-L53) | EXP 3: 64 $\to$ 256 sims failed to accelerate village walk |
-| **Mid-Game Autopsy (Units, 3rd City, Tech Trap)** | [hypothesis_driven_improvements.md:187-205](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/hypothesis_driven_improvements.md#L187-L205) | EXP_ELO_001: 3rd city rate 39% vs 81%, tech overpurchase |
-| **Outcome Label Noise Floor (~50% noise)** | `polyfish-rs/notes-runs-2026-07-14-16.md` | Branch `hen-training-experimental` (commit `e73713f5`) |
-| **Anchor Limit-Cycle Fix (`-W 0.70 -P 0.2`)** | `polyfish-rs/notes-runs-2026-07-14-16.md` | Branch `hen-training-experimental` (commit `e73713f5`) |
-| **Value Calibration vs. Discrimination Defect** | `hypothesis_driven_improvements.md` (EXP_ELO_069) | Branch `origin/exp-elo-005-...` (commit `27055090`) |
-| **Dual-Network Synchronization Rule** | [CLAUDE.md:71-78](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/CLAUDE.md#L71-L78) | Rust Candle $\leftrightarrow$ Python PyTorch byte-compatibility |
-| **Batched Evaluator Throughput (578 moves/s)** | [expert_boost_throughput.md:28-40](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/expert_boost_throughput.md#L28-L40) | Pipelined MPSGraph / CUDA worker specifications |
-| **RunPod Autonomous CUDA Training Script** | `polyfish-rs/run_training_runpod.sh` | Branch `hen-training-experimental` (commit `4749eb5a`) |
-| **Experiment Protocol Standards** | [hypothesis_driven_improvements.md:9-19](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/hypothesis_driven_improvements.md#L9-L19) | Fast-loop $n=32$ vs slow-loop Elo ladder protocols |
-
+| **Legacy ResNet-6 & Heads** | [`network.rs:145-187`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/network.rs#L145-L187) | 6 blocks, 64 channels, 4 parallel policy heads |
+| **Intra-Turn MCTS Depth Trap** | [`BOTTLENECK.md:21-42`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/BOTTLENECK.md#L21-L42) | 8-ply path fails to exit Turn 1; combinatorial space $30^{10}$ |
+| **Planar Flattening & Tech DAG** | [`BOTTLENECK.md:47-58`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/BOTTLENECK.md#L47-L58) | 2D convs unable to model DAG prerequisites ([`technology.rs:460-485`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/settings/technology.rs#L460-L485)) |
+| **Persistent Unit Identifiers** | [`states.rs:256-258`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/states.rs#L256-L258) | `pub id: u32` minted at spawn, persistent across moves |
+| **City State Schema** | [`states.rs:291-311`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/states.rs#L291-L311) | Level, progress, border size, territory indices |
+| **Fog Memory Spatial Channels** | [`features.rs:116-128`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/features.rs#L116-L128) | 6 decayed enemy observation channels |
+| **Head Multiplication Breakdown** | [`policy_composer.rs:16-41`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/policy_composer.rs#L16-L41) | Independent marginal products cause source/target confusion |
+| **192 Action Options Head** | [`train.py:147-148`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/train.py#L147-L148) | Unified structures, units, techs, abilities, rewards |
+| **Multi-Head Gradient Interference** | [`FAILURES.md:46-50`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/FAILURES.md#L46-L50) | EXP_ELO_069: 12 macro heads dropped win rate by 13% |
+| **Tabula Rasa Passivity Collapse** | [`FAILURES.md:28-31`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/FAILURES.md#L28-L31) | Mutual non-aggression; captures dropped 6.5 to 3.2 |
+| **Curriculum Anchor Fadeout Defect** | [`FAILURES.md:33-35`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/FAILURES.md#L33-L35) | Fading anchor to 5% crashed win rate from 81% to 25% |
+| **Self-Play Throughput Baseline** | [`expert_boost_throughput.md:36`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/expert_boost_throughput.md#L36) | ~578 moves/s bound by CPU↔GPU sync stalls |
+| **Offline Game Replay Archive** | [`train.py:374`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/train.py#L374) | `archive/games_*.safetensors` available for warmup |
