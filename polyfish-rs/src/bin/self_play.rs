@@ -66,6 +66,24 @@ const NEAR_DELTA_W: f32 = 0.7;
 // and cannot change the optimal policy, only the credit assignment.
 const SPT_SHAPE_W: f32 = 0.24;
 
+// The prior/σ(Q) schedules themselves live in `polyfish::ai::curriculum` (so
+// `arena` grades the searcher they produce); these thin wrappers only add the
+// per-run CLI overrides on top.
+
+/// Root + in-tree heuristic prior weight: `--prior-heuristic-weight` if given,
+/// else the library's iteration schedule.
+fn resolve_prior_weight(
+    iteration: usize,
+    decay_last_iter: usize,
+    override_w: Option<f32>,
+) -> f32 {
+    override_w.unwrap_or_else(|| prior_heuristic_weight(iteration, decay_last_iter))
+}
+
+/// β on σ(completed-Q): `--value-trust` if given, else the library ramp.
+fn resolve_q_target_weight(iteration: usize, value_trust: Option<f32>) -> f32 {
+    value_trust.unwrap_or_else(|| policy_target_q_weight(iteration))
+}
 /// Console verbosity for long self-play runs.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ProgressMode {
@@ -484,6 +502,9 @@ fn load_networks(
         )?
     };
     let network1 = Arc::new(PolyZeroNet::new(vs1)?);
+    if network1.is_legacy_batch_norm() {
+        eprintln!("[self_play] {model_path}: legacy BatchNorm checkpoint (inference only)");
+    }
 
     let network2 = if let Some(opp_path) = opponent {
         let vs2 = unsafe {
@@ -493,7 +514,11 @@ fn load_networks(
                 device,
             )?
         };
-        Arc::new(PolyZeroNet::new(vs2)?)
+        let net = Arc::new(PolyZeroNet::new(vs2)?);
+        if net.is_legacy_batch_norm() {
+            eprintln!("[self_play] {opp_path}: legacy BatchNorm checkpoint (inference only)");
+        }
+        net
     } else {
         network1.clone()
     };
@@ -613,6 +638,7 @@ fn play_single_game(
     backend1: SearchBackend,
     backend2: SearchBackend,
     value_trust: Option<f32>,
+    prior_heuristic_weight: Option<f32>,
     leaf_batch: Option<usize>,
     progress: ProgressMode,
     symmetric: bool,
@@ -677,11 +703,11 @@ fn play_single_game(
     let mut village_capture_turns: Vec<i32> = Vec::new();
     let mut ruin_capture_turns: Vec<i32> = Vec::new();
 
-    let prior_w = prior_heuristic_weight(iteration, decay_last_iter);
+    let prior_w = resolve_prior_weight(iteration, decay_last_iter, prior_heuristic_weight);
     // One trust scalar drives β on σ(Q) in both the exported targets and the
     // search tree itself. --value-trust overrides the iteration ramp, which
     // saturates immediately on ITER_OFFSET-shifted runs.
-    let q_target_w = value_trust.unwrap_or_else(|| policy_target_q_weight(iteration));
+    let q_target_w = resolve_q_target_weight(iteration, value_trust);
 
     // Create two agents (they might share the same network, or be different)
     let mut agent1 = Brain::with_backend(eval1, mcts_iters, backend1)
@@ -1324,6 +1350,12 @@ fn main() -> anyhow::Result<()> {
         #[arg(long)]
         value_trust: Option<f32>,
 
+        /// Heuristic prior blend weight in [0,1] (root + in-tree). Overrides
+        /// the iteration schedule (0.5·0.97^iter, floor 0.1). Use 0 when
+        /// recording teacher targets so pi-prime is the checkpoint policy.
+        #[arg(long)]
+        prior_heuristic_weight: Option<f32>,
+
         /// First tribe (optional, defaults to random)
         #[arg(long)]
         tribe1: Option<String>,
@@ -1497,6 +1529,11 @@ fn main() -> anyhow::Result<()> {
     if let Some(t) = args.value_trust {
         if !(0.0..=1.0).contains(&t) {
             anyhow::bail!("--value-trust must be in [0, 1]");
+        }
+    }
+    if let Some(w) = args.prior_heuristic_weight {
+        if !(0.0..=1.0).contains(&w) {
+            anyhow::bail!("--prior-heuristic-weight must be in [0, 1]");
         }
     }
 
@@ -1894,6 +1931,7 @@ fn main() -> anyhow::Result<()> {
                             backend_seat1,
                             backend_seat2,
                             args.value_trust,
+                            args.prior_heuristic_weight,
                             args.leaf_batch,
                             progress_mode,
                             args.symmetric,
@@ -2591,6 +2629,12 @@ fn main() -> anyhow::Result<()> {
         "ruins_t2c_p80": (total_t2c[5] / args.num_games as f64) as f32,
         "ruins_t2c_all": (total_t2c[6] / args.num_games as f64) as f32,
         "decisive_frac": decisive_games as f32 / args.num_games.max(1) as f32,
+        "prior_heuristic_weight": resolve_prior_weight(
+            args.iteration,
+            decay_last_iter,
+            args.prior_heuristic_weight,
+        ),
+        "policy_target_q_weight": resolve_q_target_weight(args.iteration, args.value_trust),
         "vlab_wl_share": vlab_wl_share,
         "vlab_td_absmean": vlab_td_absmean,
         "vlab_wl_absmean": vlab_wl_absmean,

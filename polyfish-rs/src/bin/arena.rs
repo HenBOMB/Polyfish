@@ -213,7 +213,11 @@ fn load_model(path: &str, device: &Device) -> anyhow::Result<PolyZeroNet> {
     let vs = unsafe {
         candle_nn::VarBuilder::from_mmaped_safetensors(&[path], candle_core::DType::F32, device)?
     };
-    Ok(PolyZeroNet::new(vs)?)
+    let net = PolyZeroNet::new(vs)?;
+    if net.is_legacy_batch_norm() {
+        eprintln!("[arena] {path}: legacy BatchNorm checkpoint (inference only)");
+    }
+    Ok(net)
 }
 
 /// Extract a printable message from a caught panic payload.

@@ -38,6 +38,7 @@ const NUM_RES_BLOCKS: usize = 6;
 pub struct TchPolyZeroNet {
     w: HashMap<String, Tensor>,
     device: Device,
+    legacy_bn: bool,
 }
 
 impl TchPolyZeroNet {
@@ -48,16 +49,16 @@ impl TchPolyZeroNet {
         }
         let named = Tensor::read_safetensors(path)?;
         
-        // Reject older checkpoints that used BatchNorm to avoid subtle eval bugs
-        if named.iter().any(|(k, _)| k.contains("running_mean")) {
-            anyhow::bail!("Rejecting BatchNorm-era checkpoint (found running_mean)");
-        }
+        // July-2026 checkpoints carry BatchNorm running stats: accepted for
+        // inference only (eval-mode BatchNorm is a per-channel affine).
+        let legacy_bn = named.keys().any(|k| k.contains("running_mean"));
 
         let mut w = HashMap::with_capacity(named.len());
         for (name, tensor) in named {
             // Move each parameter onto the inference device once, up front.
             w.insert(name, tensor.to_device(device).to_kind(Kind::Float));
         }
+
 
         // The readback row is sliced by NUM_ACTION_TYPES, so a narrower stored
         // head would silently misalign every row after it.
@@ -71,11 +72,15 @@ impl TchPolyZeroNet {
              (load it once through train.py to migrate the head)"
         );
 
-        Ok(Self { w, device })
+        Ok(Self { w, device, legacy_bn })
     }
 
     pub fn device(&self) -> Device {
         self.device
+    }
+
+    pub fn is_legacy_batch_norm(&self) -> bool {
+        self.legacy_bn
     }
 
     fn get(&self, name: &str) -> &Tensor {
@@ -104,13 +109,38 @@ impl TchPolyZeroNet {
         x.group_norm(GN_GROUPS, Some(weight), Some(bias), GN_EPS, true)
     }
 
+    fn batch_norm_eval(&self, x: &Tensor, prefix: &str) -> Tensor {
+        x.batch_norm(
+            Some(self.get(&format!("{prefix}.weight"))),
+            Some(self.get(&format!("{prefix}.bias"))),
+            Some(self.get(&format!("{prefix}.running_mean"))),
+            Some(self.get(&format!("{prefix}.running_var"))),
+            false,
+            0.0,
+            BN_EPS,
+            false,
+        )
+    }
+
+    /// One trunk norm site: GroupNorm (`gn`), or eval-mode BatchNorm (`bn`)
+    /// for legacy checkpoints.
+    fn norm(&self, x: &Tensor, gn: &str, bn: &str) -> Tensor {
+        if self.legacy_bn {
+            self.batch_norm_eval(x, bn)
+        } else {
+            self.group_norm(x, gn)
+        }
+    }
+
     fn res_block(&self, x: &Tensor, i: usize) -> Tensor {
         let p = format!("res_blocks.{i}");
         let residual = x.shallow_clone();
         let out = self.conv2d(x, &format!("{p}.c1"), 1);
-        let out = self.group_norm(&out, &format!("{p}.gn1")).relu();
+        let out = self
+            .norm(&out, &format!("{p}.gn1"), &format!("{p}.bn1"))
+            .relu();
         let out = self.conv2d(&out, &format!("{p}.c2"), 1);
-        let out = self.group_norm(&out, &format!("{p}.gn2"));
+        let out = self.norm(&out, &format!("{p}.gn2"), &format!("{p}.bn2"));
         (out + residual).relu()
     }
 
@@ -182,7 +212,7 @@ impl TchPolyZeroNet {
 
         // 1. Spatial backbone
         let mut x = self.conv2d(&spatial, "conv1", 1);
-        x = self.group_norm(&x, "gn1").relu();
+        x = self.norm(&x, "gn1", "bn1").relu();
         for i in 0..NUM_RES_BLOCKS {
             x = self.res_block(&x, i);
         }
@@ -207,6 +237,12 @@ impl TchPolyZeroNet {
 
         // Policy heads
         let p_pooled = self.conv2d(&x, "p_pool_conv", 0);
+        // Legacy checkpoints normalize + ReLU the pooled conv; current nets keep it linear.
+        let p_pooled = if self.legacy_bn {
+            self.batch_norm_eval(&p_pooled, "p_pool_bn").relu()
+        } else {
+            p_pooled
+        };
         let p_pooled = p_pooled.flatten(1, 3);
         let p_latent = self.linear(&p_pooled, "p_fc_shared").relu();
         let action_type = self.linear(&p_latent, "pi_action"); // [B, NUM_ACTION_TYPES]

@@ -51,30 +51,82 @@ fn group_norm(c: usize, vs: VarBuilder) -> Result<GroupNorm> {
     candle_nn::group_norm(GN_GROUPS, c, 1e-5, vs)
 }
 
+/// Trunk normalization. `Group` is the current architecture. `BatchEval` is
+/// eval-mode BatchNorm folded into a per-channel affine, so the July-2026
+/// BatchNorm checkpoints run for inference; training registers GroupNorm
+/// vars, so `VarMap::load` still rejects them.
+enum Norm {
+    Group(GroupNorm),
+    BatchEval { scale: Tensor, shift: Tensor },
+}
+
+impl Norm {
+    /// `gn` / `bn` are the two prefixes for the same site (`gn1` / `bn1`);
+    /// BatchNorm wins only when its running stats exist in the checkpoint.
+    fn load(c: usize, gn: VarBuilder, bn: VarBuilder) -> Result<Self> {
+        if bn.contains_tensor("running_mean") {
+            Self::batch_eval(c, bn)
+        } else {
+            Ok(Self::Group(group_norm(c, gn)?))
+        }
+    }
+
+    fn batch_eval(c: usize, bn: VarBuilder) -> Result<Self> {
+        let weight = bn.get(c, "weight")?;
+        let bias = bn.get(c, "bias")?;
+        let mean = bn.get(c, "running_mean")?;
+        let var = bn.get(c, "running_var")?;
+        let scale = weight.div(&(var + 1e-5)?.sqrt()?)?;
+        let shift = bias.sub(&mean.mul(&scale)?)?;
+        Ok(Self::BatchEval {
+            scale: scale.reshape((1, c, 1, 1))?,
+            shift: shift.reshape((1, c, 1, 1))?,
+        })
+    }
+
+    fn is_batch(&self) -> bool {
+        matches!(self, Self::BatchEval { .. })
+    }
+}
+
+impl Module for Norm {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Group(gn) => gn.forward(xs),
+            Self::BatchEval { scale, shift } => xs.broadcast_mul(scale)?.broadcast_add(shift),
+        }
+    }
+}
+
 struct ResBlock {
     c1: Conv2d,
-    gn1: GroupNorm,
+    norm1: Norm,
     c2: Conv2d,
-    gn2: GroupNorm,
+    norm2: Norm,
 }
 
 impl ResBlock {
     fn new(c: usize, vs: VarBuilder) -> Result<Self> {
         let c1 = conv(c, c, 3, 1, 1, vs.pp("c1"))?;
-        let gn1 = group_norm(c, vs.pp("gn1"))?;
+        let norm1 = Norm::load(c, vs.pp("gn1"), vs.pp("bn1"))?;
         let c2 = conv(c, c, 3, 1, 1, vs.pp("c2"))?;
-        let gn2 = group_norm(c, vs.pp("gn2"))?;
-        Ok(Self { c1, gn1, c2, gn2 })
+        let norm2 = Norm::load(c, vs.pp("gn2"), vs.pp("bn2"))?;
+        Ok(Self {
+            c1,
+            norm1,
+            c2,
+            norm2,
+        })
     }
 }
 
 impl ModuleT for ResBlock {
     fn forward_t(&self, xs: &Tensor, _train: bool) -> Result<Tensor> {
         let ys = self.c1.forward(xs)?;
-        let ys = self.gn1.forward(&ys)?;
+        let ys = self.norm1.forward(&ys)?;
         let ys = ys.relu()?;
         let ys = self.c2.forward(&ys)?;
-        let ys = self.gn2.forward(&ys)?;
+        let ys = self.norm2.forward(&ys)?;
         (xs.add(&ys))?.relu()
     }
 }
@@ -170,7 +222,7 @@ impl CrossAttention {
 pub struct PolyZeroNet {
     // Backbone
     conv1: Conv2d,
-    gn1: GroupNorm,
+    norm1: Norm,
     res_blocks: Vec<ResBlock>,
 
     // Cross-Attention integration
@@ -181,6 +233,7 @@ pub struct PolyZeroNet {
 
     // Decomposed Policy Heads
     p_pool_conv: Conv2d,
+    p_pool_norm: Option<Norm>,
     p_fc_shared: Linear,
 
     pi_action: Linear, // Action type (11)
@@ -201,7 +254,7 @@ impl PolyZeroNet {
         let player_state_dim = RawFeatures::PLAYER_STATE_DIM;
 
         let conv1 = conv(input_channels, filters, 3, 1, 1, vs.pp("conv1"))?;
-        let gn1 = group_norm(filters, vs.pp("gn1"))?;
+        let norm1 = Norm::load(filters, vs.pp("gn1"), vs.pp("bn1"))?;
 
         let mut res_blocks = Vec::new();
         for i in 0..RES_BLOCKS {
@@ -221,7 +274,14 @@ impl PolyZeroNet {
 
         // Shared policy processing
         let p_pool_conv = conv(filters, 1, 1, 1, 0, vs.pp("p_pool_conv"))?;
-        let p_fc_shared = candle_nn::linear(MAP_SIZE * MAP_SIZE, filters, vs.pp("p_fc_shared"))?;
+        // July-2026 checkpoints normalize + ReLU the pooled policy conv; the
+        // current architecture keeps it linear (CLAUDE.md: unnormed ReLU dies).
+        let p_pool_norm = if vs.pp("p_pool_bn").contains_tensor("running_mean") {
+            Some(Norm::batch_eval(1, vs.pp("p_pool_bn"))?)
+        } else {
+            None
+        };
+        let p_fc_shared = candle_nn::linear(1 * MAP_SIZE * MAP_SIZE, filters, vs.pp("p_fc_shared"))?;
 
         // Policy heads
         let pi_action = candle_nn::linear(filters, NUM_ACTION_TYPES, vs.pp("pi_action"))?;
@@ -237,13 +297,14 @@ impl PolyZeroNet {
         let v_progress = candle_nn::linear(filters, 1, vs.pp("v_progress"))?;
         Ok(Self {
             conv1,
-            gn1,
+            norm1,
             res_blocks,
             player_feature_embeddings,
             player_pos_embeddings,
             player_fc,
             cross_attention,
             p_pool_conv,
+            p_pool_norm,
             p_fc_shared,
             pi_action,
             pi_source,
@@ -267,7 +328,7 @@ impl PolyZeroNet {
 
         // 1. Process map through backbone
         let mut x = self.conv1.forward(map_input)?;
-        x = self.gn1.forward(&x)?;
+        x = self.norm1.forward(&x)?;
         x = x.relu()?;
 
         for block in &self.res_blocks {
@@ -304,6 +365,10 @@ impl PolyZeroNet {
 
         // 4. Policy Heads
         let p_pooled = self.p_pool_conv.forward(&shared)?;
+        let p_pooled = match &self.p_pool_norm {
+            Some(norm) => norm.forward(&p_pooled)?.relu()?,
+            None => p_pooled,
+        };
         let p_pooled = p_pooled.flatten_from(1)?;
         let p_latent = self.p_fc_shared.forward(&p_pooled)?.relu()?;
 
@@ -350,6 +415,11 @@ impl PolyZeroNet {
     /// Get the device this network is on
     pub fn device(&self) -> candle_core::Device {
         self.conv1.weight().device().clone()
+    }
+
+    /// True for July-2026 BatchNorm checkpoints loaded through `Norm::BatchEval`.
+    pub fn is_legacy_batch_norm(&self) -> bool {
+        self.norm1.is_batch()
     }
 }
 
@@ -426,6 +496,87 @@ mod tests {
         assert_eq!(policy.target_spatial.dims(), &[2, MAP_SIZE * MAP_SIZE]);
         assert_eq!(value.win_value.dims(), &[2, 1]);
         assert_eq!(value.progress_value.dims(), &[2, 1]);
+    }
+
+    /// Dumps a fixed pseudo-random input batch plus the network outputs for a
+    /// checkpoint, so a PyTorch reference forward can be compared offline.
+    /// `POLYFISH_PARITY_MODEL=<safetensors> POLYFISH_PARITY_OUT=<path>`.
+    #[test]
+    #[ignore]
+    fn dump_forward_for_parity() {
+        let model = std::env::var("POLYFISH_PARITY_MODEL").expect("POLYFISH_PARITY_MODEL");
+        let out = std::env::var("POLYFISH_PARITY_OUT").expect("POLYFISH_PARITY_OUT");
+        let device = match std::env::var("POLYFISH_PARITY_DEVICE").as_deref() {
+            Ok("cuda") => Device::new_cuda(0).unwrap(),
+            _ => Device::Cpu,
+        };
+        let vs = unsafe {
+            VarBuilder::from_mmaped_safetensors(&[model], candle_core::DType::F32, &device).unwrap()
+        };
+        let net = PolyZeroNet::new(vs).unwrap();
+        let (b, c, s) = (
+            3usize,
+            crate::ai::features::NUM_CHANNELS,
+            crate::ai::features::MAP_SIZE,
+        );
+        let p = crate::ai::features::RawFeatures::PLAYER_STATE_DIM;
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 40) as f32) / (1u64 << 24) as f32
+        };
+        let map_v: Vec<f32> = (0..b * c * s * s).map(|_| next()).collect();
+        let player_v: Vec<f32> = (0..b * p).map(|_| next()).collect();
+        let map = Tensor::from_vec(map_v, (b, c, s, s), &device).unwrap();
+        let player = Tensor::from_vec(player_v, (b, p), &device).unwrap();
+        let (pol, val) = net.forward(&map, &player).unwrap();
+        // Stage outputs, so a mismatch against the PyTorch reference can be localized.
+        let x0 = net
+            .norm1
+            .forward(&net.conv1.forward(&map).unwrap())
+            .unwrap()
+            .relu()
+            .unwrap();
+        let mut xr = x0.clone();
+        for blk in &net.res_blocks {
+            xr = blk.forward_t(&xr, false).unwrap();
+        }
+        let p_tok = player
+            .unsqueeze(2)
+            .unwrap()
+            .broadcast_mul(&net.player_feature_embeddings.unsqueeze(0).unwrap())
+            .unwrap()
+            .broadcast_add(&net.player_pos_embeddings.unsqueeze(0).unwrap())
+            .unwrap();
+        let p_tok = net.player_fc.forward(&p_tok).unwrap().relu().unwrap();
+        let sp_tok = xr
+            .flatten_from(2)
+            .unwrap()
+            .transpose(1, 2)
+            .unwrap()
+            .contiguous()
+            .unwrap();
+        let att = net.cross_attention.forward(&sp_tok, &p_tok).unwrap();
+        let mut t = std::collections::HashMap::new();
+        t.insert("x0".to_string(), x0);
+        t.insert("x_res".to_string(), xr);
+        t.insert("p_tok".to_string(), p_tok);
+        t.insert("att".to_string(), att);
+        t.insert("spatial".to_string(), map);
+        t.insert("player".to_string(), player);
+        t.insert("action_type".to_string(), pol.action_type);
+        t.insert("source_spatial".to_string(), pol.source_spatial);
+        t.insert("target_spatial".to_string(), pol.target_spatial);
+        t.insert("move_option".to_string(), pol.move_option);
+        t.insert("win_value".to_string(), val.win_value);
+        t.insert("progress_value".to_string(), val.progress_value);
+        candle_core::safetensors::save(&t, &out).unwrap();
+        eprintln!(
+            "legacy_batch_norm={} wrote {out}",
+            net.is_legacy_batch_norm()
+        );
     }
 }
 
