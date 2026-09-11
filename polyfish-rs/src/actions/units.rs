@@ -1643,6 +1643,7 @@ pub fn spawn_unit(
     let settings = get_unit_setting(unit_type);
     let independent = force_independent || settings.skills.contains(&SkillType::Independent);
     let map_size = state.settings.size;
+    let prev_next_unit_id = state._next_unit_id;
     let unit_id = state.next_unit_id();
 
     let new_unit = UnitState {
@@ -1700,6 +1701,16 @@ pub fn spawn_unit(
             }
         }) as UndoCallback);
     }
+
+    // Restore the id counter so an undone spawn leaks nothing into the state —
+    // `adversarial_descent_undo_round_trips` requires an in-tree descent to undo
+    // to an identical state. Rewinding is safe: the unit that held the id is
+    // popped above, so the id is free again and can never collide with a live
+    // unit. (Without this, a simulated-then-undone Summon leaves a permanently
+    // burned id and the descent fails to round-trip.)
+    undos.push(Box::new(move |s: &mut GameState| {
+        s._next_unit_id = prev_next_unit_id;
+    }) as UndoCallback);
 
     crate::actions::chain_undos(undos)
 }
