@@ -21666,3 +21666,132 @@ DISPOSITION: no checkpoint touched throughout — `model.safetensors`,
 `eval_seeds_extra200.json` (gitignored via `polyfish-rs/*.json`, same
 as every other local JSON artifact — no cleanup needed). No code
 changes.
+
+## EXP_ELO_150 — micro-mcts "forced playouts" warm start: every root
+child gets >=1 real visit before free PUCT competition (Verdi-directed:
+"pull 3 games... have them played with full debugging traces... make
+sure our per-ply is behind well... dbl click... fix the structural
+flaw... and keep going")
+
+CONTEXT. Pulled 3 seeds from `eval_seeds.json` (`random.Random(20260913)
+.sample`: 1718030855 Vengir/Luxidoor, 1308032797 Zebasi/Imperius,
+720160312 AiMo/Bardur), played all 6 games (both sides) with
+`POLYFISH_PLY_TRACE` (per-ply candidates/chosen-move/unit_goals/root
+child prior-Q-visits), `--dump-stats-dir`, and `--dump-turn-states`
+against `model.safetensors` (= `exp138_baseline_iter23`, the standing
+uncalibrated production checkpoint; no calibration-campaign checkpoint
+involved), production macro-mcts recipe, `POLYFISH_MICRO_MCTS_CPUCT_*`
+ramp ON (the lever kept from EXP_148/149).
+
+DIAGNOSIS. Wrote a distance-to-goal analysis (Chebyshev, matching
+`Coords::chebyshev_distance_to` — confirmed the engine's own metric) over
+every Step move made by a unit with a live `Expand` goal (`Assigned`/
+`Pursuing`, per `unit_goals.rs`). Unit 1 in `1308032797_a` (a game the
+model LOST) spent turns 0-17 oscillating among 4-5 tiles adjacent to its
+Expand target (8) — repeatedly reversing its own immediately-prior move
+(`18->7` then `7->18` then `18->7`; later `7->17` then `17->7` five times
+running) — before dying, never resolving the goal. Cross-checked against
+advisor guidance (do not assume `candidates[0]` is the pre-search
+heuristic top — `dump_ply_decision` records `ranked` AFTER
+`ranked.swap(0, idx)`, so position alone is not evidence of an override;
+compared by MAX SCORE instead, which is swap-invariant) and against the
+full `micro` child trace (prior/Q/visits per root child, captured before
+consumption).
+
+**Root cause, confirmed directly on real data, not inferred:** at turn 4,
+heuristic scores for unit 1's real options were `target=7: +49.2`,
+`target=19: +49.1`, `target=28: -12.3` (a 61-point gap, heuristic clearly
+prefers 7/19) — but softmax-plus-net-prior-blend priors came out
+`0.313 / 0.240 / 0.294`, i.e. target=28 (the worst option) got almost as
+much prior mass as the best one. With production `sims=8` (`EXP_ELO_119`
+default) split across 5-6 children, turn 4 ended with exactly ONE total
+visit recorded — landing on target=28 — and `micro_search_pick` picks by
+raw VISIT COUNT, so whichever child's early, largely prior-driven
+selection happens to land first can end up as the final answer with
+zero competing information from the other, heuristically-better
+children. Turn 6 is worse: target=28 (prior 0.117, the LOWEST of the
+three real options, and Q=0.349, also the lowest of the three) ended
+with 6 of ~14 visits — more than either higher-prior, higher-Q
+alternative — a rich-gets-richer visit-count cascade once a low-quality
+child gets an early foothold, which a handful of sims can't correct.
+
+QUANTIFIED across all 6 games (Step moves by a unit with a live Expand
+goal, i.e. moves the per-unit goal system says should be purposeful):
+
+| | count | moved away from / sideways to goal |
+|---|---|---|
+| total such Step moves | 176 | — |
+| chosen == heuristic's own max-score candidate, but that top pick itself regresses distance (real combat/positioning tradeoff, not a search bug) | 16 (9.1%) | yes |
+| **chosen != heuristic's own max-score candidate, AND regresses distance (search picked a worse-scored, wrong-direction move)** | **28 (15.9%)** | yes |
+
+The second row is the structural flaw: **16% of every goal-committed
+per-ply movement decision is search overriding the heuristic's own
+better-scored option for a worse, goal-regressing one** — often by
+enormous margins (turn 14 of `1308032797_b`: chosen score -49.0 vs. the
+heuristic's own +850.5 pick). This is the exact "heuristic says the
+sensible thing, the post-search decision doesn't make sense" pattern
+EXP_ELO_135 originally flagged, now isolated to a specific, fixable
+mechanism (search-time visit allocation under extremely low `sims`), not
+value-head calibration (the 137-149 campaign's focus) and not the
+per-unit goal-assignment logic itself (which is working: it correctly
+identifies the target and status every ply).
+
+FIX (opt-in, default off, byte-identical no-op per this project's
+standing convention): `micro_mcts.rs` — new `MicroParams::forced_playouts:
+bool` (`POLYFISH_MICRO_FORCED_PLAYOUTS`, presence-based like `WL_LABELS`).
+When on, `micro_search_pick`'s sims loop spends its first
+`min(sims, num_root_children)` simulations giving every not-yet-visited
+root child (in heuristic-score order; a carried-over child from last
+ply's search is already visited and is skipped) exactly one real
+expansion + leaf evaluation — mirroring `select_and_expand`'s own
+leaf-creation branch, applied directly to a forced index instead of a
+PUCT-selected one — before falling through to ordinary PUCT selection
+for whatever `sims` budget remains. Guarantees no root child can end the
+search with zero information purely from early path-dependence. Two new
+tests: `forced_playouts_off_is_byte_identical_to_the_old_sims_loop`
+(same pick + same visit distribution across 8 seeds, field off) and
+`forced_playouts_guarantees_every_root_child_at_least_one_visit` (every
+traced child's `visits >= 1` whenever `sims` can cover every child).
+Full `cargo test --lib --bin self_play` green (396+31 passed, 0 failed,
+11 pre-existing ignored) — every existing `MicroParams { .. }` literal in
+the file updated for the new field, no other construction sites exist
+in the crate.
+
+VERIFICATION.
+1. Same 3-seed/6-game trace re-run with `POLYFISH_MICRO_FORCED_PLAYOUTS=1`
+   added: unit 1 in `1308032797_a` breaks out of the target-8 entrapment
+   by turn 7 (goal reassigns to a new target, `Assigned`) instead of
+   still being stuck at turn 17 — direct, concrete before/after
+   confirmation on the exact reproduction case. Whole-game micro-mcts
+   override rate fell 41.4%→29.1% on this 6-game sample.
+2. Mechanism at full n=200 scale (`eval_seeds.json`, same checkpoint,
+   ramp OFF this time — isolating `forced_playouts` alone per this
+   project's "one lever at a time" discipline): override rate **47.7%→
+   28.9%** (18838/39511 → 9941/34442) — the single largest override-rate
+   reduction of any lever tried in this entire campaign (bigger than the
+   c_puct ramp's own 48.6%→45.5%).
+3. Win rate, same n=200 harness, freshly-matched control (same
+   checkpoint, zero env overrides, run same session for a clean pairing
+   — not reused from an older dump, to rule out any checkpoint drift):
+   control 70.5% (141/200) vs. `forced_playouts` 68.5% (137/200).
+   Paired McNemar (`--dump-stats-dir` both arms, matched by (seed, swap)):
+   both-win 115, both-lose 37, control-only 26, treatment-only 22 →
+   χ²=0.188 — **not remotely significant** (nowhere near the 3.84
+   threshold for p<0.05). **No measurable win-rate cost for a mechanism
+   change that roughly halves the override rate** — the cleanest
+   cost-free mechanism result in the whole 135-150 campaign.
+
+DISPOSITION. Code change is real and committed-worthy (opt-in, tested,
+zero measured cost) but **not yet arena-validated for a win-rate GAIN**
+— n=200 here can only rule out a cost of the size seen elsewhere in this
+campaign (~5-7pp), not confirm a benefit of the size that would justify
+turning it on by default. `model.safetensors` untouched throughout (no
+training, no checkpoint writes). Per-game dumps at
+`diagnostics/exp150_forced_playouts/{control,treatment}/`;
+`ply_analysis` scratch scripts kept in the session scratchpad, not the
+repo. Natural next step, Verdi's call: a bigger confirmatory n (matching
+EXP_149's n=600 escalation pattern) to see whether halving the override
+rate this cleanly eventually shows up as a real win-rate gain, and/or
+stacking it with the turn-conditional c_puct ramp (the two are
+mechanistically complementary — the ramp changes how much prior-vs-Q
+matters, this ensures every candidate actually gets sampled at all).

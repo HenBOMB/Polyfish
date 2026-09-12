@@ -69,11 +69,28 @@ pub struct MicroParams {
     /// already reflects a net+heuristic blend in that case, so there is
     /// nothing left for this field's second forward pass to add.
     pub net_prior_w: f32,
+    /// EXP_ELO_150: spend the first `min(sims, num_root_children)` sims
+    /// guaranteeing every root child at least one real visit (in `idxs`
+    /// order, i.e. heuristic-score order) before falling through to normal
+    /// PUCT selection for whatever sims remain. At the tiny production
+    /// `sims` budget (8, often against 4-6 children), a child that never
+    /// gets picked by PUCT's own path-dependent early selection can end up
+    /// with 0 visits all search — the FIRST sim's winner (decided by raw
+    /// prior magnitude with every Q at FPU=0.0) then tends to keep
+    /// accumulating visits regardless of whether it was actually good,
+    /// since PUCT's exploration bonus for an unvisited sibling only grows
+    /// as `sqrt(total_visits)`, which barely moves in a handful of sims.
+    /// Measured directly on real games (EXP_ELO_150): 28/176 (15.9%) of
+    /// Step moves by a unit with a live Expand goal picked a candidate the
+    /// heuristic itself scored far worse than an available alternative
+    /// (median gap in the hundreds of points) while moving away from or
+    /// sideways to the goal. `false` (default) is a byte-identical no-op.
+    pub forced_playouts: bool,
 }
 
 impl Default for MicroParams {
     fn default() -> Self {
-        Self { sims: 16, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0 }
+        Self { sims: 16, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0, forced_playouts: false }
     }
 }
 
@@ -125,7 +142,11 @@ pub fn micro_mcts_params() -> Option<MicroParams> {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(0.3);
-        Some(MicroParams { sims, depth, k, c_puct, net_prior_w })
+        // EXP_ELO_150: opt-in, default off (presence-based, matching this
+        // project's other boolean env flags e.g. WL_LABELS) -- see
+        // `MicroParams::forced_playouts`'s own doc for the mechanism.
+        let forced_playouts = std::env::var("POLYFISH_MICRO_FORCED_PLAYOUTS").is_ok();
+        Some(MicroParams { sims, depth, k, c_puct, net_prior_w, forced_playouts })
     })
 }
 
@@ -578,7 +599,33 @@ pub fn micro_search_pick(
         is_terminal: false,
     };
     let mut max_depth_this_call: usize = 0;
-    for _ in 0..params.sims {
+    let mut spent_sims = 0usize;
+    if params.forced_playouts {
+        for i in 0..root.children.len() {
+            if spent_sims >= params.sims {
+                break;
+            }
+            if root.children[i].node.is_some() {
+                continue; // already visited this ply, or carried over from last ply
+            }
+            let mut child_game = root.game.clone();
+            let ok = child_game.simulate_move(root.children[i].mv.as_ref()).is_some();
+            let terminal = !ok || child_game.state.settings.current_player_turn_id != pov;
+            let v = leaf_value(&child_game, pov, goal, evaluator);
+            root.children[i].node = Some(MicroNode {
+                game: child_game,
+                visits: 1,
+                value_sum: v,
+                children: Vec::new(),
+                is_terminal: terminal,
+            });
+            root.visits += 1;
+            root.value_sum += v;
+            max_depth_this_call = max_depth_this_call.max(1);
+            spent_sims += 1;
+        }
+    }
+    for _ in spent_sims..params.sims {
         let (_, d) = select_and_expand(&mut root, pov, goal, star_gate, aux, evaluator, params, params.depth);
         max_depth_this_call = max_depth_this_call.max(d);
     }
@@ -658,7 +705,7 @@ mod tests {
     #[test]
     fn measures_own_emergent_depth_at_production_params() {
         let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-        let params = MicroParams { sims: 64, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0 };
+        let params = MicroParams { sims: 64, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0 , forced_playouts: false };
 
         for seed in 0..6i64 {
             let mut game = Game::new();
@@ -733,7 +780,7 @@ mod tests {
     #[test]
     fn union_widening_is_fully_gated_off_at_net_prior_w_zero() {
         let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-        let params = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0 };
+        let params = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0 , forced_playouts: false };
         let mut ran_any = false;
         for seed in 0..8i64 {
             let game = tiny_game_at_seed(seed);
@@ -773,7 +820,7 @@ mod tests {
     #[test]
     fn root_already_net_ranked_fully_gates_off_the_widening_block() {
         let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-        let params = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.3 };
+        let params = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.3 , forced_playouts: false };
         let mut ran_any = false;
         for seed in 0..8i64 {
             let game = tiny_game_at_seed(seed);
@@ -896,7 +943,7 @@ mod tests {
             };
 
             let evaluator = Evaluator::Dummy(DummyEvalHandle::new().with_policy(policy));
-            let params = MicroParams { sims: 1, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 1.0 };
+            let params = MicroParams { sims: 1, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 1.0 , forced_playouts: false };
             let (picked, _, _, _) =
                 micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, false);
             assert_eq!(
@@ -943,6 +990,81 @@ mod tests {
         let scores = [1000.0, 10.0, 10.5, 9.5, 10.2, 9.8, 10.1, 9.9];
         let priors = softmax_priors(&scores);
         assert!(priors[0] > 0.5, "a true outlier should still clearly dominate: {priors:?}");
+    }
+
+    /// EXP_ELO_150: `forced_playouts` must be a true no-op when off (the
+    /// project's standing convention for every opt-in flag) -- same pick,
+    /// same child trace, as the exact same call with the field omitted from
+    /// the sims loop entirely.
+    #[test]
+    fn forced_playouts_off_is_byte_identical_to_the_old_sims_loop() {
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+        let base = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0, forced_playouts: false };
+        let mut ran_any = false;
+        for seed in 0..8i64 {
+            let game = tiny_game_at_seed(seed);
+            let pov = game.state.settings.current_player_turn_id;
+            let mut view = game.clone_for_mcts(pov);
+            let goal = compute_macro_goal(&view.state, pov, 0);
+            let aux = compute_goal_aux(&view.state, pov, &goal, 0, 0, None);
+            let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
+            let ranked = rank_plies(&mut view, pov, &goal, &aux, star_gate, 1.0, None, None);
+            if ranked.len() < 5 {
+                continue; // want at least a few real root children
+            }
+            ran_any = true;
+            let (pick_a, _, _, trace_a) =
+                micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &base, None, false);
+            let (pick_b, _, _, trace_b) =
+                micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &base, None, false);
+            assert_eq!(pick_a, pick_b, "seed {seed}: same off params must reproduce the same pick");
+            assert_eq!(
+                trace_a.iter().map(|c| c.visits).collect::<Vec<_>>(),
+                trace_b.iter().map(|c| c.visits).collect::<Vec<_>>(),
+                "seed {seed}: same off params must reproduce the same visit distribution"
+            );
+        }
+        assert!(ran_any, "no seed produced a ply with >=5 real candidates -- widen the seed range");
+    }
+
+    /// EXP_ELO_150: the whole point of the warm start -- with `sims >=
+    /// num_root_children`, every child gets a real visit, closing the "a
+    /// candidate the heuristic ranked far ahead can end the search with
+    /// zero visits, purely from early PUCT path-dependence" failure mode
+    /// this experiment measured directly on real games (28/176 Step moves
+    /// by a goal-committed unit misaligned, see the ledger entry).
+    #[test]
+    fn forced_playouts_guarantees_every_root_child_at_least_one_visit() {
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+        let params = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0, forced_playouts: true };
+        let mut checked_any = false;
+        for seed in 0..8i64 {
+            let game = tiny_game_at_seed(seed);
+            let pov = game.state.settings.current_player_turn_id;
+            let mut view = game.clone_for_mcts(pov);
+            let goal = compute_macro_goal(&view.state, pov, 0);
+            let aux = compute_goal_aux(&view.state, pov, &goal, 0, 0, None);
+            let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
+            let ranked = rank_plies(&mut view, pov, &goal, &aux, star_gate, 1.0, None, None);
+            if ranked.len() < 2 {
+                continue;
+            }
+            let (_, _, _, trace) =
+                micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, false);
+            if trace.len() > params.sims {
+                continue; // only meaningful when sims can cover every actual root child
+            }
+            checked_any = true;
+            for (i, c) in trace.iter().enumerate() {
+                assert!(
+                    c.visits >= 1,
+                    "seed {seed}, child {i} ({}): forced_playouts must give every root child >= 1 visit, got {}",
+                    c.mv,
+                    c.visits
+                );
+            }
+        }
+        assert!(checked_any, "no seed produced ranked.len() in [2, sims] -- widen the seed range");
     }
 
     /// Near-equal scores (std -> floor) must not blow up into a wild,
