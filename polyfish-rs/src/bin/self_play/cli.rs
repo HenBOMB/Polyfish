@@ -97,6 +97,38 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = 0.0)]
     pub(crate) label_abs_debias: f32,
 
+    /// EXP_ELO_140: dose (0.0-1.0) re-centering the TD bootstrap SOURCE —
+    /// `root_value` itself, wherever a checkpoint reports one — against
+    /// --value-recenter-table's per-turn bias, instead of 138's window-
+    /// reward de-mean. 0.0 (default) is an exact no-op regardless of the
+    /// table. Requires --value-recenter-table to have any effect.
+    #[arg(long, default_value_t = 0.0)]
+    pub(crate) value_recenter_dose: f32,
+
+    /// EXP_ELO_140: path to the per-turn root_value bias table (JSON
+    /// f32 array). Read at startup to correct THIS run's labels (missing
+    /// file = all zeros, i.e. uncorrected; harmless if --value-recenter-dose
+    /// is 0.0). Overwritten at the end of the run — but ONLY when
+    /// --value-recenter-dose > 0 — with an EMA blend of the table read in
+    /// and this run's own freshly measured mean root_value per turn: a
+    /// moving target that tracks the CURRENT checkpoint's bootstrap output,
+    /// not a fixed constant.
+    #[arg(long)]
+    pub(crate) value_recenter_table: Option<String>,
+
+    /// EXP_ELO_141: weight (0.0-1.0) blending the TD bootstrap toward
+    /// `root_own_value` (pre-search, zero-tree-processing value-head
+    /// output) instead of `root_value` (post-search Q, which folds in
+    /// in-tree edge-reward shaping — EXP_ELO_140's probe measured that gap
+    /// at +0.35 at turn [0,5), shrinking to +0.03 by turn 20+). A
+    /// mechanistically different lever than --value-recenter-dose: removes
+    /// the self-reference to a SHAPED number instead of re-centering the
+    /// shaped number. 0.0 (default) is an exact no-op. Automatically
+    /// forces `POLYFISH_MACRO_ROOT_OWN_VALUE=1` on when > 0.0 (main.rs) so
+    /// this can never silently do nothing for want of the env var.
+    #[arg(long, default_value_t = 0.0)]
+    pub(crate) bootstrap_own_w: f32,
+
     /// EXP_ELO_002: iteration where the anchor-frac decay clock starts —
     /// the anchor's effective decay iteration is `iteration - this`
     /// (clamped at 0). The loop passes the current iteration to HOLD

@@ -93,6 +93,19 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    // EXP_ELO_141: --bootstrap-own-w > 0.0 requires root_own_value to
+    // actually be populated, which requires this env var — force it on so
+    // the flag can never silently do nothing for want of the env var (the
+    // exact `goal-w-tree`-shaped footgun this project has been bitten by
+    // before). Safety: same single-threaded-at-startup argument as
+    // POLYFISH_PLY_TRACE above (macro_root_own_value_enabled's OnceLock
+    // hasn't been read yet).
+    if args.bootstrap_own_w > 0.0 && std::env::var("POLYFISH_MACRO_ROOT_OWN_VALUE").is_err() {
+        unsafe {
+            std::env::set_var("POLYFISH_MACRO_ROOT_OWN_VALUE", "1");
+        }
+    }
+
     if args.anchor_frac > 0.0 && args.opponent.is_some() {
         anyhow::bail!("--anchor-frac and --opponent are mutually exclusive");
     }

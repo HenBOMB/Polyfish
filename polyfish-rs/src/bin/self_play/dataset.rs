@@ -14,11 +14,12 @@ use strum::IntoEnumIterator;
 
 use crate::cli::Args;
 use crate::labels::{ArmyStep, CitySptStep, FINAL_OUTCOME_REL_W, GOOD_BOT_FINAL_SCORE,
-                    LabelStep, SptStep, TerritoryStep, army_checkpoints_by_player,
-                    army_target, city_spt_checkpoints, city_spt_target, macro_policy_targets,
-                    ownership_from_pov, siege_pressure_target, spt_checkpoints_by_player,
+                    LabelStep, SptStep, TerritoryStep, VALUE_RECENTER_TABLE_LEN,
+                    army_checkpoints_by_player, army_target, city_spt_checkpoints,
+                    city_spt_target, macro_policy_targets, ownership_from_pov,
+                    root_value_turn_sums, siege_pressure_target, spt_checkpoints_by_player,
                     spt_target, td_lambda_labels, territory_checkpoints_by_player,
-                    territory_target, territory_target_h1};
+                    territory_target, territory_target_h1, update_value_recenter_table};
 use crate::result::{GameResult, HistoryStep};
 use crate::shard::{SHARD_GAMES, flush_shard};
 use crate::stats::is_net_seat;
@@ -99,6 +100,15 @@ pub(crate) struct ShardBuffers {
     shard_prefix: &'static str,
     run_ts: u64,
     value_calib_file: Option<File>,
+    // EXP_ELO_140: per-turn root_value bias table, loaded from
+    // `--value-recenter-table` (or zeroed) at construction and applied to
+    // every game's labels; `value_recenter_sums` accumulates THIS run's own
+    // measured means, written back (EMA-blended) at `finish()` — a moving
+    // target, not the fixed constant EXP_ELO_138 shipped.
+    value_recenter_table: Vec<f32>,
+    value_recenter_sums: HashMap<i32, (f32, u32)>,
+    value_recenter_dose: f32,
+    value_recenter_table_path: Option<String>,
 }
 
 impl ShardBuffers {
@@ -141,6 +151,15 @@ impl ShardBuffers {
                 .dump_value_calib
                 .as_ref()
                 .and_then(|p| File::create(p).ok()),
+            value_recenter_table: args
+                .value_recenter_table
+                .as_ref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .and_then(|s| serde_json::from_str::<Vec<f32>>(&s).ok())
+                .unwrap_or_else(|| vec![0.0; VALUE_RECENTER_TABLE_LEN]),
+            value_recenter_sums: HashMap::new(),
+            value_recenter_dose: args.value_recenter_dose,
+            value_recenter_table_path: args.value_recenter_table.clone(),
         }
     }
 
@@ -177,11 +196,19 @@ impl ShardBuffers {
             collected_macro_stance,
             collected_macro_order,
             collected_macro_mask,
-            value_calib_file, ..
+            value_calib_file,
+            value_recenter_table,
+            value_recenter_sums,
+            value_recenter_dose, ..
         } = self;
         let final_scores = &result.scores;
 
         let label_steps: Vec<LabelStep> = result.history.iter().map(LabelStep::from).collect();
+        for (turn, (sum, n)) in root_value_turn_sums(&label_steps) {
+            let e = value_recenter_sums.entry(turn).or_insert((0.0, 0));
+            e.0 += sum;
+            e.1 += n;
+        }
         // EXP_ELO_025: outcome-space labels — z anchors the TD tail too.
         let wl_z: Option<HashMap<i32, f32>> = if args.wl_labels {
             Some(
@@ -202,6 +229,9 @@ impl ShardBuffers {
             wl_z.as_ref(),
             args.td_missing_bootstrap,
             args.label_abs_debias,
+            value_recenter_table,
+            *value_recenter_dose,
+            args.bootstrap_own_w,
         );
 
         let spt_steps: Vec<SptStep> = result
@@ -572,6 +602,22 @@ impl ShardBuffers {
         )?;
         self.shard_files.push(path);
     }
+        self.write_value_recenter_table();
         Ok(std::mem::take(&mut self.shard_files))
+    }
+
+    /// EXP_ELO_140: EMA-blends this run's measured per-turn root_value
+    /// means into the table and writes it back — gated on the dose flag so
+    /// a probe/arena/trace-villages run (dose always 0.0 there) never
+    /// touches the sidecar file.
+    fn write_value_recenter_table(&mut self) {
+        let Some(path) = &self.value_recenter_table_path else { return };
+        if self.value_recenter_dose <= 0.0 {
+            return;
+        }
+        update_value_recenter_table(&mut self.value_recenter_table, &self.value_recenter_sums);
+        if let Ok(json) = serde_json::to_string(&self.value_recenter_table) {
+            let _ = std::fs::write(path, json);
+        }
     }
 }

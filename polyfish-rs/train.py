@@ -95,6 +95,17 @@ ROLLOUT_VALUE_W = float(os.environ.get("ROLLOUT_VALUE_W", "0.0"))
 # not a replacement -- see EXP_ELO_138's addendum. Default 0.0: existing
 # training unaffected until turned on, same convention as ROLLOUT_VALUE_W.
 POV_CONSISTENCY_W = float(os.environ.get("POV_CONSISTENCY_W", "0.0"))
+# EXP_ELO_141: weight (0.0-1.0) blending loss_win from plain MSE toward a
+# proper scoring rule (binary cross-entropy on win-probability, KataGo-
+# style). MSE under-penalizes confident-wrong: predicting 0.7 when the
+# truth is 0.1 costs 0.36, predicting 0.9 costs 0.64 -- barely more, so
+# there's little pressure to actually say "0.1" at a low-information early
+# turn even when that's the right answer. v_win is already tanh-bounded in
+# [-1,1]; both prediction and target are mapped to [0,1] via (x+1)/2 and
+# scored with BCE, no new network head (orthogonal to BOOTSTRAP_OWN_W --
+# that fixes the TARGET's self-reference, this fixes what the LOSS
+# rewards). Default 0.0: existing training unaffected until turned on.
+CALIB_LOSS_W = float(os.environ.get("CALIB_LOSS_W", "0.0"))
 # EXP_ELO_066: every macro_stance/macro_order training row's spatial input
 # is painted with the search's own COMMITTED (already-chosen) goal -- the
 # label is that same search's visit-mass marginalization, so the head could
@@ -472,6 +483,15 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target,
                 kl_losses[head_name] = soft_cross_entropy(policy_pred[head_name], ref_probs)
 
     loss_win = nn.MSELoss()(values_pred['win'], value_target['win'])
+    if CALIB_LOSS_W > 0.0:
+        # (x+1)/2 maps the tanh-bounded [-1,1] value onto [0,1]; pred is
+        # clamped away from the boundary (BCE's log(p)/log(1-p) blows up
+        # exactly there), target is not (soft targets, e.g. 0 or 1 in
+        # wl-labels mode, are valid BCE targets as-is).
+        pred_prob = ((values_pred['win'] + 1.0) / 2.0).clamp(1e-6, 1.0 - 1e-6)
+        target_prob = ((value_target['win'] + 1.0) / 2.0).clamp(0.0, 1.0)
+        loss_win_bce = nn.functional.binary_cross_entropy(pred_prob, target_prob)
+        loss_win = (1.0 - CALIB_LOSS_W) * loss_win + CALIB_LOSS_W * loss_win_bce
 
     loss_progress = 0.0
     if 'progress' in value_target and 'progress' in values_pred:

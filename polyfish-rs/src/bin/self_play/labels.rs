@@ -49,6 +49,13 @@ pub(crate) struct LabelStep {
     pub(crate) my_score: f32,
     pub(crate) opp_score: f32,
     pub(crate) root_value: Option<f32>,
+    /// Pre-search, zero-tree-processing value-head output at this decision
+    /// (EXP_ELO_141) -- only populated when `POLYFISH_MACRO_ROOT_OWN_VALUE=1`
+    /// (auto-forced by `--bootstrap-own-w > 0.0`, see cli.rs). Distinct from
+    /// `root_value` (post-search Q, which folds in in-tree edge-reward
+    /// shaping -- EXP_ELO_140's probe measured that gap at +0.35 at turn
+    /// [0,5), shrinking to +0.03 by turn 20+).
+    pub(crate) root_own_value: Option<f32>,
     /// `evaluate_state` at this decision, on its own score-differential
     /// scale -- the `MissingBootstrap::Heur` fallback's raw material.
     pub(crate) heur_value: f32,
@@ -62,6 +69,7 @@ impl From<&HistoryStep> for LabelStep {
             my_score: s.my_score,
             opp_score: s.opp_score,
             root_value: s.root_value,
+            root_own_value: s.root_own_value,
             heur_value: s.heur_value,
         }
     }
@@ -76,6 +84,7 @@ pub(crate) struct Checkpoint {
     pub(crate) my: f32,
     pub(crate) opp: f32,
     pub(crate) root_value: Option<f32>,
+    pub(crate) root_own_value: Option<f32>,
     pub(crate) heur_value: f32,
 }
 
@@ -89,6 +98,7 @@ pub(crate) fn checkpoints_by_player(history: &[LabelStep]) -> HashMap<PlayerId, 
                     c.my = step.my_score;
                     c.opp = step.opp_score;
                     c.root_value = step.root_value;
+                    c.root_own_value = step.root_own_value;
                     c.heur_value = step.heur_value;
                 }
             }
@@ -97,6 +107,7 @@ pub(crate) fn checkpoints_by_player(history: &[LabelStep]) -> HashMap<PlayerId, 
                 my: step.my_score,
                 opp: step.opp_score,
                 root_value: step.root_value,
+                root_own_value: step.root_own_value,
                 heur_value: step.heur_value,
             }),
         }
@@ -114,6 +125,17 @@ pub(crate) fn checkpoints_by_player(history: &[LabelStep]) -> HashMap<PlayerId, 
 /// the measured positive-sum baseline. Does not touch the terminal_return
 /// above (weight ~0 this early; untouched to avoid extrapolating the growth
 /// table past its measured turn range).
+/// `value_recenter_table`/`value_recenter_dose` (EXP_ELO_140) subtract a
+/// per-turn bias directly from the `Some(root_value)` bootstrap term itself
+/// — the SOURCE 138 could not reach — scaled by `value_recenter_dose`;
+/// `value_recenter_dose=0.0` (default) is an exact no-op regardless of the
+/// table's contents.
+/// `bootstrap_own_w` (EXP_ELO_141) blends the bootstrap toward
+/// `root_own_value` (pre-search, no in-tree shaping) instead of
+/// `value_recenter`'s post-hoc correction of `root_value` (post-search Q) —
+/// a mechanistically different lever: removes the self-reference to a
+/// SHAPED number rather than re-centering the shaped number itself.
+/// `bootstrap_own_w=0.0` (default) is an exact no-op.
 /// What an n-step return does when its checkpoint has no root value (forced
 /// plies, or any backend that reports none).
 #[derive(Copy, Clone, PartialEq, Eq, Debug, clap::ValueEnum)]
@@ -183,6 +205,69 @@ fn expected_abs_growth(turn_start: i32, dt: i32) -> f32 {
         .sum()
 }
 
+/// Turns beyond this index pool onto the last entry, mirroring
+/// `ABS_GROWTH_PER_TURN`'s own clamp-to-last-entry convention.
+pub(crate) const VALUE_RECENTER_TABLE_LEN: usize = 25;
+
+/// Per-turn sample count below which a freshly-measured mean is too noisy
+/// to trust (EXP_ELO_138's fixed table went noisy for the same reason past
+/// ~turn 19) — the EMA blend below carries the prior table value forward
+/// for that turn instead of overwriting it.
+const VALUE_RECENTER_MIN_N: u32 = 50;
+
+/// Weight on this run's freshly measured mean vs. the table carried in from
+/// the previous run. A pure per-generation overwrite (weight 1.0) is a
+/// second-order recursion through the self-referential bootstrap and can
+/// ring; 0.5 damps that while still tracking real drift within ~2 iterations.
+const VALUE_RECENTER_EMA: f32 = 0.5;
+
+/// EXP_ELO_140: per-turn mean of `Checkpoint.root_value` (the exact
+/// bootstrap SOURCE `td_lambda_labels` reads, not the window reward
+/// EXP_ELO_138 touched), `Some` entries only. Turn-only, not per-seat —
+/// EXP_ELO_137 found both seats biased almost equally, and `Checkpoint`'s
+/// my/opp fields are already POV-relative, same convention as
+/// `ABS_GROWTH_PER_TURN`'s own measurement.
+pub(crate) fn root_value_turn_sums(history: &[LabelStep]) -> HashMap<i32, (f32, u32)> {
+    let mut out: HashMap<i32, (f32, u32)> = HashMap::new();
+    for cps in checkpoints_by_player(history).values() {
+        for cp in cps {
+            if let Some(v) = cp.root_value {
+                let e = out.entry(cp.turn).or_insert((0.0, 0));
+                e.0 += v;
+                e.1 += 1;
+            }
+        }
+    }
+    out
+}
+
+/// EMA-blends this run's freshly measured per-turn means (`sums`) into
+/// `table` in place — a moving target re-measured every self-play
+/// generation, not a fixed constant. Turns beyond `table`'s length pool
+/// onto its last slot; turns under `VALUE_RECENTER_MIN_N` samples this run
+/// keep their existing value.
+pub(crate) fn update_value_recenter_table(table: &mut [f32], sums: &HashMap<i32, (f32, u32)>) {
+    if table.is_empty() {
+        return;
+    }
+    for (&turn, &(sum, n)) in sums {
+        if n < VALUE_RECENTER_MIN_N {
+            continue;
+        }
+        let idx = (turn.max(0) as usize).min(table.len() - 1);
+        let mean = sum / n as f32;
+        table[idx] = VALUE_RECENTER_EMA * mean + (1.0 - VALUE_RECENTER_EMA) * table[idx];
+    }
+}
+
+fn value_recenter_bias(turn: i32, table: &[f32]) -> f32 {
+    if table.is_empty() {
+        0.0
+    } else {
+        table[(turn.max(0) as usize).min(table.len() - 1)]
+    }
+}
+
 pub(crate) fn td_lambda_labels(
     history: &[LabelStep],
     final_scores: &HashMap<i32, f32>,
@@ -191,6 +276,9 @@ pub(crate) fn td_lambda_labels(
     wl_z: Option<&HashMap<i32, f32>>,
     missing: MissingBootstrap,
     label_abs_debias: f32,
+    value_recenter_table: &[f32],
+    value_recenter_dose: f32,
+    bootstrap_own_w: f32,
 ) -> Vec<f32> {
     let checkpoints = checkpoints_by_player(history);
 
@@ -225,7 +313,27 @@ pub(crate) fn td_lambda_labels(
             let mut remaining_weight = 1.0f32;
             for cp in &ahead[start..] {
                 let bootstrap = match cp.root_value {
-                    Some(v) => v,
+                    // EXP_ELO_140: re-centers the bootstrap SOURCE itself
+                    // (not the window reward — `calibrated_heur` below is
+                    // already OLS-centered against outcome, so it is
+                    // deliberately left untouched).
+                    Some(v) => {
+                        let v = v
+                            - value_recenter_dose * value_recenter_bias(cp.turn, value_recenter_table);
+                        // EXP_ELO_141: blend toward root_own_value (pre-
+                        // search, no in-tree shaping) instead of root_value
+                        // (post-search Q). `Some(root_value)` but
+                        // `None` `root_own_value` (env var not forced on
+                        // for this checkpoint, or capture missed it) falls
+                        // back to `v` alone — the dose can never inflate a
+                        // missing reading into a wrong one.
+                        match cp.root_own_value {
+                            Some(own) if bootstrap_own_w > 0.0 => {
+                                (1.0 - bootstrap_own_w) * v + bootstrap_own_w * own
+                            }
+                            _ => v,
+                        }
+                    }
                     None => match missing {
                         MissingBootstrap::Zero => 0.0,
                         MissingBootstrap::Mc => continue, // weight carries forward to the terminal return

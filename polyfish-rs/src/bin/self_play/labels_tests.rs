@@ -20,12 +20,25 @@ use polyfish::types::{TechnologyType, UnitEffect};
         rv: Option<f32>,
         heur_value: f32,
     ) -> LabelStep {
+        step_own(player_id, turn, my, opp, rv, None, heur_value)
+    }
+
+    fn step_own(
+        player_id: PlayerId,
+        turn: i32,
+        my: i32,
+        opp: i32,
+        rv: Option<f32>,
+        own: Option<f32>,
+        heur_value: f32,
+    ) -> LabelStep {
         LabelStep {
             player_id,
             turn,
             my_score: my as f32,
             opp_score: opp as f32,
             root_value: rv,
+            root_own_value: own,
             heur_value,
         }
     }
@@ -47,13 +60,13 @@ use polyfish::types::{TechnologyType, UnitEffect};
         let final_scores = finals(&[(1, 1600), (2, 900)]);
         let expected = reward::normalized_reward(1000, 800, 1600, 900).clamp(-1.0, 1.0);
 
-        let mc = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None, MissingBootstrap::Mc, 0.0);
+        let mc = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None, MissingBootstrap::Mc, 0.0, &[], 0.0, 0.0);
         assert!(
             (mc[0] - expected).abs() < 1e-6,
             "mc label {} should be the pure terminal return {expected}",
             mc[0]
         );
-        let zero = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None, MissingBootstrap::Zero, 0.0);
+        let zero = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None, MissingBootstrap::Zero, 0.0, &[], 0.0, 0.0);
         assert!(
             (zero[0] - expected).abs() > 1e-6,
             "zero-bootstrap must still truncate (legacy semantics pinned elsewhere)"
@@ -72,9 +85,9 @@ use polyfish::types::{TechnologyType, UnitEffect};
         ];
         let final_scores = finals(&[(1, 5000), (2, 800)]);
 
-        let heur = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Heur, 0.0);
-        let mc = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Mc, 0.0);
-        let zero = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero, 0.0);
+        let heur = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Heur, 0.0, &[], 0.0, 0.0);
+        let mc = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Mc, 0.0, &[], 0.0, 0.0);
+        let zero = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero, 0.0, &[], 0.0, 0.0);
 
         let r = reward::normalized_reward(1000, 800, 1100, 800);
         let bootstrap = (HEUR_TO_OUTCOME_SLOPE * 0.3 + HEUR_TO_OUTCOME_INTERCEPT).clamp(-1.0, 1.0);
@@ -105,7 +118,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
         let expected = reward::normalized_reward(1000, 800, 1300, 900).clamp(-1.0, 1.0);
 
         for lambda in [0.0, 0.5, 0.8, 0.95] {
-            let out = td_lambda_labels(&history, &final_scores, lambda, reward::REL_W, None, MissingBootstrap::Zero, 0.0);
+            let out = td_lambda_labels(&history, &final_scores, lambda, reward::REL_W, None, MissingBootstrap::Zero, 0.0, &[], 0.0, 0.0);
             assert!(
                 (out[0] - expected).abs() < 1e-6,
                 "lambda={lambda}: got {}, expected {expected}",
@@ -128,7 +141,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
         ];
         let final_scores = finals(&[(1, 5000), (2, 800)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero, 0.0);
+        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero, 0.0, &[], 0.0, 0.0);
 
         let r = reward::normalized_reward(1000, 800, 1100, 800);
         let expected = (r + reward::GAMMA_TURN.powi(1) * 0.9).clamp(-1.0, 1.0);
@@ -141,7 +154,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
         // Sanity: changing turn 7's root_value must NOT move the lambda=0 label.
         let mut history2 = history.clone();
         history2[3].root_value = Some(12345.0);
-        let out2 = td_lambda_labels(&history2, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero, 0.0);
+        let out2 = td_lambda_labels(&history2, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero, 0.0, &[], 0.0, 0.0);
         assert!((out2[0] - out[0]).abs() < 1e-6);
     }
 
@@ -157,7 +170,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
         ];
         let final_scores = finals(&[(1, 300), (2, 100)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None, MissingBootstrap::Zero, 0.0);
+        let out = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None, MissingBootstrap::Zero, 0.0, &[], 0.0, 0.0);
 
         let n1 = reward::normalized_reward(100, 100, 300, 100) + reward::GAMMA_TURN.powi(1) * 0.6;
         let terminal = reward::normalized_reward(100, 100, 300, 100);
@@ -181,7 +194,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
         ];
         let final_scores = finals(&[(1, 1200), (2, 800)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero, 0.0);
+        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero, 0.0, &[], 0.0, 0.0);
         let expected = reward::normalized_reward(1000, 800, 1200, 800).clamp(-1.0, 1.0);
         assert!(
             (out[0] - expected).abs() < 1e-6,
@@ -201,8 +214,8 @@ use polyfish::types::{TechnologyType, UnitEffect};
         ];
         let final_scores = finals(&[(1, 1100), (2, 1200)]);
 
-        let abs_only = td_lambda_labels(&history, &final_scores, 0.0, 0.0, None, MissingBootstrap::Zero, 0.0);
-        let rel_only = td_lambda_labels(&history, &final_scores, 0.0, 1.0, None, MissingBootstrap::Zero, 0.0);
+        let abs_only = td_lambda_labels(&history, &final_scores, 0.0, 0.0, None, MissingBootstrap::Zero, 0.0, &[], 0.0, 0.0);
+        let rel_only = td_lambda_labels(&history, &final_scores, 0.0, 1.0, None, MissingBootstrap::Zero, 0.0, &[], 0.0, 0.0);
         assert!(abs_only[0] > 0.0, "abs-only label should be positive, got {}", abs_only[0]);
         assert!(rel_only[0] < 0.0, "rel-only label should be negative, got {}", rel_only[0]);
     }
@@ -222,9 +235,9 @@ use polyfish::types::{TechnologyType, UnitEffect};
         let final_scores = finals(&[(1, 700), (2, 600)]);
 
         let undebiased =
-            td_lambda_labels(&history, &final_scores, 0.0, 0.0, None, MissingBootstrap::Zero, 0.0);
+            td_lambda_labels(&history, &final_scores, 0.0, 0.0, None, MissingBootstrap::Zero, 0.0, &[], 0.0, 0.0);
         let debiased =
-            td_lambda_labels(&history, &final_scores, 0.0, 0.0, None, MissingBootstrap::Zero, 1.0);
+            td_lambda_labels(&history, &final_scores, 0.0, 0.0, None, MissingBootstrap::Zero, 1.0, &[], 0.0, 0.0);
 
         let expected_baseline = expected_abs_growth(0, 1);
         assert!(expected_baseline > 0.0, "sanity: turn-0 baseline should be positive");
@@ -238,6 +251,135 @@ use polyfish::types::{TechnologyType, UnitEffect};
     }
 
     #[test]
+    fn value_recenter_dose_subtracts_exactly_the_table_value_from_the_bootstrap() {
+        // Rel-only pricing, lambda=0 isolates the single checkpoint's
+        // n-step return to `GAMMA_TURN * bootstrap` (delta_abs is zeroed
+        // out by rel_w=1.0's own scores being equal). root_value=Some(0.4)
+        // is the raw bootstrap; a table entry of 0.3 at dose=1.0 must
+        // subtract exactly 0.3 from it, at dose=0.0 must not move it at all.
+        let history = vec![
+            step(1, 0, 500, 500, Some(0.1)),
+            step(1, 1, 500, 500, Some(0.4)),
+        ];
+        let final_scores = finals(&[(1, 500), (2, 500)]);
+        let table = [0.3f32; VALUE_RECENTER_TABLE_LEN];
+
+        let off = td_lambda_labels(
+            &history, &final_scores, 0.0, 1.0, None, MissingBootstrap::Zero, 0.0, &table, 0.0, 0.0,
+        );
+        let on = td_lambda_labels(
+            &history, &final_scores, 0.0, 1.0, None, MissingBootstrap::Zero, 0.0, &table, 1.0, 0.0,
+        );
+
+        let expected_off = reward::GAMMA_TURN.powi(1) * 0.4;
+        let expected_on = reward::GAMMA_TURN.powi(1) * (0.4 - 0.3);
+        assert!(
+            (off[0] - expected_off).abs() < 1e-6,
+            "dose=0.0 must be an exact no-op regardless of the table: got {}, expected {expected_off}",
+            off[0]
+        );
+        assert!(
+            (on[0] - expected_on).abs() < 1e-6,
+            "dose=1.0 must subtract exactly the table's turn-1 entry from root_value: got {}, expected {expected_on}",
+            on[0]
+        );
+    }
+
+    #[test]
+    fn root_value_turn_sums_dedups_to_checkpoints_not_raw_decisions() {
+        // Two decisions in the same (player, turn) share ONE checkpoint —
+        // the sum must count that checkpoint once, not once per referencing
+        // decision, matching what td_lambda_labels actually bootstraps from.
+        // `checkpoints_by_player`'s own replace rule only fires when the
+        // existing checkpoint's root_value is None (see labels.rs); a
+        // second Some() at the same turn is ignored, so the FIRST value
+        // wins here, not the last.
+        let history = vec![
+            step(1, 5, 1000, 800, Some(0.2)),
+            step(1, 6, 1100, 800, Some(0.6)), // checkpoint turn=6: first Some wins
+            step(1, 6, 1150, 800, Some(0.9)), // same (player,turn): ignored, not additive
+            step(2, 6, 1000, 900, Some(-0.4)), // different player: separate checkpoint
+        ];
+        let sums = root_value_turn_sums(&history);
+        let (sum6, n6) = sums[&6];
+        assert_eq!(n6, 2, "one checkpoint per player at turn 6, not per decision");
+        assert!((sum6 - (0.6 - 0.4)).abs() < 1e-6, "got sum {sum6}");
+    }
+
+    #[test]
+    fn update_value_recenter_table_ema_blends_and_skips_thin_turns() {
+        let mut table = vec![0.0f32; VALUE_RECENTER_TABLE_LEN];
+        table[3] = 0.2;
+        let mut sums = HashMap::new();
+        sums.insert(3, (60.0, 100)); // mean 0.6, n=100 >= floor: EMA-blended
+        sums.insert(4, (5.0, 10)); // n=10 < floor: left untouched at 0.0
+        update_value_recenter_table(&mut table, &sums);
+        assert!(
+            (table[3] - (0.5 * 0.6 + 0.5 * 0.2)).abs() < 1e-6,
+            "turn 3 should EMA-blend the well-sampled mean into the prior table value, got {}",
+            table[3]
+        );
+        assert_eq!(table[4], 0.0, "under-sampled turn must keep its prior (unset) value");
+    }
+
+    #[test]
+    fn bootstrap_own_w_blends_toward_root_own_value_not_root_value() {
+        // Rel-only pricing, lambda=0 isolates the single checkpoint's
+        // n-step return to GAMMA_TURN * bootstrap (equal scores zero out
+        // delta_abs under rel_w=1.0). root_value=Some(0.8), root_own_value=
+        // Some(0.2): at w=0.0 the bootstrap must be exactly root_value; at
+        // w=1.0 exactly root_own_value; at w=0.5 the exact midpoint.
+        let history = vec![
+            step_own(1, 0, 500, 500, Some(0.1), None, 0.0),
+            step_own(1, 1, 500, 500, Some(0.8), Some(0.2), 0.0),
+        ];
+        let final_scores = finals(&[(1, 500), (2, 500)]);
+
+        let w0 = td_lambda_labels(
+            &history, &final_scores, 0.0, 1.0, None, MissingBootstrap::Zero, 0.0, &[], 0.0, 0.0,
+        );
+        let w_half = td_lambda_labels(
+            &history, &final_scores, 0.0, 1.0, None, MissingBootstrap::Zero, 0.0, &[], 0.0, 0.5,
+        );
+        let w1 = td_lambda_labels(
+            &history, &final_scores, 0.0, 1.0, None, MissingBootstrap::Zero, 0.0, &[], 0.0, 1.0,
+        );
+
+        let expected_w0 = reward::GAMMA_TURN.powi(1) * 0.8;
+        let expected_w_half = reward::GAMMA_TURN.powi(1) * 0.5;
+        let expected_w1 = reward::GAMMA_TURN.powi(1) * 0.2;
+        assert!((w0[0] - expected_w0).abs() < 1e-6, "w=0.0 got {}, expected {expected_w0}", w0[0]);
+        assert!(
+            (w_half[0] - expected_w_half).abs() < 1e-6,
+            "w=0.5 got {}, expected {expected_w_half}",
+            w_half[0]
+        );
+        assert!((w1[0] - expected_w1).abs() < 1e-6, "w=1.0 got {}, expected {expected_w1}", w1[0]);
+    }
+
+    #[test]
+    fn bootstrap_own_w_falls_back_to_root_value_when_own_value_missing() {
+        // root_own_value=None (env var wasn't forced on for this checkpoint,
+        // or capture missed it) -- even at w=1.0 the bootstrap must fall
+        // back to root_value alone, never silently degrade to 0 or panic.
+        let history = vec![
+            step_own(1, 0, 500, 500, Some(0.1), None, 0.0),
+            step_own(1, 1, 500, 500, Some(0.8), None, 0.0),
+        ];
+        let final_scores = finals(&[(1, 500), (2, 500)]);
+
+        let w1 = td_lambda_labels(
+            &history, &final_scores, 0.0, 1.0, None, MissingBootstrap::Zero, 0.0, &[], 0.0, 1.0,
+        );
+        let expected = reward::GAMMA_TURN.powi(1) * 0.8;
+        assert!(
+            (w1[0] - expected).abs() < 1e-6,
+            "missing root_own_value must fall back to root_value, got {}, expected {expected}",
+            w1[0]
+        );
+    }
+
+    #[test]
     fn wl_mode_last_decision_is_pure_z() {
         // No checkpoints ahead: the label must be exactly the ±1 outcome,
         // independent of lambda and of every score in the game.
@@ -246,7 +388,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
         let z = finals(&[(1, 1), (2, -1)]);
 
         for lambda in [0.0, 0.5, 0.8, 0.95] {
-            let out = td_lambda_labels(&history, &final_scores, lambda, reward::REL_W, Some(&z), MissingBootstrap::Zero, 0.0);
+            let out = td_lambda_labels(&history, &final_scores, lambda, reward::REL_W, Some(&z), MissingBootstrap::Zero, 0.0, &[], 0.0, 0.0);
             assert!(
                 (out[0] - 1.0).abs() < 1e-6,
                 "lambda={lambda}: got {}, expected 1.0",
@@ -266,7 +408,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
         let final_scores = finals(&[(1, 300), (2, 100)]);
         let z = finals(&[(1, -1), (2, 1)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, Some(&z), MissingBootstrap::Zero, 0.0);
+        let out = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, Some(&z), MissingBootstrap::Zero, 0.0, &[], 0.0, 0.0);
         let expected = 0.5f32 * 0.6 + 0.5 * -1.0;
         assert!(
             (out[0] - expected).abs() < 1e-6,
@@ -279,7 +421,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
             step(1, 0, 5000, 1, Some(0.4)),
             step(1, 1, 9000, 1, Some(0.6)),
         ];
-        let out2 = td_lambda_labels(&history2, &final_scores, 0.5, reward::REL_W, Some(&z), MissingBootstrap::Zero, 0.0);
+        let out2 = td_lambda_labels(&history2, &final_scores, 0.5, reward::REL_W, Some(&z), MissingBootstrap::Zero, 0.0, &[], 0.0, 0.0);
         assert!((out2[0] - out[0]).abs() < 1e-6);
     }
 
@@ -294,7 +436,7 @@ use polyfish::types::{TechnologyType, UnitEffect};
         let final_scores = finals(&[(1, 5000), (2, 800)]);
         let z = finals(&[(1, 1), (2, -1)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, Some(&z), MissingBootstrap::Zero, 0.0);
+        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, Some(&z), MissingBootstrap::Zero, 0.0, &[], 0.0, 0.0);
         assert!(
             (out[0] - 0.9).abs() < 1e-6,
             "got {}, expected undiscounted 0.9",

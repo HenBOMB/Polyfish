@@ -565,6 +565,29 @@ do
         LABEL_ABS_DEBIAS_FLAG="--label-abs-debias $LABEL_ABS_DEBIAS"
     fi
 
+    # EXP_ELO_140: dose (0.0-1.0) re-centering the TD bootstrap SOURCE
+    # (root_value itself) against a per-turn table this run's own self_play
+    # process measures and updates every generation. Unset = binary default
+    # (0.0, no-op, production labels); VALUE_RECENTER_TABLE is required for
+    # the dose to have any effect (read/written by self_play, not this script).
+    VALUE_RECENTER_FLAG=""
+    if [ -n "${VALUE_RECENTER_DOSE:-}" ]; then
+        VALUE_RECENTER_FLAG="--value-recenter-dose $VALUE_RECENTER_DOSE"
+    fi
+    if [ -n "${VALUE_RECENTER_TABLE:-}" ]; then
+        VALUE_RECENTER_FLAG="$VALUE_RECENTER_FLAG --value-recenter-table $VALUE_RECENTER_TABLE"
+    fi
+
+    # EXP_ELO_141: weight (0.0-1.0) blending the TD bootstrap toward
+    # root_own_value (pre-search, no in-tree shaping) instead of root_value
+    # (post-search Q). Unset = binary default (0.0, no-op, production
+    # labels). self_play auto-forces POLYFISH_MACRO_ROOT_OWN_VALUE=1 on
+    # when this is > 0.0 — no separate env var needed here.
+    BOOTSTRAP_OWN_W_FLAG=""
+    if [ -n "${BOOTSTRAP_OWN_W:-}" ]; then
+        BOOTSTRAP_OWN_W_FLAG="--bootstrap-own-w $BOOTSTRAP_OWN_W"
+    fi
+
     # EXP_ELO_016: development-potential shaping weights — label snapshots
     # (SHAPE_W_LABEL) and the in-tree Gumbel backup (SHAPE_W_TREE) are
     # threaded separately. Unset = 0 = raw score deltas (legacy).
@@ -677,14 +700,14 @@ do
     # One-line config echo so silent env misconfigurations (ITER_OFFSET,
     # LABEL_REL_W, BOOTSTRAP) are visible in the log — EXP_ELO_006 post-mortem:
     # two runs voided by a missing ITER_OFFSET that nothing surfaced.
-    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} label_abs_debias=${LABEL_ABS_DEBIAS:-0} pov_consistency_w=${POV_CONSISTENCY_W:-0} wl_labels=${WL_LABELS:-0} td_missing=${TD_MISSING} goal_channels=${GOAL_CHANNELS:-0} goal_w_tree=${GOAL_W_TREE:-1} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=${NUM_GAMES}x${SELF_PLAY_LOOPS} mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0} macro_stance_w=${MACRO_STANCE_W:-0} macro_order_w=${MACRO_ORDER_W:-0} macro_root_prior_w=${MACRO_ROOT_PRIOR_W:-0} macro_rollout_nn_w=${MACRO_ROLLOUT_NN_W:-0}"
+    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} label_abs_debias=${LABEL_ABS_DEBIAS:-0} value_recenter_dose=${VALUE_RECENTER_DOSE:-0} value_recenter_table=${VALUE_RECENTER_TABLE:-none} bootstrap_own_w=${BOOTSTRAP_OWN_W:-0} calib_loss_w=${CALIB_LOSS_W:-0} pov_consistency_w=${POV_CONSISTENCY_W:-0} wl_labels=${WL_LABELS:-0} td_missing=${TD_MISSING} goal_channels=${GOAL_CHANNELS:-0} goal_w_tree=${GOAL_W_TREE:-1} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=${NUM_GAMES}x${SELF_PLAY_LOOPS} mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0} macro_stance_w=${MACRO_STANCE_W:-0} macro_order_w=${MACRO_ORDER_W:-0} macro_root_prior_w=${MACRO_ROOT_PRIOR_W:-0} macro_rollout_nn_w=${MACRO_ROLLOUT_NN_W:-0}"
 
     SP_LOG=$(mktemp)
     for ((sp=1; sp<=SELF_PLAY_LOOPS; sp++)); do
         if [ "$SELF_PLAY_LOOPS" -gt 1 ]; then
             echo "🎲 Self-play pass $sp/$SELF_PLAY_LOOPS (-g $NUM_GAMES each)"
         fi
-        "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $GOAL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" --td-lambda "${TD_LAMBDA:-0.8}" $TD_MISSING_FLAG --outcome-scale "${OUTCOME_SCALE:-3.0}" $LABEL_REL_W_FLAG $LABEL_ABS_DEBIAS_FLAG $SHAPE_FLAGS $UNFREEZE_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+        "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $GOAL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" --td-lambda "${TD_LAMBDA:-0.8}" $TD_MISSING_FLAG --outcome-scale "${OUTCOME_SCALE:-3.0}" $LABEL_REL_W_FLAG $LABEL_ABS_DEBIAS_FLAG $VALUE_RECENTER_FLAG $BOOTSTRAP_OWN_W_FLAG $SHAPE_FLAGS $UNFREEZE_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
         SP_STATUS=${PIPESTATUS[0]}
         if [ "$SP_STATUS" -ne 0 ]; then
             echo "Self-play failed with exit code $SP_STATUS" >&2
