@@ -2177,6 +2177,23 @@ mod tests {
     /// the executor, then prints per-edge root Q/visits so tuning can tell
     /// genuine directive ties from an exploration term swamping the signal.
     /// Run: cargo test --lib ai::macro_mcts -- --ignored --nocapture
+    ///
+    /// `PROBE_SIMS` (default 32). `PROBE_ROLLOUT_NN_W`/
+    /// `PROBE_ROLLOUT_NN_MIN_DEPTH` (default 0.0/usize::MAX, i.e.
+    /// `MacroParams::default()`'s own off values -- set both to
+    /// production's 1.0/1 to see the REAL tree shape, not just the
+    /// structural ceiling): EXP_ELO_154-adjacent finding (Sep 13) --
+    /// with `rollout_nn_w=0.0` depth grows with `sims` (32->4-5,
+    /// 64->4-7 across 8 seeds); with production's `1.0`/`1` depth is
+    /// PINNED AT EXACTLY 2 for every seed at BOTH sims=32 and sims=64,
+    /// identical `pick`/`nodes`/`share` down to the seed -- once
+    /// `rollout_nn_min_depth` is passed, every edge freezes on its
+    /// first visit and never grows a child, so raising `sims` beyond
+    /// covering the root's own candidates buys nothing structurally in
+    /// production's actual configuration (uses `.with_rollout_value`
+    /// on the Dummy evaluator -- a bare one returns `rollout_value:
+    /// None`, which makes an "eligible to freeze" edge silently fall
+    /// through to full simulation instead, masking this entirely).
     #[test]
     #[ignore]
     fn smoke_stats_probe() {
@@ -2215,15 +2232,27 @@ mod tests {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(32);
+            let rollout_nn_w: f32 = std::env::var("PROBE_ROLLOUT_NN_W")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0);
+            let rollout_nn_min_depth: usize = std::env::var("PROBE_ROLLOUT_NN_MIN_DEPTH")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(usize::MAX);
             let t0 = std::time::Instant::now();
-            let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+            // .with_rollout_value: a bare DummyEvalHandle returns
+            // rollout_value=None, which makes try_freeze_rollout's eligible
+            // edges silently fall through to full expand_execute anyway --
+            // this makes rollout_nn_w actually engage for this probe.
+            let evaluator = Evaluator::Dummy(DummyEvalHandle::new().with_rollout_value(0.0));
             let (pick, stats) = MacroMctsSearch::run_probed(
                 &sim,
                 pov,
                 cands,
                 counters[seat(pov)],
                 &lane_states[seat(pov)],
-                &MacroParams { sims, ..Default::default() },
+                &MacroParams { sims, rollout_nn_w, rollout_nn_min_depth, ..Default::default() },
                 &evaluator,
             );
             println!(
