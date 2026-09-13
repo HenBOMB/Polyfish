@@ -1217,6 +1217,13 @@ pub struct MacroMctsAgent<'a> {
     /// `None` whenever micro-mcts didn't run this ply (too few candidates,
     /// disabled via `POLYFISH_MICRO_MCTS_SIMS=0`, or a lone EndTurn).
     last_micro_root_q: Option<f32>,
+    /// EXP_ELO_155: this ply's post-search visit distribution over
+    /// micro-mcts's root children (see `micro_search_pick`'s own doc) --
+    /// what `select_move_with_decomposed_visits` distills into the policy
+    /// training target instead of a one-hot label on the executed move.
+    /// Empty under the exact same conditions as `last_micro_root_q` being
+    /// `None` (micro-mcts didn't run this ply).
+    last_micro_visits: Vec<crate::ai::mcts_types::MoveVisit>,
     /// Value-head-calibration diagnostic (Sep 7 2026): this ply's RAW,
     /// pre-search main-net value-head output at the (pre-move) root state,
     /// painted with the ply's own committed goal -- zero tree processing,
@@ -1443,6 +1450,7 @@ impl<'a> MacroMctsAgent<'a> {
             unit_goals: crate::ai::search::unit_goals::UnitGoalStore::default(),
             micro_carry: None,
             last_micro_root_q: None,
+            last_micro_visits: Vec::new(),
             last_root_own_value: None,
         }
     }
@@ -1493,6 +1501,13 @@ impl<'a> MacroMctsAgent<'a> {
     /// which evaluator scores the macro tree's own leaves.
     pub fn micro_root_q(&self) -> Option<f32> {
         self.last_micro_root_q
+    }
+
+    /// This ply's micro-mcts post-search visit distribution -- see
+    /// `last_micro_visits`'s field doc. Empty exactly when micro-mcts
+    /// didn't run this ply (mirrors `micro_root_q`'s `None` condition).
+    pub fn last_micro_visits(&self) -> &[crate::ai::mcts_types::MoveVisit] {
+        &self.last_micro_visits
     }
 
     /// This ply's RAW pre-search value-head output -- see
@@ -1703,6 +1718,7 @@ impl<'a> MacroMctsAgent<'a> {
             crate::ai::search::micro_mcts::MicroTreeCarry,
         )> = None;
         self.last_micro_root_q = None;
+        self.last_micro_visits.clear();
         // Debug traceability (Verdi, Sep 7 2026): root-seed prior vs.
         // post-search visits/Q per candidate, threaded into the
         // POLYFISH_PLY_TRACE dump below. Empty whenever micro-mcts didn't
@@ -1722,7 +1738,7 @@ impl<'a> MacroMctsAgent<'a> {
                 self.counters.tier3_bought,
                 Some(&self.lane_state),
             );
-            let (pick, next_carry, picked_q, child_trace) = crate::ai::search::micro_mcts::micro_search_pick(
+            let (pick, next_carry, picked_q, child_trace, visit_dist) = crate::ai::search::micro_mcts::micro_search_pick(
                 &view,
                 pov,
                 &goal,
@@ -1735,6 +1751,7 @@ impl<'a> MacroMctsAgent<'a> {
                 net_derived,
             );
             self.last_micro_root_q = picked_q;
+            self.last_micro_visits = visit_dist;
             micro_child_trace = child_trace;
             if let Some(idx) = pick {
                 let predicted_key = ranked[idx].1.serialize();

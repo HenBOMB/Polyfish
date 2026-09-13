@@ -117,9 +117,9 @@ fn goal_prior_w_shifts_priors_toward_the_closer_expand_candidate() {
             MicroParams { sims: 1, depth: 64, k: ranked.len().max(4), c_puct: 1.5, net_prior_w: 0.0, forced_playouts: false, goal_prior_w: 0.0, leaf_batch: 1 };
         let boosted = MicroParams { goal_prior_w: 50.0, ..base };
 
-        let (_, _, _, trace0) =
+        let (_, _, _, trace0, _) =
             micro_search_pick(&game, pov, &goal, &ranked, &aux, false, &evaluator, &base, None, false);
-        let (_, _, _, trace1) =
+        let (_, _, _, trace1, _) =
             micro_search_pick(&game, pov, &goal, &ranked, &aux, false, &evaluator, &boosted, None, false);
         assert_eq!(trace0.len(), ranked.len());
         assert_eq!(trace1.len(), ranked.len());
@@ -192,7 +192,7 @@ fn union_widening_is_fully_gated_off_at_net_prior_w_zero() {
         }
         let heur_top = ranked.len().min(4);
         ran_any = true;
-        let (picked, _, _, _) =
+        let (picked, _, _, _, _) =
             micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, false);
         if let Some(idx) = picked {
             assert!(
@@ -232,7 +232,7 @@ fn root_already_net_ranked_fully_gates_off_the_widening_block() {
         }
         let heur_top = ranked.len().min(4);
         ran_any = true;
-        let (picked, _, _, _) = micro_search_pick(
+        let (picked, _, _, _, _) = micro_search_pick(
             &view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, true,
         );
         if let Some(idx) = picked {
@@ -341,7 +341,7 @@ fn union_pick_maps_back_to_the_original_ranked_index() {
 
         let evaluator = Evaluator::Dummy(DummyEvalHandle::new().with_policy(policy));
         let params = MicroParams { sims: 1, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 1.0 , forced_playouts: false, goal_prior_w: 0.0, leaf_batch: 1 };
-        let (picked, _, _, _) =
+        let (picked, _, _, _, _) =
             micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, false);
         assert_eq!(
             picked,
@@ -410,9 +410,9 @@ fn forced_playouts_off_is_byte_identical_to_the_old_sims_loop() {
             continue; // want at least a few real root children
         }
         ran_any = true;
-        let (pick_a, _, _, trace_a) =
+        let (pick_a, _, _, trace_a, _) =
             micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &base, None, false);
-        let (pick_b, _, _, trace_b) =
+        let (pick_b, _, _, trace_b, _) =
             micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &base, None, false);
         assert_eq!(pick_a, pick_b, "seed {seed}: same off params must reproduce the same pick");
         assert_eq!(
@@ -446,7 +446,7 @@ fn forced_playouts_guarantees_every_root_child_at_least_one_visit() {
         if ranked.len() < 2 {
             continue;
         }
-        let (_, _, _, trace) =
+        let (_, _, _, trace, _) =
             micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, false);
         if trace.len() > params.sims {
             continue; // only meaningful when sims can cover every actual root child

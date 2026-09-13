@@ -160,14 +160,21 @@ impl<'a> SearchAgent<'a> {
             SearchAgent::Greedy(a) => a.select_move_with_decomposed_visits(game, move_count),
             SearchAgent::MacroScript(a) => (a.select_move(game), Vec::new()),
             SearchAgent::MacroLookahead(a) => (a.select_move(game), Vec::new()),
-            // Stage 3: the macro tree's executed move becomes a one-hot
-            // policy target — behavior-cloning data for the training loop.
+            // EXP_ELO_155: distills micro-mcts's own post-search visit
+            // distribution over its root children when it ran this ply --
+            // real AlphaZero-style policy-improvement supervision instead
+            // of Stage 3's one-hot behavior-cloning label on just the
+            // winner. One-hot on the executed move is the correct fallback
+            // exactly when micro-mcts didn't run (disabled, or nothing to
+            // search) -- see `MacroMctsAgent::last_micro_visits`'s doc.
             SearchAgent::MacroMcts(a) => {
                 let m = a.select_move(game);
-                let visits = m
-                    .as_ref()
-                    .map(|mv| vec![MoveVisit::one_hot(mv.as_ref())])
-                    .unwrap_or_default();
+                let micro_visits = a.last_micro_visits();
+                let visits = if !micro_visits.is_empty() {
+                    micro_visits.to_vec()
+                } else {
+                    m.as_ref().map(|mv| vec![MoveVisit::one_hot(mv.as_ref())]).unwrap_or_default()
+                };
                 (m, visits)
             }
         }

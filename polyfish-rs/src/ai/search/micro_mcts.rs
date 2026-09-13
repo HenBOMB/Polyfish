@@ -676,16 +676,25 @@ fn micro_resolve_wave(
 /// of discarding a ply's search every ply).
 /// Returns `(index into `ranked` the search prefers, subtree to carry into
 /// the NEXT ply if the caller ends up actually playing that pick, the
-/// picked child's own backed-up Q, a per-root-child debug trace)`. The index
-/// is `None` when there's nothing to search (a lone EndTurn, or too few
-/// candidates); the carry and Q are `None` whenever no search ran. The Q is
-/// `tree(V_net)` -- leaves are scored by the trained value head (see
-/// `leaf_value`), so this is a genuine per-ply self-distillation target,
-/// computed on nearly every real ply already (search runs regardless; only
-/// the return value was new). The trace vec is empty exactly when no search
-/// ran, one entry per root child otherwise -- cheap to build (already-owned
-/// data, no new allocation of note next to the sims loop itself), so it's
-/// unconditional rather than flag-gated; callers that don't trace just drop it.
+/// picked child's own backed-up Q, a per-root-child debug trace, the
+/// post-search visit distribution over root children)`. The index is `None`
+/// when there's nothing to search (a lone EndTurn, or too few candidates);
+/// the carry and Q are `None` whenever no search ran. The Q is `tree(V_net)`
+/// -- leaves are scored by the trained value head (see `leaf_value`), so
+/// this is a genuine per-ply self-distillation target, computed on nearly
+/// every real ply already (search runs regardless; only the return value
+/// was new). The trace vec and the visit distribution are both empty
+/// exactly when no search ran, one entry per root child otherwise -- cheap
+/// to build (already-owned data, no new allocation of note next to the sims
+/// loop itself), so both are unconditional rather than flag-gated; callers
+/// that don't need them just drop them.
+///
+/// EXP_ELO_155: the visit distribution (`Vec<MoveVisit>`, real post-search
+/// counts) exists specifically so a caller can distill the search's actual
+/// preference instead of collapsing it to a one-hot label on the single
+/// winner -- see `brain.rs`'s `SearchAgent::MacroMcts` arm of
+/// `select_move_with_decomposed_visits`, the one caller that uses it this
+/// way today.
 #[allow(clippy::too_many_arguments)]
 pub fn micro_search_pick(
     view: &Game,
@@ -698,9 +707,9 @@ pub fn micro_search_pick(
     params: &MicroParams,
     carry: Option<MicroTreeCarry>,
     root_already_net_ranked: bool,
-) -> (Option<usize>, Option<MicroTreeCarry>, Option<f32>, Vec<MicroChildTrace>) {
+) -> (Option<usize>, Option<MicroTreeCarry>, Option<f32>, Vec<MicroChildTrace>, Vec<crate::ai::mcts_types::MoveVisit>) {
     if ranked.len() < 2 || ranked[0].1.move_type() == MoveType::EndTurn {
-        return (None, None, None, Vec::new());
+        return (None, None, None, Vec::new(), Vec::new());
     }
     if root_already_net_ranked {
         MICRO_MCTS_NET_DERIVED_ROOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -953,11 +962,28 @@ pub fn micro_search_pick(
             q: c.node.as_ref().filter(|n| n.visits > 0).map(|n| n.q().clamp(-1.0, 1.0)),
         })
         .collect();
+    // EXP_ELO_155: the same snapshot, shaped for training distillation --
+    // real `Move` objects (not the trace's serialized strings, which can't
+    // be turned back into one) paired with real post-search visit counts.
+    // Every root child is included even at 0 visits (PUCT's own cold-start
+    // ordering means a low-prior candidate can legitimately go unvisited at
+    // a tiny `sims` budget) -- `decompose_visits` sums by weight, so a 0
+    // entry simply contributes nothing.
+    let visit_dist: Vec<crate::ai::mcts_types::MoveVisit> = root
+        .children
+        .iter()
+        .map(|c| {
+            crate::ai::mcts_types::MoveVisit::weighted(
+                c.mv.as_ref(),
+                c.node.as_ref().map_or(0, |n| n.visits) as f32,
+            )
+        })
+        .collect();
     let mv_key = root.children[best_idx].mv.serialize();
     let grandchildren = root.children[best_idx].node.take().map(|node| node.children).unwrap_or_default();
     let next_carry =
         if grandchildren.is_empty() { None } else { Some(MicroTreeCarry { mv_key, children: grandchildren }) };
-    (Some(picked_orig_idx), next_carry, picked_q, child_trace)
+    (Some(picked_orig_idx), next_carry, picked_q, child_trace, visit_dist)
 }
 
 
