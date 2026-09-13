@@ -86,11 +86,39 @@ pub struct MicroParams {
     /// (median gap in the hundreds of points) while moving away from or
     /// sideways to the goal. `false` (default) is a byte-identical no-op.
     pub forced_playouts: bool,
+    /// EXP_ELO_153: weight on a root-only goal-alignment bonus folded into
+    /// each candidate's score before `softmax_priors` -- NOT into `ranked`'s
+    /// own stored score, so this only reshapes PUCT's exploration weighting
+    /// for this search, nothing else that reads `ranked`. For each of the
+    /// (up to `k`) root candidates, adds `goal_prior_w * (goal_potential(post)
+    /// - goal_potential(pre))`, same telescoping-Δφ convention `macro_mcts.rs`'s
+    /// `expand_execute` already uses (SAME `aux` for both terms -- reusing
+    /// the caller's own `aux`, never recomputed post-move, so a directive
+    /// switch can't mint reward). Verdi's diagnosis (Sep 13, 2026 session):
+    /// `net_rank_root_candidates` (the real per-ply commit's shipped root
+    /// source since EXP_ELO_151) carries no goal_potential term at all --
+    /// `macro_exec::rank_plies`, the only place that pricing lives, is now a
+    /// rare failure-fallback, not the live path. This is a narrower,
+    /// differently-scoped bet than the macro-level directive-selection
+    /// shaping this project tried and rejected three times (EXP_036b/037/038
+    /// double-paid leaf-visible terms deciding WHICH plan to commit to) --
+    /// this only asks whether an ALREADY-committed plan's own target gets
+    /// pursued, the same shape as EXP_ELO_150's clean per-unit-goal fix.
+    /// `0.0` (default) is a byte-identical no-op.
+    pub goal_prior_w: f32,
 }
 
 impl Default for MicroParams {
     fn default() -> Self {
-        Self { sims: 16, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0, forced_playouts: false }
+        Self {
+            sims: 16,
+            depth: 64,
+            k: 4,
+            c_puct: 1.5,
+            net_prior_w: 0.0,
+            forced_playouts: false,
+            goal_prior_w: 0.0,
+        }
     }
 }
 
@@ -146,7 +174,13 @@ pub fn micro_mcts_params() -> Option<MicroParams> {
         // project's other boolean env flags e.g. WL_LABELS) -- see
         // `MicroParams::forced_playouts`'s own doc for the mechanism.
         let forced_playouts = std::env::var("POLYFISH_MICRO_FORCED_PLAYOUTS").is_ok();
-        Some(MicroParams { sims, depth, k, c_puct, net_prior_w, forced_playouts })
+        // EXP_ELO_153: opt-in, default off -- see `MicroParams::goal_prior_w`'s
+        // own doc for the mechanism and why it isn't on by default yet.
+        let goal_prior_w: f32 = std::env::var("POLYFISH_MICRO_MCTS_GOAL_PRIOR_W")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
+        Some(MicroParams { sims, depth, k, c_puct, net_prior_w, forced_playouts, goal_prior_w })
     })
 }
 
@@ -546,7 +580,23 @@ pub fn micro_search_pick(
             }
         }
     }
-    let scores: Vec<f32> = idxs.iter().map(|&i| ranked[i].0).collect();
+    let mut scores: Vec<f32> = idxs.iter().map(|&i| ranked[i].0).collect();
+    // EXP_ELO_153: root-only goal-alignment bonus -- see
+    // `MicroParams::goal_prior_w`'s own doc comment for the mechanism and
+    // why this is scoped to `scores` (exploration weighting) rather than
+    // `ranked`'s own stored score. `k` disposable clones, real-ply-only
+    // (never inside a macro-mcts rollout), same cost class as the net
+    // forward pass this function already does.
+    if params.goal_prior_w != 0.0 {
+        let phi_pre = crate::ai::reward::goal_potential(&view.state, pov, goal, Some(aux));
+        for (score, &i) in scores.iter_mut().zip(idxs.iter()) {
+            let mut probe = view.clone();
+            if probe.simulate_move(ranked[i].1.as_ref()).is_some() {
+                let phi_post = crate::ai::reward::goal_potential(&probe.state, pov, goal, Some(aux));
+                *score += params.goal_prior_w * (phi_post - phi_pre);
+            }
+        }
+    }
     let mut priors = softmax_priors(&scores);
     // EXP_ELO_124-family: blend in a net-derived prior over the (now
     // possibly widened) candidate set. Goal painted here is the ply's own
@@ -706,7 +756,7 @@ mod tests {
     #[test]
     fn measures_own_emergent_depth_at_production_params() {
         let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-        let params = MicroParams { sims: 64, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0 , forced_playouts: false };
+        let params = MicroParams { sims: 64, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0 , forced_playouts: false, goal_prior_w: 0.0 };
 
         for seed in 0..6i64 {
             let mut game = Game::new();
@@ -740,6 +790,87 @@ mod tests {
         );
         // Not a pass/fail assertion on the exact number -- this test's job is
         // to print the real measurement; see the ledger entry for the read.
+    }
+
+    /// EXP_ELO_153: `goal_prior_w` must be a no-op at 0.0 (proven by
+    /// construction -- the whole block is gated on `!= 0.0`, already
+    /// exercised by every other test in this file passing `goal_prior_w:
+    /// 0.0`) and must measurably shift PUCT priors toward the candidate that
+    /// reduces distance to the committed EXPAND target when nonzero. Finds a
+    /// real unit with 2+ legal Step destinations at different distances from
+    /// a chosen far target, so the two candidates differ ONLY in
+    /// destination -- same source unit, same base score (0.0, synthetic) --
+    /// isolating the new term as the sole source of any prior difference.
+    #[test]
+    fn goal_prior_w_shifts_priors_toward_the_closer_expand_candidate() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        use crate::coords::Coords;
+
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+        for seed in 0..20i64 {
+            let game = tiny_game_at_seed(seed);
+            let pov = game.state.settings.current_player_turn_id;
+            let size = game.state.settings.size;
+            let moves = game.legal_moves();
+
+            let mut by_source: std::collections::HashMap<i32, Vec<&Box<dyn Move>>> =
+                std::collections::HashMap::new();
+            for m in moves.iter().filter(|m| m.move_type() == MoveType::Step) {
+                if let Ok(src) = m.source_idx() {
+                    by_source.entry(src as i32).or_default().push(m);
+                }
+            }
+            let Some(cands) = by_source.values().find(|v| v.len() >= 2) else { continue };
+
+            let far_target = size * size - 1;
+            let far_coords = Coords::from_index(far_target, size);
+            let mut dists: Vec<(i32, usize)> = cands
+                .iter()
+                .enumerate()
+                .map(|(i, m)| {
+                    let t = m.target_idx().unwrap() as i32;
+                    (Coords::from_index(t, size).chebyshev_distance_to(&far_coords), i)
+                })
+                .collect();
+            dists.sort_by_key(|&(d, _)| d);
+            let (closer_d, closer_i) = dists[0];
+            let (farther_d, farther_i) = *dists.last().unwrap();
+            if farther_d - closer_d < 2 {
+                continue; // not enough spread on this seed's map -- try another
+            }
+
+            let ranked: Vec<(f32, Box<dyn Move>)> =
+                cands.iter().map(|m| (0.0f32, dyn_clone::clone_box(m.as_ref()))).collect();
+            let goal = MacroGoal {
+                orders: vec![(OrderKind::Expand, far_target)],
+                stance: Stance::Grow,
+                save_target: None,
+                prepare: None,
+            };
+            let aux = compute_goal_aux(&game.state, pov, &goal, 0, 0, None);
+            let base =
+                MicroParams { sims: 1, depth: 64, k: ranked.len().max(4), c_puct: 1.5, net_prior_w: 0.0, forced_playouts: false, goal_prior_w: 0.0 };
+            let boosted = MicroParams { goal_prior_w: 50.0, ..base };
+
+            let (_, _, _, trace0) =
+                micro_search_pick(&game, pov, &goal, &ranked, &aux, false, &evaluator, &base, None, false);
+            let (_, _, _, trace1) =
+                micro_search_pick(&game, pov, &goal, &ranked, &aux, false, &evaluator, &boosted, None, false);
+            assert_eq!(trace0.len(), ranked.len());
+            assert_eq!(trace1.len(), ranked.len());
+
+            let closer_gain = trace1[closer_i].prior - trace0[closer_i].prior;
+            let farther_gain = trace1[farther_i].prior - trace0[farther_i].prior;
+            assert!(
+                closer_gain > farther_gain,
+                "seed {seed}: closer candidate's prior should gain more than the \
+                 farther one's when goal_prior_w > 0 (closer {closer_d} tiles away \
+                 gained {closer_gain:+.4}, farther {farther_d} tiles away gained \
+                 {farther_gain:+.4})"
+            );
+            return;
+        }
+        panic!("no seed in 0..20 produced a usable same-unit, 2+-destination scenario");
     }
 
     fn tiny_game_at_seed(seed: i64) -> Game {
@@ -781,7 +912,7 @@ mod tests {
     #[test]
     fn union_widening_is_fully_gated_off_at_net_prior_w_zero() {
         let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-        let params = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0 , forced_playouts: false };
+        let params = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0 , forced_playouts: false, goal_prior_w: 0.0 };
         let mut ran_any = false;
         for seed in 0..8i64 {
             let game = tiny_game_at_seed(seed);
@@ -821,7 +952,7 @@ mod tests {
     #[test]
     fn root_already_net_ranked_fully_gates_off_the_widening_block() {
         let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-        let params = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.3 , forced_playouts: false };
+        let params = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.3 , forced_playouts: false, goal_prior_w: 0.0 };
         let mut ran_any = false;
         for seed in 0..8i64 {
             let game = tiny_game_at_seed(seed);
@@ -944,7 +1075,7 @@ mod tests {
             };
 
             let evaluator = Evaluator::Dummy(DummyEvalHandle::new().with_policy(policy));
-            let params = MicroParams { sims: 1, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 1.0 , forced_playouts: false };
+            let params = MicroParams { sims: 1, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 1.0 , forced_playouts: false, goal_prior_w: 0.0 };
             let (picked, _, _, _) =
                 micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, false);
             assert_eq!(
@@ -1000,7 +1131,7 @@ mod tests {
     #[test]
     fn forced_playouts_off_is_byte_identical_to_the_old_sims_loop() {
         let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-        let base = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0, forced_playouts: false };
+        let base = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0, forced_playouts: false, goal_prior_w: 0.0 };
         let mut ran_any = false;
         for seed in 0..8i64 {
             let game = tiny_game_at_seed(seed);
@@ -1037,7 +1168,7 @@ mod tests {
     #[test]
     fn forced_playouts_guarantees_every_root_child_at_least_one_visit() {
         let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-        let params = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0, forced_playouts: true };
+        let params = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0, forced_playouts: true, goal_prior_w: 0.0 };
         let mut checked_any = false;
         for seed in 0..8i64 {
             let game = tiny_game_at_seed(seed);

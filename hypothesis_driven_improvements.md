@@ -22357,3 +22357,105 @@ immediate control. **Flagged, not yet investigated further** — pending
 Verdi's call on whether to run a confirmatory second pass or a control
 arm (e.g. `MACRO_LEAF_BATCH=1`/`POLYFISH_NET_ROOT_SOURCE=cpu` reverted
 one at a time) to isolate which change, if any, is real.
+
+## EXP_ELO_153 — micro-mcts root-only goal-alignment prior (registered,
+Verdi-directed architecture session: "we need to make sure heuristic
+shaping for ply-goal-alignment is there, influencing decisions... inject
+at the root in the micro-mcts priors")
+
+STATUS: BUILT, unit-tested, REGISTERED for a real arena A/B (not yet run
+as of this write).
+
+CONTEXT. Same session's architecture review (see the conversation, not
+duplicated in full here) surfaced a real gap by direct code trace: the
+explicit "a resulting state closer to the committed macro goal scores
+higher" mechanism (`goal_potential`'s `SHAPE_GOAL_EXPAND_PER_TILE`
+Δφ term, telescoping potential-based shaping) exists and is built
+correctly, but is NOT wired into any path that decides real behavior
+today. It lives exclusively inside `macro_exec::rank_plies`, which:
+(a) the real per-ply commit (`rank_view_net_or_cpu`) only falls through
+to on a `net_rank_root_candidates` failure (a rare forward-pass hiccup,
+not the live path since EXP_ELO_151 shipped main-net root candidates
+as default), and (b) macro-mcts's own internal rollout execution
+(`execute_turn_net_greedy`) never calls at all, by explicit design
+("no rank_plies in any form, not even as a failure fallback"). The one
+place macro-mcts's OWN candidate evaluation could apply it
+(`MacroParams::shape_w`) defaults to `0.0` and is never set anywhere in
+`run_training_loop.sh`. So as shipped, nothing currently prices "does
+this ply advance the turn's committed target" on the live decision
+path — confirmed by grep, not assumed.
+
+DESIGN (Verdi's proposal, endorsed): rather than re-wiring Δφ into the
+score that determines candidate ORDER (touching `ranked`, consumed by
+several other things), inject it as a root-only PUCT PRIOR bonus inside
+`micro_search_pick` — the same "cheap, root-only, one real ply, not per
+rollout" shape this codebase already uses for macro's own
+`root_prior_w`. This is deliberately narrower in scope than the
+macro-level directive-selection shaping this project tried and
+REJECTED three times (EXP_036b/037/038: "selection-level shaping
+double-pays leaf-visible terms... nothing that changes WHICH directive
+the macro tree picks has beaten the tree's own unshaped judgment") —
+those attacked WHICH PLAN to commit to; this only asks whether an
+ALREADY-committed plan's own target gets pursued at the ply level, the
+same shape as EXP_ELO_150's clean, cost-free per-unit-goal-pursuit fix.
+
+BUILT (`micro_mcts.rs`): `MicroParams::goal_prior_w` (new field, default
+`0.0`, env var `POLYFISH_MICRO_MCTS_GOAL_PRIOR_W`). In
+`micro_search_pick`, immediately before `softmax_priors`, for each of
+the (up to `k`) root candidates: clone the view, simulate the candidate
+move, compute `goal_prior_w * (goal_potential(post) - goal_potential
+(pre))` using the SAME `aux` for both terms (the caller's own `aux`,
+never recomputed post-move — mirrors `macro_mcts.rs`'s own
+`expand_execute` shape_pre/shape pattern exactly, so a directive switch
+can't mint reward), and add it to that candidate's score BEFORE
+`softmax_priors` runs. Only `scores` (the local prior-weighting array)
+is touched — `ranked`'s own stored score is untouched, so nothing else
+that reads `ranked` is affected. Cost: up to `k` disposable clone+
+simulate+potential calls, real-ply-only (never inside a macro-mcts
+rollout) — same cost class as the net forward pass this function
+already pays every real ply.
+
+Weight chosen for the first test: **1.0 (raw Δφ, no rescaling)** — not
+arbitrary. `goal_potential`'s own terms (`SHAPE_GOAL_EXPAND_PER_TILE`
+=200, `SHAPE_GOAL_SPT`=150, `SHAPE_GOAL_TECH_FIT`=150) were deliberately
+designed to be score-equivalent so they compose additively with
+`score_move`'s own terms without rescaling — the same reason
+`macro_lambda=1.0` in the older `rank_plies` path is documented as
+"calibrated, not arbitrary." Using the same convention here, rather
+than an ad-hoc fraction, is the more defensible first test — if it
+turns out to dominate (one-hot priors, degenerate play), that is itself
+a measured finding pointing at dosage, consistent with this project's
+own "first fit overshoots ~2x, dial from there" pattern for other
+constants.
+
+VERIFICATION (before any real measurement): two new tests in
+`micro_mcts.rs`'s `road_relief_cache_tests`-sibling test module.
+1. `goal_prior_w_shifts_priors_toward_the_closer_expand_candidate` —
+   constructed scenario: finds a real unit (via map-generated fixture)
+   with 2+ legal Step destinations at different Chebyshev distances
+   from a chosen far EXPAND target, same source unit, equal (synthetic
+   0.0) base scores, so the ONLY source of any prior difference is the
+   new term. Asserts the closer candidate's prior gains strictly more
+   than the farther one's when `goal_prior_w=50.0` vs `0.0`. PASSES.
+2. `goal_prior_w=0.0` is a no-op by construction (the whole block is
+   gated on `!= 0.0`) — already exercised by every other test in this
+   file (all pass `goal_prior_w: 0.0` explicitly or via `Default`).
+Full suite: 404/404 lib tests (+1), 0 failed, all integration tests
+green, `cargo build --release --features apple` clean.
+
+METHOD (registered, not yet run): two separate `arena` runs (not a
+single-process paired comparison — `MicroParams` is fetched once via a
+process-wide `OnceLock` read from env vars, so config1/config2 inside
+one arena process cannot independently vary it the way per-side CLI
+flags like `--macro-leaf-batch1/2` do) — `--backend1 macro-mcts
+--backend2 greedy`, full production recipe (sims=64, k=6,
+root-prior-w=0.05, rollout-nn-w=1.0/depth1, `--macro-leaf-batch1 64`,
+`POLYFISH_NET_ROOT_SOURCE=main_net`), full `eval_seeds.json` (100 seeds
+× 2 sides = 200 games), `--dump-stats-dir` on both runs so per-game
+(seed, swap) outcomes can be joined for a real paired McNemar despite
+being two separate processes (eval_seeds.json is deterministic, so both
+runs see identical seed/side pairs). Control:
+`POLYFISH_MICRO_MCTS_GOAL_PRIOR_W` unset (0.0). Treatment: `=1.0`. Same
+isolated scratch model both arms.
+
+ACTUAL: (running)
