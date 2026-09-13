@@ -255,6 +255,16 @@ The model now trains and gauges under a scripted macro layer: **goal channels** 
   local plateau along every axis tested so far. If `k` is revisited, the
   more informative next step is instrumenting how many distinct real
   candidates a typical turn actually offers, not another blind cap sweep.
+  ⚠️ **Correction (Sep 14): "k=4" tested above was NOT the shipped
+  default.** Production (`run_training_loop.sh`'s MACRO_GEN block,
+  `src/main.rs`'s `play_macro_params`) already ships **`k=6`** — has since
+  before this session. EXP_ELO_156/157/158 never explicitly pinned `--macro-
+  k1`, so all three silently used arena's own stale bare CLI default (4),
+  not production. Doesn't change the sims/min_depth conclusions (k was held
+  fixed and identical across both configs in those two), and k=6 sits
+  between the two values (4, 8) EXP_ELO_158 found tied dead-even against
+  each other — so no action needed, k=6 is already live and the finding
+  still stands. See the ledger's correction entry after EXP_ELO_158.
 
 ### ⭐ Why games are won and lost: the third city (352-game autopsy, EXP_ELO_M2)
 
