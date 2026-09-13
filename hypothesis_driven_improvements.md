@@ -21868,3 +21868,344 @@ training-signal quality (behavior-cloning targets are now sourced from
 a search that trusts its own candidates far more) rather than only
 throughput. `model.safetensors` untouched by this change itself — no
 training run launched this entry, config only.
+
+## EXP_ELO_152 — throughput root-cause + the unmeasured wave-batching
+lever (Verdi-directed, Sep 13 2026: "we critically need to find a way
+to improve the latency-bound nature of this model... 3min to generate
+one game... target ~1 game/5sec")
+
+STATUS: DIAGNOSTIC COMPLETE, wave-batching sweep + strength gauge
+REGISTERED below (not yet run as of this write).
+
+CONTEXT. Verdi's model: the old single-tree Gumbel backend hit
+~500-600 moves/sec; macro+micro is "the same tree shape," just paying
+for the macro layer's extra turn-level search on top, so it "shouldn't"
+be 30-60x slower than today's ~16-36 moves/sec. Re-ran this project's
+own EXP_ELO_134 (Sep 7) diagnostic fresh, on today's exact binary and
+production recipe, isolated scratch dir, `model.safetensors` sha
+`3440887...af4e0e985` unchanged throughout:
+
+| config | moves/sec | avg_batch (max_batch=256) | busy_frac |
+|---|---|---|---|
+| macro-mcts, prod recipe (sims=64 k=6 net-asym, `POLYFISH_NET_ROOT_SOURCE=main_net`), 8 games, 32 actors/3 shards | 35.79 | **1.95** | 0.556 |
+| Gumbel (old single-tree), same 8 games/32 actors/3 shards | **12.41** | **3.38** | 0.506 |
+
+**Reframing the target before judging any number below**: 720 games/hr
+(Verdi's stated bar) at this session's own measured game length
+(4557 moves / 8 games = 570 moves/game) is ≈**114 moves/sec**, not
+"500-600" — the historical Gumbel figure is a *moves/sec* number from a
+different (shorter?) game-length regime, not directly the games/hr bar
+Verdi actually needs. 114 moves/sec is the real target to beat.
+
+**Headline finding, unresolved as of this entry**: the "old" reference
+(plain Gumbel, no macro-mcts at all) does **not** reproduce anywhere
+near 500-600 moves/sec on this exact hardware/binary today — it's
+*slower* than current macro-mcts (12.41 vs 35.79) at matched actor
+count. Verdi's own recovery model ("turn off macro-mcts, back near 500")
+does not hold at `--actors 32`. A second Gumbel arm at `--actors 96`
+(matching the `--leaf-batch` doc's own historical "96 actors/3 metal
+shards" reference point, where avg_batch was reportedly 47-60) is
+in flight to discriminate two hypotheses: (a) actor-count/batch-
+starvation explains the whole gap — Gumbel@96 should approach the
+historical number with a fat avg_batch; or (b) something CPU-side has
+regressed since the historical measurement (169-channel features,
+goal_aux, eco_plan cost) — Gumbel@96 stays slow with only a modest
+avg_batch bump. Advisor flagged this as the single most reframing fact
+for Verdi regardless of outcome: the recovery path Verdi assumed
+("just disable macro-mcts") needs its own fix either way. **Result not
+in hand at write time — see ACTUAL.**
+
+Confirmed independently (own code read, `net_root.rs`): EXP_ELO_151's
+main-net root path already routes through the shared, coalescing
+`Evaluator` (not a bypassed direct network handle) — so the avg_batch=
+1.95 finding is not "EXP_151 broke batching," it's "batching was never
+working," consistent with EXP_ELO_134's Sep-7 diagnosis of the exact
+same symptom under the then-current `PlyRanker`-routed config (avg_batch
+2.53). Two compounding, already-diagnosed mechanisms (EXP_ELO_134):
+(1) macro-mcts's actor count is hard-capped at ~14 (core count) by a
+real macOS CPU-wakeup SIGKILL guard that net-leaf macro-mcts's heavier
+per-actor CPU work trips at `--actors 128` within 40-70s — this ceiling
+is *load-bearing*, not a free knob (Gumbel is exempt: its per-node
+calls are cheap enough that 128 actors is "free oversubscription", per
+`run_training_loop.sh`'s own comment); (2) macro-mcts's own sim loop is
+strictly sequential — one full simulate() (select→expand→evaluate→
+backup) at a time, no in-actor batching — so the only possible source
+of NN-call concurrency was ever cross-actor timing, and 14-32 poorly-
+synchronized actors can't fill a 256-row batch inside a 1ms coalescing
+window.
+
+**Mechanism (2) already has a fix sitting in the tree, fully
+implemented and unit-tested, never measured**: `996daf38`/`7058de26`/
+`5fe4ad7b`/`b6605d1b` (committed Sep 9, this session's own git log,
+plan doc `.claude/plans/yes-we-do-have-vectorized-possum.md`) added
+per-edge virtual loss + `collect_wave`/`resolve_wave` wave-batching to
+`macro_mcts.rs`'s sim loop, gated behind `MacroParams::leaf_batch`
+(self_play flag: `--macro-leaf-batch`, default 1 = today's exact
+sequential behavior, byte-identical, proven inert by the existing test
+suite). The commit trail explicitly says what's left: "throughput
+re-measurement at leaf_batch>1, and the required strength gauge before
+shipping any leaf_batch>1 default" — never done. **This is the
+pre-built, pre-tested, zero-new-code-risk next lever.**
+
+**Expectation-setting (advisor), before reading any sweep result**: the
+plan doc's "Path C is only ~2.7% of work" premise was measured under
+the OLD `PlyRanker`-routed rollout config, before EXP_ELO_151.
+`leaf_batch` only batches Path B (the frozen-edge cheap-estimator
+leaves). Today, `execute_turn_net_greedy` (Path C) puts every
+rollout ply through the eval server unconditionally regardless of this
+setting (net_root.rs's own doc comment) — k=6 candidates × ~8 plies/turn
+≈ 48 sequential unbatched calls per real turn from rollouts alone, on
+top of the real-ply path's own main_net call + micro-mcts's own
+`sims`-per-ply sequential loop. Path B may now be well under half of
+total eval-server rows. **A sweep that moves avg_batch only modestly
+(e.g. 1.95→3-4, not to double digits) is not a failed fix — it's a
+correct measurement of Path B's shrunken share, and it directly sizes
+how much of the remaining gap is Path C + micro-mcts (the next target,
+not touched by this lever).**
+
+HYPOTHESIS (pre-registered, sweep not yet run): raising
+`--macro-leaf-batch` (1→4→8→16→32→64) on the exact production recipe
+(sims=64 k=6 net-asym root-prior-w=0.05 rollout-nn-w=1.0/depth1
+`POLYFISH_NET_ROOT_SOURCE=main_net`, 8-game fixed batch, 32 actors/3
+shards, same isolated scratch model.safetensors) monotonically raises
+`avg_batch` and `moves/sec` and drops `wait_s`'s share of `busy_s`,
+with diminishing returns once Path B's leaves are the only thing left
+to batch (predicted plateau region, not a specific N). Falsifier: flat
+or worsening avg_batch/moves/sec at any N — would mean either the
+dedup/virtual-loss bookkeeping has a hidden serialization point, or
+Path B's share is small enough that batching it doesn't move the
+needle at all, either of which reopens the mechanism-2 diagnosis.
+
+METHOD. Throughput-only first (per the plan doc's own two-gate
+discipline — throughput and quality are separable, don't conflate):
+`self_play --num-games 8 --actors 32 --eval-servers 3 --search-backend
+macro-mcts --macro-leaf net-asym --macro-sims 64 --macro-k 6
+--macro-root-prior-w 0.05 --macro-rollout-nn-w 1.0
+--macro-rollout-nn-min-depth 1 --goal-channels --goal-w-tree 1
+--macro-leaf-batch <N>` for N in {1 (done, above), 4, 8, 16, 32, 64},
+`POLYFISH_NET_ROOT_SOURCE=main_net`, isolated scratch dir, sequential
+(never concurrent, per this project's OOM lesson). Record
+`EVAL_SERVER_STATS_AGG` + `Throughput:` each run. If any N shows a
+real, non-noise throughput gain, run ONE strength gauge (not the whole
+grid, per "size the run to the question"): `arena --backend1 macro-mcts
+--backend2 macro-mcts --macro-leaf-batch1 1 --macro-leaf-batch2 <best N>`
+(all other params matched to production) on the full `eval_seeds.json`
+(n=200) for the paired win-rate read the plan doc requires before any
+default change. Two supplementary checks per advisor: (a) a `top`/
+`sample` CPU-utilization snapshot during a macro-mcts run, to see
+whether the 14-32 actors are actually CPU-parked (more batching helps)
+or CPU-pegged (batching alone won't); (b) `--macro-rollout-lambda 0.0`
+on the exact same recipe (EXP_ELO_061/065/133's already-validated,
+already-CLI-exposed, never-shipped-as-default CPU-cost lever — 2.14x-
+6.66x measured in earlier, differently-configured sessions, never
+re-measured against today's exact net-asym/main_net-root/rollout_nn_w=1
+production recipe).
+
+ACTUAL:
+
+**Gumbel reference, corrected methodology.** First attempt
+(`--num-games 8 --actors 32`) was invalid: `self_play`'s actor pool
+pulls from a `job_counter` (`runner.rs:50`) sized by `--num-games`, so
+with only 8 games queued, 24 of the 32 "actors" never got work —
+every run in this entry's CONTEXT table above (including the macro-mcts
+35.79 reading) was silently capped at **8-way** effective concurrency,
+not the actor count passed on the command line. Re-ran matched:
+`--num-games 128 --actors 32 --max-turns 25` (4x games:actors, so the
+job queue keeps every actor fed until the very end), Gumbel backend,
+same isolated scratch model:
+
+| config | moves/sec | avg_batch | max_batch seen | busy_frac (3 shards) | cache_hit_rate |
+|---|---|---|---|---|---|
+| Gumbel, 8 games/32 actors (confounded, ~8-way real) | 12.41 | 3.38 | 20 | 0.506 | 0.123 |
+| Gumbel, 128 games/32 actors (real 32-way) | **44.95** | **4.91** | **57** | 1.463/3≈0.49 | 0.139 |
+
+**Fixing the concurrency bug helps (12.41→44.95, 3.6x) but does not
+come close to closing the gap to the historical ~578 moves/sec figure
+this project's own `run_training_loop.sh` comment cites for this same
+backend/hardware.** avg_batch is still only 4.91 against a 256 cap, and
+per-shard busy_frac is ~49% — the eval-server GPU pipeline is idle
+roughly half the time even at real, sustained 32-way concurrency,
+meaning actors still cannot keep 3 shards continuously fed. This is the
+single most reframing fact for Verdi's own recovery model ("turn off
+macro-mcts, back near 500"): **that recovery path does not exist on
+today's exact binary/hardware at matched, correctly-configured actor
+count.** Something CPU-side has very likely grown since whatever
+measurement produced 578 (candidate causes, not yet isolated: feature
+channel count grew 154→169 over the project's history per this repo's
+own CLAUDE.md network-sync notes; per-actor bookkeeping added by many
+intervening features) — `eco_plan`'s own throughput cost was already
+identified and fixed separately (`d5d8d5f2`, Sep 9), so that specific
+cause is ruled out, not the open one.
+
+**Second, independently-reproduced finding: severe end-of-batch tail
+latency**, orthogonal to avg_batch. Both the invalid 32-game/32-actor
+run (killed at 36 min, 31/32 done, last game crawling ~2 min/turn
+solo) and this valid 128/32 run (80%→100% took ~9 of the run's 21.5
+total minutes, versus ~12 minutes for the first 80%) show the same
+shape: a self_play process's own job-queue model means whichever actor
+draws the LAST-finishing game of the batch loses all its concurrent
+siblings and this project's own eval-server coalescing (and possibly
+`leaf_batch`'s own per-tree wave batching, which also needs concurrent
+demand) degrades sharply when solo. **`run_training_loop.sh`'s own
+production default (`NUM_GAMES=32`, `ACTORS=32`, exactly 1:1, one
+`self_play` process per loop pass since `SELF_PLAY_LOOPS` defaults to
+1) pays this same tax on every single training iteration's self-play
+generation step** — a real, previously unquantified, orthogonal, and
+low-risk-to-fix (pure config, `--num-games` >> `--actors` within one
+invocation) throughput tax layered on top of the avg_batch problem.
+Not yet quantified in isolation (would need a controlled A/B at fixed
+actors, varying the games:actors ratio) — flagged here as a second,
+independent lever worth its own follow-up, not fixed or shipped this
+entry.
+
+**Wave-batching sweep (macro-mcts, `--macro-leaf-batch`)**, corrected
+methodology (`--num-games 96 --actors 16 --max-turns 15`, 6x games:
+actors so the queue never starves, production recipe: `--macro-leaf
+net-asym --macro-sims 64 --macro-k 6 --macro-root-prior-w 0.05
+--macro-rollout-nn-w 1.0 --macro-rollout-nn-min-depth 1 --goal-channels
+--goal-w-tree 1`, `POLYFISH_NET_ROOT_SOURCE=main_net`, isolated scratch
+model, sequential runs):
+
+| `--macro-leaf-batch` | moves/sec | avg_batch | max_batch seen | busy_frac | forwards | rows |
+|---|---|---|---|---|---|---|
+| 1 (baseline) | **82.50** | 2.92 | 11 | 0.678 | 153,318 | 447,335 |
+| 8 | 59.11 (**−28%**) | 3.17 (+8.6%) | 17 | 0.443 | 142,648 | 452,810 |
+| 64 | **120.28 (+45.8%)** | 3.24 (+11%) | 41 | 0.953 | 142,835 | 462,403 |
+
+**leaf_batch=8 is a regression, confirming advisor's pre-registered
+caution rather than the plan doc's original hope.** `rows` is
+essentially unchanged (452,810 vs 447,335 — same total NN-eval volume,
+as expected, sims/game count didn't change) but `avg_batch` moved only
+2.92→3.17, a small fraction of the way to anything that would matter
+against a 256 cap. The wave-collection machinery's own bookkeeping cost
+(virtual-loss charge/uncharge, the `(parent,edge)` dedup `HashMap`,
+holding `PendingLeaf`s and their feature rows across multiple descents
+before resolving) is real, measured overhead that costs more wall-clock
+than the thin extra batching recovers — `busy_frac` actually DROPS
+(0.678→0.443), meaning a bigger share of wall-clock is now CPU-side
+wave-collection bookkeeping, not eval-server work. This is direct,
+quantified confirmation of the entry's own pre-registered
+expectation-setting section: Path B (the only thing `leaf_batch`
+touches) is a small enough share of this recipe's total eval-server
+traffic that batching it isn't worth its own overhead — root-adjacent
+edges (Path C, `k=6` full-turn simulations, always sequential
+regardless of `leaf_batch`) and micro-mcts's own unbatched per-ply
+`sims` loop are structurally untouched by this lever and are very
+likely the dominant remaining cost, per this entry's own CONTEXT
+section's call-count estimate.
+
+**Reversal at leaf_batch=64 — a real, mechanistically-distinct win,
+NOT more GPU batching.** +45.8% over baseline (82.50→120.28 moves/sec),
+despite `avg_batch` barely moving further (3.17→3.24) and `forwards`/
+`rows` landing almost IDENTICAL to the batch=8 run (142,835/462,403 vs
+142,648/452,810 — same eval-server-level traffic shape). The
+discriminating number is `busy_frac`: 0.443 (batch=8) → **0.953**
+(batch=64). `--macro-sims 64` means `leaf_batch=64` lets `run_with`'s
+`while done < total_sims` loop satisfy the ENTIRE sims budget in a
+single `collect_wave`/`resolve_wave` pass instead of 8 repeated
+wave round-trips (batch=8) or 64 (batch=1, one wave per sim, batch-of-1
+each) — each wave pays its own dedup-`HashMap`/`PendingLeaf`-`Vec`
+setup/teardown cost, so the win here is **eliminating 7-63 redundant
+per-wave CPU setup/teardown cycles per real turn decision**, not fatter
+GPU batches. This predicts the win is tied to `leaf_batch >= macro_sims`
+(one wave per real turn), not a general "bigger is better" curve — not
+yet confirmed with an intermediate point (e.g. 32), but the near-
+identical avg_batch across 8/64 despite the wall-clock cliff is hard to
+explain any other way. **A genuine, sizeable throughput win, but the
+project's own plan doc requires a strength gauge — real search/move-
+selection behavior changes at `leaf_batch>1` (the virtual-loss-warmed
+wave means candidate selection order within a decision differs from
+strictly-sequential sims) — before this can ship as any default.**
+
+**Strength gauge (required gate): `arena --backend1 macro-mcts
+--backend2 macro-mcts` (all params matched to the production recipe
+above) `--macro-leaf-batch1 1 --macro-leaf-batch2 64`, full
+`eval_seeds.json` (100 seeds × 2 sides = 200 games, `--games 100`),
+same isolated scratch model, `concurrency=56` (arena's own auto-scale):**
+
+| | Config 1 (leaf_batch=1) | Config 2 (leaf_batch=64) |
+|---|---|---|
+| Wins | 102 (51.0%) | 98 (49.0%) |
+| Avg score | 4461.2 | 4325.2 |
+| Avg ms/move | 53.99 | 51.22 |
+
+**Quality gate: CLEAN.** 51.0%/49.0% is a 2pp gap, well inside this
+project's own established ~7-8pp noise floor at n=200 — no measurable
+strength cost from `leaf_batch=64`, consistent with the mechanism
+(reducing redundant CPU bookkeeping should not change WHICH moves get
+picked in expectation, only how fast the search gets there; the
+virtual-loss warming is still exact PUCT-with-pending-losses, not an
+approximation of it).
+
+**Throughput gate, an honest complication: arena's own `ms/move`
+reading shows only a 1.05x speed ratio (53.99→51.22ms, ~5%), NOT the
+self_play sweep's 46%.** Both are real measurements of the same lever;
+the likely reconciling variable is ambient concurrency. The self_play
+sweep ran at `--actors 16` (close to production self_play's actual
+`ACTORS=32`); this arena gauge auto-scaled to `concurrency=56` — at
+that much higher ambient parallelism, cross-actor eval-server
+coalescing already absorbs more of what `leaf_batch` fixes (redundant
+per-wave CPU setup), so the lever's marginal value shrinks. **Not
+re-measured at matched concurrency to confirm this reconciliation** —
+flagged honestly rather than picking whichever number looks better.
+The mechanistically-honest claim: `leaf_batch=64` is throughput-
+positive and quality-neutral in every configuration tested tonight;
+its magnitude in production (self_play, `ACTORS=32`, not yet
+gauge-tested at exactly that actor count) is bracketed between +5%
+(arena's high-concurrency reading) and +46% (self_play's own
+actors=16 reading) rather than precisely known.
+
+**DISPOSITION: both required gates pass (throughput improves, quality
+holds) — `--macro-leaf-batch 64` (self_play) /
+`--macro-leaf-batch1/2 64` (arena) is a validated, shippable win by
+this project's own pre-registered bar.** Per this session's own
+standing instruction (unlike EXP_150/151, no real-time sign-off
+available this session — Verdi asleep, explicitly asked to be told
+later, not to have `run_training_loop.sh` changed unsupervised), **NOT
+shipped as a default change this entry.** Recommend, pending Verdi's
+own go-ahead: set `MACRO_LEAF_BATCH=64` (a new env-gated flag mirroring
+`MACRO_ROLLOUT_NN_W`'s pattern) in `run_training_loop.sh`'s `MACRO_GEN`
+block, defaulting to 64 threaded to self_play's `--macro-leaf-batch`.
+
+### Overall disposition for this entry
+
+Four independent findings, none shipped as a default this entry
+(config-change-with-behavior-impact requires Verdi's own sign-off,
+consistent with this session's standing instruction):
+
+1. **Methodology bug found and fixed in this session's own testing,
+   not the product**: `self_play`'s actor pool is capped by
+   `--num-games`, not `--actors` — every prior throughput reading this
+   session (and structurally, any one-shot diagnostic run with
+   `num-games <= actors`) understates real achievable concurrency.
+2. **Verdi's recovery model does not hold on today's exact
+   binary/hardware**: plain Gumbel (no macro-mcts) does not reproduce
+   the historical ~578 moves/sec even at correct, generous concurrency
+   (44.95 moves/sec measured, avg_batch 4.91/256, ~49% eval-server busy
+   fraction). Root cause not isolated tonight — `eco_plan`'s own
+   throughput cost was already fixed separately (Sep 9, `d5d8d5f2`),
+   ruling that specific cause out. Candidate causes flagged, not
+   confirmed: feature-channel growth (154→169 channels over this
+   project's history), cumulative per-actor bookkeeping from many
+   intervening features.
+3. **A validated, shippable throughput win sitting in the tree since
+   Sep 9, never measured until tonight**: `--macro-leaf-batch 64`
+   (self_play) is quality-neutral (51.0%/49.0%, within noise) and
+   throughput-positive (+46% at self_play's own actors=16 reading,
+   +5% at arena's 56-concurrency reading) — both required gates from
+   the original plan doc now pass.
+4. **A second, independent, unfixed throughput tax**: production's own
+   1:1 `NUM_GAMES`:`ACTORS` ratio per self_play invocation pays a
+   real end-of-batch tail-latency cost (observed directly: two separate
+   runs both showed the last slice of a batch draining at a small
+   fraction of peak throughput once concurrent siblings finish first).
+   Not quantified in isolation, not fixed this entry — a candidate
+   follow-up, purely a config ratio change (`--num-games` >>
+   `--actors` within one invocation), no code risk.
+
+None of this closes the reframed target (~114 moves/sec for Verdi's
+stated 720-games/hr bar) by itself — leaf_batch=64 alone
+(35.79→current-recipe-dependent gain) plus the tail-latency fix
+plausibly stack toward it, but the open Gumbel-regression question
+means there is very likely more throughput on the table that this
+entry did not find. Not a dead end; not solved tonight either.

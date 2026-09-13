@@ -96,6 +96,48 @@ The model now trains and gauges under a scripted macro layer: **goal channels** 
   - **Do NOT swap Gumbel→PUCT.** At fixed n=64, concentrating (k=4, k=2) is *worse* than k=16 despite deeper PVs — root breadth beats principal-variation depth. Gumbel's anti-concentration is a feature.
   - **Fix the horizon ceiling before pushing sims:** `brain.rs:435` hardcodes `max_turns_ahead = 20 − current_turn` while games run to turn 30, so from ~turn 18 the horizon pins to its 2-turn floor (horizon-capped descents hit 9.8% at n=1024).
 
+### Self-play throughput root-cause (Sep 13, EXP_ELO_152)
+
+- **Verdi's recovery model ("turn off macro-mcts, back near ~500-600
+  moves/sec") does NOT hold on today's exact binary/hardware.** Plain
+  Gumbel (no macro-mcts at all), properly measured at real 32-way
+  concurrency (a `--num-games 8`-vs-`--actors 32` methodology bug in
+  this session's own first attempt silently capped effective
+  concurrency at 8 — fixed), gets only **44.95 moves/sec**
+  (`avg_batch` 4.91/256, eval-server ~49% busy). Something CPU-side
+  has grown since whatever measurement produced the ~578 figure
+  `run_training_loop.sh`'s own comment cites — `eco_plan`'s cost was
+  already fixed separately (Sep 9), ruling that out; feature-channel
+  growth (154→169) and cumulative per-actor bookkeeping are
+  unconfirmed candidates. **Open, unresolved.**
+- **Reframe the target**: 720 games/hr (Verdi's stated bar) at this
+  project's own measured game length ≈ **114 moves/sec**, not
+  "500-600" — the historical figure is a different metric/regime, not
+  directly the games/hr bar that matters.
+- **A real, validated throughput win found sitting unshipped since
+  Sep 9**: `macro_mcts.rs`'s wave-batching (`MacroParams::leaf_batch`,
+  built and unit-tested Sep 9, never measured until tonight).
+  `--macro-leaf-batch 64` (= production's `--macro-sims`, so the
+  entire per-turn-decision sims budget resolves in ONE wave instead of
+  64 sequential ones) is **quality-neutral** (arena gauge, n=200
+  paired eval_seeds: 51.0%/49.0%, within the ~7-8pp noise floor) and
+  **throughput-positive** (self_play sweep at actors=16: 82.50→120.28
+  moves/sec, +46%; arena's own higher-concurrency reading: only +5%,
+  reconciliation not confirmed). The mechanism is NOT bigger GPU
+  batches (`avg_batch` barely moves, 2.92→3.24) — it's eliminating
+  redundant per-wave CPU setup/dedup-bookkeeping overhead.
+  `--macro-leaf-batch 8` (an intermediate point) is a **regression**
+  (-28%): the wave overhead costs more than partial batching recovers
+  below `leaf_batch ≈ macro_sims`. Not yet shipped as a default —
+  pending Verdi's own sign-off (session ran unsupervised overnight).
+- **A second, independent, unfixed tax**: production's own self_play
+  invocation uses `NUM_GAMES=ACTORS=32` (1:1) — observed directly
+  (twice) that the last slice of a batch drains at a small fraction of
+  peak throughput once concurrent siblings finish first. Pure config
+  fix available (`--num-games` >> `--actors`), not yet quantified or
+  shipped. See `hypothesis_driven_improvements.md`'s EXP_ELO_152 for
+  full method/numbers on all of the above.
+
 ### ⭐ Why games are won and lost: the third city (352-game autopsy, EXP_ELO_M2)
 
 **One binary explains almost the whole result.** From 352 arena games vs Greedy at n=256 (Imperius v Imperius — arena hardcodes both tribes, so **no tribe confound**), split by outcome.
