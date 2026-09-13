@@ -22813,3 +22813,32 @@ that's still meaningfully richer than one-hot for training, or whether
 it needs a higher `sims` budget to pay off -- which reopens EXP_ELO_154's
 exact throughput tradeoff -- is an empirical question for the next real
 training iteration to answer, not something to claim resolved here.
+
+## EXP_ELO_156 — macro-mcts sims: does production's freeze make 64 vs 32 a wash?
+
+STATUS: RUN, CONFIRMED as registered — (a) holds, (b) does not.
+
+CONTEXT: EXP_ELO_154's own depth probe (`smoke_stats_probe`, `PROBE_ROLLOUT_NN_W=1.0 PROBE_ROLLOUT_NN_MIN_DEPTH=1` -- production's actual freeze config) found `sims=32` and `sims=64` produce byte-identical tree shape on all 8 tested seeds: same `pick`, same `nodes` (root + k, nothing deeper), same `depth` (pinned at exactly 2), same `root_visit_max_share`, even identical wall-clock (Dummy evaluator, single-threaded). Mechanism: `rollout_nn_w=1.0`/`rollout_nn_min_depth=1` freezes every edge past depth 1 on its first visit -- no child `Node` is ever created for it, so nothing can be selected through it again. Real compute (an `expand_execute` simulation, or a `try_freeze_rollout` eval-server call) is paid exactly once per root candidate (`k`, typically 2-6), regardless of `sims`. Every sim beyond the first `~k` is a free `edge_frozen` cache hit -- UCT bookkeeping only, no eval call.
+
+HYPOTHESIS, split into two claims of different confidence:
+- **(a) Win rate: near-zero cost dropping `--macro-sims` 64->32.** High confidence -- the probe shows the tree macro-mcts actually builds and picks from is IDENTICAL at both budgets in this mechanics-only setting. A real network's sharper Q differences could in principle change this (this probe used `Evaluator::Dummy`, matching this file's own standing caveat on every depth-measurement test in `micro_mcts.rs`/`macro_mcts.rs`), but the freeze mechanism itself is Q-independent -- it fires on visit count and depth alone, not on how informative the value is. Expect the real arena A/B to land within noise of 50/50.
+- **(b) Throughput: NOT expected to be "roughly half the CPU," despite the intuition that motivated this** -- lower confidence, worth being honest this cuts against the original framing ("less CPU work there might be a good trade"). If sims beyond ~k are free cache hits with no eval call, the wall-clock savings from 64->32 may be small, not proportional to the sims cut. This needs a real measurement, not an assumption -- the mechanics probe already showed identical timing at both budgets (18-26ms, single actor, no eval-server contention to amortize), which is a hint in this direction but not conclusive for real multi-actor self-play throughput (UCT/virtual-loss bookkeeping, Vec/HashMap allocation per sim, and dedup overhead all still scale with sims even without an eval call).
+
+METHOD: paired head-to-head arena, `--search-backend macro-mcts` both configs, `--macro-sims 32` (Config 1) vs `--macro-sims 64` (Config 2), everything else at production defaults (`--macro-leaf net-asym` default, `--macro-root-prior-w 0.05` default, `--macro-rollout-nn-w 1.0`/`--macro-rollout-nn-min-depth 1` default, `--macro-leaf-batch 64` per EXP_ELO_152's shipped default), `eval_seeds.json` (100 seeds x 2 sides = 200 games, swapped), release binary rebuilt from current HEAD (includes this session's wave-batching/distillation work, though both are off by default and shouldn't matter here).
+
+Ran a 20-game shakedown first (defaults, `--games 10`), then the real read at `--games 60` (60 seeds x 2 sides = 120 games; CPU-only candle backend, no GPU/Metal available in this environment — absolute ms/move numbers below are NOT representative of production hardware, but the sims=32-vs-64 COMPARISON under the same slow backend is still a fair apples-to-apples read).
+
+ACTUAL (120 games):
+
+| | Config 1 (sims=32) | Config 2 (sims=64) |
+|---|---|---|
+| Wins | 62 (51.7%) | 58 (48.3%) |
+| Avg score | 4249.9 | 4184.9 |
+| Sieges / unsieged-defended% / cities lost per game | 1.98 / 33% / 1.27 | 2.20 / 33% / 1.39 |
+| Avg ms/move | 728.10 | 706.22 |
+
+Binomial test against 50/50 (n=120, 62 wins): z=0.365, p=0.715 — nowhere near significant, exactly what a true null looks like. Siege-defense rate is identical (33% both); score and cities-lost differences are small and go in opposite directions from each other, consistent with noise, not a real effect. **(a) CONFIRMED: dropping `--macro-sims` 64->32 costs nothing detectable in this 120-game read**, matching the depth probe's structural-identity finding.
+
+**(b) REFUTED, as flagged going in**: Config 1 (sims=32) was not faster — if anything marginally slower (728.10ms vs 706.22ms/move, speed ratio 1.03x, `>1` meaning Config 1 is slower), and this matched the 20-game shakedown's own reading (298.87 vs 293.02ms) almost exactly. Consistent with the mechanism: real compute is paid once per root candidate regardless of `sims`, so the "extra" 32 sims in Config 2 are free `edge_frozen` cache hits — cutting them doesn't remove meaningful work. **`--macro-sims` is not a throughput lever under today's freeze config** — if CPU cost from macro-mcts's per-turn search needs to come down, this isn't where it lives; `k` (candidate breadth) or `rollout_nn_min_depth` itself would be the levers that actually gate how much `expand_execute`/eval-server work happens, not `sims`.
+
+DISPOSITION: `--macro-sims 32` is a safe, quality-neutral change if there's ever a reason to make it (e.g. reducing search variance, or a future config where freezing is off) — but not a throughput win on its own, so not worth shipping as a default change absent some other motivation. The real, useful finding is structural: understanding *why* `sims` stopped mattering (`rollout_nn_min_depth=1` freezing everything past depth 1) points at the actual levers for macro-mcts CPU cost — `k` and the freeze depth itself — neither measured here.
