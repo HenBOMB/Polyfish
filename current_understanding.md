@@ -155,6 +155,25 @@ The model now trains and gauges under a scripted macro layer: **goal channels** 
   largest hotspot, not yet investigated. See `hypothesis_driven_
   improvements.md`'s EXP_ELO_152 for full method/numbers on all of the
   above.
+- **Goal-alignment WAS missing from every live per-ply decision path —
+  confirmed by code trace, then fixed and measured (EXP_ELO_153, Sep
+  13).** `goal_potential`'s EXPAND distance-based Δφ term (the
+  mechanism that prices "does this ply advance the committed macro
+  goal") lived only inside `macro_exec::rank_plies`, which the real
+  per-ply commit has bypassed under normal operation since EXP_ELO_151
+  shipped main-net root candidates, and which macro-mcts's own rollout
+  execution never calls at all by design. Fixed: a new root-only PUCT
+  prior bonus in `micro_search_pick` (`MicroParams::goal_prior_w`,
+  default `0.0`), mirroring macro's own `root_prior_w` pattern — cheap
+  (real-ply-only, k candidates), unit-tested (a constructed scenario
+  confirms the closer-to-target candidate's prior gains strictly more
+  than a farther one's). **Measured at weight=1.0 (raw Δφ, matching
+  `goal_potential`'s own score-equivalent calibration convention):
+  micro-mcts's override rate nearly tripled (12.6%→35.0%) — the
+  mechanism is real and strongly active — but win rate vs Greedy moved
+  within noise (66.5%→64.0%, paired McNemar p=0.57, not significant).**
+  A wash, not a win, at this dose — ships default-off; a gentler dose
+  (0.2-0.3) is the flagged next step, not yet run.
 
 ### ⭐ Why games are won and lost: the third city (352-game autopsy, EXP_ELO_M2)
 

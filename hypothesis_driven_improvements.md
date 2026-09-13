@@ -22458,4 +22458,60 @@ runs see identical seed/side pairs). Control:
 `POLYFISH_MICRO_MCTS_GOAL_PRIOR_W` unset (0.0). Treatment: `=1.0`. Same
 isolated scratch model both arms.
 
-ACTUAL: (running)
+ACTUAL:
+
+| | Control (`goal_prior_w=0.0`) | Treatment (`=1.0`) |
+|---|---|---|
+| Win rate vs Greedy | 66.5% (133/200) | 64.0% (128/200) |
+| Avg score | 4956.4 vs 3667.2 | 4963.4 vs 3902.4 |
+| Cities lost / game | 0.82 | 0.83 |
+| Unsieged rate | 45% | 51% |
+| MACRO DIVERGENCE | 65.5% | 68.9% |
+| **micro-mcts override rate** | **12.6%** (4,988/39,502) | **35.0%** (13,238/37,774) |
+
+**Sanity check, confirming the byte-identical-at-0.0 claim empirically
+(not just via unit test): the control arm reproduced the earlier
+"current production" gauge exactly** — 133/200, avg score 4956.4/
+3667.2, MACRO DIVERGENCE 65.5%, micro-mcts override 12.6% all match
+the reading logged earlier this session digit-for-digit. `goal_prior_w
+=0.0` is confirmed a true no-op at full scale, not just in the
+constructed unit test.
+
+**Paired McNemar (joined by (seed, swap) across the two independent
+arena processes — `eval_seeds.json` is deterministic, so both runs saw
+identical games): both-win 106, both-lose 45, discordant 27 (control
+won/treatment lost) vs 22 (control lost/treatment won). chi2=0.327
+(continuity-corrected), p=0.568 — nowhere near significant.** The
+2.5pp raw gap is noise at this n, consistent with this project's own
+established ~7-8pp noise floor at n=200.
+
+**Read: the mechanism is real, strongly active, and behaviorally
+verified end-to-end — but at this dose it is a wash on the metric that
+matters, not a win.** The override-rate jump (12.6%→35.0%, 2.8x) is
+large and directly answers Verdi's original concern ("make sure
+heuristic shaping for ply-goal-alignment is there, influencing
+decisions") — it demonstrably now is, where this entry's own CONTEXT
+section found it demonstrably was NOT before. But win rate moved
+within noise, in the wrong direction on the point estimate. The
+unsieged-rate shift (45%→51%, cities besieged more often) is a
+plausible, if unconfirmed, mechanism for a small real cost that a
+small real gain elsewhere roughly offsets: pulling hard toward EXPAND
+targets may be thinning home defense. Consistent with this entry's own
+pre-registered caveat about weight=1.0 potentially dominating (the
+override-rate jump is exactly that symptom) — a raw, uncalibrated Δφ
+this large may be overriding tactical nuance (an enemy in the way, a
+better local opportunity) that the net's own blended judgment was
+previously weighing in, not just adding a helpful nudge on top of it.
+
+**DISPOSITION: quality gate technically clears (no significant cost),
+but this is not a confirmed win — do not ship at weight=1.0.** The
+clean next step, flagged but not run this entry (per this project's
+"size the run to the question" discipline — one weight was the
+registered test): a lower dose (e.g. 0.2-0.3, aiming for an override-
+rate move closer to EXP_ELO_150's own scale of effect rather than a
+2.8x jump) to see whether a gentler nudge nets a real win instead of a
+wash, or a McNemar-clean confirmatory run at n=600 (this project's own
+EXP_ELO_149 precedent) to check whether the −2.5pp point estimate is a
+small real cost that n=200 just can't resolve. Code ships as committed
+(default `0.0`, fully opt-in, zero risk to anything currently running)
+regardless of which follow-up, if any, gets run next.
