@@ -219,6 +219,31 @@ The model now trains and gauges under a scripted macro layer: **goal channels** 
   budget to pay off (which reopens (1)'s exact throughput tradeoff), is
   for the next real training iteration to show — not yet run. Full detail
   in `hypothesis_driven_improvements.md`'s EXP_ELO_154/155.
+- **Macro-mcts's tree never goes past depth 2 in production, regardless of
+  `sims` — and that ceiling was never deliberately chosen (Sep 13,
+  EXP_ELO_156/157).** `rollout_nn_min_depth=1` (shipped default, EXP_ELO_125
+  piece 4) freezes every edge past depth 1 on its first visit — no child
+  `Node` is ever created, so nothing can be selected through it again. Real
+  compute (a full turn simulation or one eval-server call) is paid exactly
+  once per root candidate; every sim beyond that is a free cache hit.
+  **EXP_ELO_156**: confirmed `--macro-sims` 32 vs 64 produces byte-identical
+  trees and a real 120-game arena wash (51.7% vs 48.3%, p=0.715) — `sims`
+  is not a throughput lever here, contrary to the intuition that motivated
+  testing it; it also isn't slower dropped to 32, just not faster either.
+  **EXP_ELO_157**: `rollout_nn_min_depth=1` was never validated as the
+  right depth — the ledger entry that shipped it calls it "the first sweep
+  point," under an explicit "ship regardless of win-rate" bar; no deeper
+  value was ever tried. Swept it: depth reached is exactly `min_depth + 1`,
+  and cost roughly TRIPLES per +1 step (structural probe: nodes 3→9→27;
+  real arena: min_depth=2 costs 2.45x more per move than min_depth=1). A
+  20-game shakedown at min_depth=2 showed no win-rate benefit (if anything
+  trending the other way, 40% vs 60%, not significant at this n) — not
+  pursuing a bigger run or a default change without a specific reason to,
+  since a benefit large enough to justify 2.5x the compute should show at
+  least a hint at n=20 and didn't. **The real actionable levers for
+  macro-mcts CPU cost are `k` (candidate breadth) and `rollout_nn_min_depth`
+  itself — not `sims`, which is currently just a knob that does nothing
+  once candidates are frozen.**
 
 ### ⭐ Why games are won and lost: the third city (352-game autopsy, EXP_ELO_M2)
 

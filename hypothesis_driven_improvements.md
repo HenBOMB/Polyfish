@@ -22842,3 +22842,37 @@ Binomial test against 50/50 (n=120, 62 wins): z=0.365, p=0.715 — nowhere near 
 **(b) REFUTED, as flagged going in**: Config 1 (sims=32) was not faster — if anything marginally slower (728.10ms vs 706.22ms/move, speed ratio 1.03x, `>1` meaning Config 1 is slower), and this matched the 20-game shakedown's own reading (298.87 vs 293.02ms) almost exactly. Consistent with the mechanism: real compute is paid once per root candidate regardless of `sims`, so the "extra" 32 sims in Config 2 are free `edge_frozen` cache hits — cutting them doesn't remove meaningful work. **`--macro-sims` is not a throughput lever under today's freeze config** — if CPU cost from macro-mcts's per-turn search needs to come down, this isn't where it lives; `k` (candidate breadth) or `rollout_nn_min_depth` itself would be the levers that actually gate how much `expand_execute`/eval-server work happens, not `sims`.
 
 DISPOSITION: `--macro-sims 32` is a safe, quality-neutral change if there's ever a reason to make it (e.g. reducing search variance, or a future config where freezing is off) — but not a throughput win on its own, so not worth shipping as a default change absent some other motivation. The real, useful finding is structural: understanding *why* `sims` stopped mattering (`rollout_nn_min_depth=1` freezing everything past depth 1) points at the actual levers for macro-mcts CPU cost — `k` and the freeze depth itself — neither measured here.
+
+## EXP_ELO_157 — rollout_nn_min_depth sweep: was depth=2 ever actually chosen?
+
+STATUS: STRUCTURAL PROBE + SHAKEDOWN COMPLETE. Cost side confirmed and consistent across three independent measurements; win-rate side inconclusive at n=20 but shows no positive signal, and the cost alone is decisive enough not to pursue further without a specific reason to.
+
+CONTEXT: EXP_ELO_156's investigation found `rollout_nn_min_depth=1` (shipped default, freezes every macro-tree edge past depth 1) was never validated as the right depth -- EXP_ELO_125 piece 4's own ledger entry says "min_depth=1 as the first sweep point," shipped under an explicit "ship regardless of win-rate/throughput, as long as mechanically correct" bar. No sweep of min_depth=2/3/... appears to have ever run. Verdi's objection: `sims` should be the depth/breadth dial; a structural cap that `sims` can't overcome (confirmed in EXP_ELO_156: sims=32 and sims=64 produce byte-identical depth=2 trees) defeats that.
+
+HYPOTHESIS: raising `rollout_nn_min_depth` lets the tree reach real depth 3+ (edges at depth 2 get fully simulated and expanded instead of frozen), which may improve win rate (deeper lookahead) at the cost of more compute per turn decision (more full `expand_execute` simulations instead of cheap `pi_rollout_value` estimates). Expect this to be a genuine quality-vs-compute tradeoff, not a free win -- unlike EXP_ELO_156 (sims 32 vs 64), which found NO tradeoff because depth was already capped before sims could matter.
+
+METHOD, two stages:
+1. **Structural probe** (`smoke_stats_probe`, `Evaluator::Dummy.with_rollout_value`, mechanics-only, cheap): `PROBE_ROLLOUT_NN_MIN_DEPTH` in {1, 2, 3}, `PROBE_SIMS=64` fixed, 8 seeds -- real depth reached and node count (a compute proxy: more real `expand_execute` simulations = more nodes) per setting.
+2. **Real arena win-rate + cost read**: min_depth=1 (Config 1, current default) vs min_depth=2 (Config 2), sims=64 both, everything else at production defaults, same CPU-only backend as EXP_ELO_156 for a fair apples-to-apples cost comparison. NOT compute-matched (per EXP_ELO_065's lesson this should ideally compare equal-compute arms) -- reporting the RAW win-rate delta and the RAW cost delta together rather than pre-baking a sims adjustment with no data to justify it yet. If min_depth=2 costs meaningfully more, a compute-matched follow-up (min_depth=2 at reduced sims) is the natural next step, not assumed here.
+
+ACTUAL, stage 1 (structural probe, `PROBE_SIMS=64`, 8 seeds, `Evaluator::Dummy.with_rollout_value(0.0)`):
+
+| min_depth | reachable depth | nodes (seed 0 / seed 4) | wall time (seed 0 / seed 4) |
+|---|---|---|---|
+| 1 (shipped default) | 2 | 3 / 4 | 19ms / 26ms |
+| 2 | 3 | 9 / 13 | 32ms / 44ms |
+| 3 | 4 | 27 / 31 | 129ms / 189ms |
+
+Depth reached is exactly `min_depth + 1` at every setting -- confirms the mechanism precisely. Nodes roughly TRIPLE per +1 step in `min_depth` (3->9->27, 4->13->31), and even under a zero-cost Dummy evaluator, wall time grows ~1.5-2x (depth 1->2) then another ~4-6x (depth 2->3) -- with a real network's actual forward-pass cost this growth would very likely be steeper, not gentler, since Dummy's per-call cost is near-zero and the growth here is almost pure game-logic/candidate-enumeration overhead.
+
+ACTUAL, stage 2 (real arena, 20-game shakedown, `--games 10`, same CPU-only backend and model as EXP_ELO_156):
+
+| | Config 1 (min_depth=1) | Config 2 (min_depth=2) |
+|---|---|---|
+| Wins | 12 (60.0%) | 8 (40.0%) |
+| Avg score | 5312.0 | 4227.8 |
+| Avg ms/move | 372.88 | 913.26 |
+
+Binomial test against 50/50 (n=20, 12 wins): z=0.894, p=0.371 -- not remotely significant, n=20 cannot distinguish this from a true null, and the point estimate actually favors the SHALLOWER config. Cost: Config 2 (min_depth=2) costs **2.45x more per move** (913.26ms vs 372.88ms), consistent with stage 1's structural finding and with the earlier real per-game read (5.4s/game avg in EXP_ELO_156 vs 16.7s/game avg here).
+
+DISPOSITION: **not pursuing a longer confirmatory run, and not recommending `min_depth=2` as a default.** Reasoning, not just a compute-budget call: three independent measurements (structural probe's node count, structural probe's wall time, real arena's ms/move) all agree the cost increase from one more level of real depth is large (~2.5-3x), and the one real win-rate read available shows zero hint of a compensating benefit -- if anything trending the other way, though underpowered to call the sign. A genuine win-rate gain would need to be large to justify 2.5x the per-turn compute, and a shakedown run is exactly the kind of read that should show at least a hint of a large effect if one were there. It didn't. If this gets revisited, the right frame per EXP_ELO_065's own lesson is compute-matched (min_depth=2 at roughly sims=25-26 to match min_depth=1's sims=64 cost), not a bigger n at matched sims -- but there's no signal here suggesting that's worth spending a training-loop-relevant amount of compute finding out.
