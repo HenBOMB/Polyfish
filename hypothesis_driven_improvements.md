@@ -22330,3 +22330,30 @@ throughput win once measured cleanly, full test suite green. Committed
 alongside this entry. `city_build_on` (eco_plan) flagged as the next
 candidate hotspot — not investigated this entry, per Verdi's own
 pacing.
+
+### Post-shipment win-rate re-gauge (Sep 13, later same day — Verdi:
+"remeasure eval seed json... where we're at on a win-rate basis")
+
+First vs-Greedy reading with EXP_150 (forced-playouts), EXP_151
+(`POLYFISH_NET_ROOT_SOURCE=main_net`), and EXP_152
+(`--macro-leaf-batch 64` + the `connect_dist_map` fix) all stacked
+together — each was validated against its own immediate control in
+isolation; this is the first combined read. `arena --backend1
+macro-mcts` (production recipe: net-asym, sims=64, k=6,
+root-prior-w=0.05, rollout-nn-w=1.0/depth1, `--macro-leaf-batch1 64`,
+`POLYFISH_NET_ROOT_SOURCE=main_net`) `--backend2 greedy`, full
+`eval_seeds.json` (100 seeds × 2 sides = 200 games):
+
+**66.5% (133/200)**, avg score 4956.4 vs 3667.2, cities lost under
+siege 165 vs Greedy's 261 (0.82 vs 1.30/game) — decisively still
+winning on every secondary axis, but the headline win rate sits
+**4-6.5pp below the 70-71% figure this session's earlier context
+established as the recent baseline** (pre-EXP_150/151/152). At n=200
+this project's own established noise floor is ~7-8pp, so this single
+reading does not confirm a regression — but it's on the low end of
+that band, not centered in it, and it's the first time these three
+changes have been measured together rather than each against its own
+immediate control. **Flagged, not yet investigated further** — pending
+Verdi's call on whether to run a confirmatory second pass or a control
+arm (e.g. `MACRO_LEAF_BATCH=1`/`POLYFISH_NET_ROOT_SOURCE=cpu` reverted
+one at a time) to isolate which change, if any, is real.
