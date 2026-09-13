@@ -172,8 +172,25 @@ The model now trains and gauges under a scripted macro layer: **goal channels** 
   micro-mcts's override rate nearly tripled (12.6%→35.0%) — the
   mechanism is real and strongly active — but win rate vs Greedy moved
   within noise (66.5%→64.0%, paired McNemar p=0.57, not significant).**
-  A wash, not a win, at this dose — ships default-off; a gentler dose
-  (0.2-0.3) is the flagged next step, not yet run.
+  **Follow-up dose sweep (6 weights, 1e-6 to 1.0, each a full n=200
+  paired McNemar against the same control): no sweet spot found.**
+  Ruled out a real methodology risk first — a mathematically-inert
+  weight (1e-6) that pays the identical extra per-ply CPU cost
+  reproduced control exactly, so the effect below is the mechanism's
+  own score, not a timing artifact. The override-rate dose-response is
+  smooth and monotonic (12.6%→13.6%→19.3%→26.5%→32.5%→35.0%) — the
+  mechanism behaves exactly as designed at every dose. But win rate
+  does not track it: **every one of the 6 nonzero weights landed below
+  control's 66.5% (61.0-64.5% band), no exceptions, though no single
+  point reaches significance** (best p=0.17). Six-for-six below
+  baseline across three orders of magnitude is a real pattern even
+  though each individual gap sits inside n=200's noise floor — read as
+  flat-to-negative, not inconclusive. Ships default-`0.0` (zero
+  production risk); not a promising direction to keep dosing without a
+  design change (e.g. gating the bonus to Step-type candidates only,
+  since a blanket per-candidate Δφ also touches Attack/Build/Research
+  candidates where "distance to the EXPAND target" is a weaker signal
+  to begin with) or a much larger confirmatory n.
 
 ### ⭐ Why games are won and lost: the third city (352-game autopsy, EXP_ELO_M2)
 

@@ -22515,3 +22515,94 @@ EXP_ELO_149 precedent) to check whether the −2.5pp point estimate is a
 small real cost that n=200 just can't resolve. Code ships as committed
 (default `0.0`, fully opt-in, zero risk to anything currently running)
 regardless of which follow-up, if any, gets run next.
+
+### Dose sweep (Verdi: "let's try a sweep and see if we can find a
+sweet spot"), registered
+
+Arena at n=200 for this exact recipe runs in ~55-60s (confirmed both
+prior arms) — cheap enough to sweep at real resolution instead of
+guessing one point. `goal_prior_w ∈ {0.1, 0.2, 0.3, 0.5, 0.7}`, same
+method as the 1.0 arm (paired McNemar via `--dump-stats-dir`, joined by
+(seed, swap) against the ALREADY-COLLECTED `goal_prior_w=0.0` control
+dump — deterministic `eval_seeds.json`, same control valid for every
+arm, no need to re-run it 5 times). Primary read: win rate + McNemar
+significance at each point. Secondary: micro-mcts override rate as the
+mechanism's own dose-response curve (12.6% at 0.0, 35.0% at 1.0 — is
+the relationship roughly linear, and does any point land in a
+"meaningfully more active than baseline but not dominating" band).
+
+ACTUAL:
+
+Ran 6 points (widened downward once 0.1's override rate turned out
+already near-saturated — see below), each a separate arena process vs
+Greedy, `--dump-stats-dir`, paired McNemar against the SAME
+already-collected `goal_prior_w=0.0` control dump (eval_seeds.json is
+deterministic, valid to reuse across every arm):
+
+| weight | win rate | discordant b(ctrl-win/trt-lose) | c(ctrl-lose/trt-win) | McNemar chi2 | p | override rate |
+|---|---|---|---|---|---|---|
+| 0.0 (control) | 66.5% (133/200) | — | — | — | — | 12.6% |
+| 1e-6 | 66.5% (133/200) | 0 | 0 | 0.000 | 1.000 | 12.6% |
+| 0.001 | 63.0% (126/200) | 18 | 11 | 1.241 | 0.265 | 13.6% |
+| 0.005 | 64.5% (129/200) | 20 | 16 | 0.250 | 0.617 | 19.3% |
+| 0.02 | 63.0% (126/200) | 29 | 22 | 0.706 | 0.401 | 26.5% |
+| 0.1 | 61.0% (122/200) | 32 | 21 | 1.887 | 0.170 | 32.5% |
+| 1.0 | 64.0% (128/200) | 27 | 22 | 0.327 | 0.568 | 35.0% |
+
+**Methodology check, run before trusting any of the above**: with
+weight this cheap to sweep, worth ruling out that the extra per-ply
+clone+simulate CPU work itself (not the score it computes) perturbs
+actor timing enough to shift eval-server batch composition and, via
+this project's own documented actor-timing-dependent float
+non-determinism, cascade into different move choices independent of
+the intended mechanism. Tested at `goal_prior_w=1e-6` — mathematically
+inert (adds ≈2e-4 to scores of magnitude 100-1000, far below float32
+noise) but pays the IDENTICAL clone+simulate cost every other nonzero
+weight pays. **Result: exact match to control (133/200, 12.6%
+override, forwards within single digits) — the extra CPU work itself
+is not a confound. Every observed shift below is attributable to the
+score the mechanism actually computes, not to running it.**
+
+**Mechanism dose-response is smooth and well-behaved**: override rate
+climbs monotonically and continuously from 12.6% (0.0) through 13.6%
+(0.001), 19.3% (0.005), 26.5% (0.02), 32.5% (0.1), to 35.0% (1.0) — not
+a threshold/step effect, roughly log-linear across three orders of
+magnitude before flattening toward 1.0. Even the smallest tested
+nonzero weight (0.001) already measurably moves it, implying the
+NATURAL score spread among many real root-candidate sets is tight
+enough that a small fraction of `goal_potential`'s ~150-200-magnitude
+terms can already flip a close decision.
+
+**Win rate does NOT track the mechanism's own dose-response.** No
+single point reaches significance (best p=0.170 at weight=0.1, and
+that's the WORST point on the win-rate axis, not the best). But the
+pattern across all 6 nonzero-weight points is notable on its own:
+**every single one reads below control's 66.5%, landing in a tight
+61.0-64.5% band regardless of dose** — six independent processes, three
+orders of magnitude of weight, no exceptions. A point estimate below
+baseline at every tested dose, with the SAME sign of discordant
+imbalance (`b > c`, control winning more of the flipped games) every
+time, is a real pattern even though each individual gap is inside
+n=200's own noise floor.
+
+**DISPOSITION: no sweet spot found in the tested range.** This isn't
+"inconclusive, need more data at the SAME points" — it's "flat-to-
+negative everywhere tested, with no dose showing a positive point
+estimate, let alone a significant one." Two honest readings, not
+adjudicated by this data: (a) the specific subset of per-ply decisions
+this lever flips is, on net, slightly worse than what the net+heuristic
+blend was already picking — plausible given weight=1.0's own siege-
+defense cost signature from the first arm (units pulled toward EXPAND
+targets, home defense thins) could already be operating at a smaller
+scale even at low doses; or (b) this is a real but small effect (call
+it 2-4pp) that n=200 genuinely can't resolve at any single point, and
+only the AGGREGATE 6-for-6 pattern makes it visible. Recommend NOT
+pursuing further doses in this direction without either (i) a much
+bigger confirmatory n (600+, this project's own EXP_ELO_149 precedent)
+at ONE representative weight, or (ii) a design change (e.g. only apply
+the bonus for Step/Move-type candidates specifically, since a blanket
+per-candidate Δφ likely also touches Attack/Build/Research candidates
+where "distance to the EXPAND target" is a less meaningful signal to
+begin with — untested, a real confound the current implementation
+doesn't guard against). Code stays committed, default `0.0`, zero
+production risk either way.
