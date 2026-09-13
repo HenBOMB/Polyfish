@@ -243,7 +243,18 @@ The model now trains and gauges under a scripted macro layer: **goal channels** 
   least a hint at n=20 and didn't. **The real actionable levers for
   macro-mcts CPU cost are `k` (candidate breadth) and `rollout_nn_min_depth`
   itself — not `sims`, which is currently just a knob that does nothing
-  once candidates are frozen.**
+  once candidates are frozen.** **EXP_ELO_158 swept `k` too (4 vs 8,
+  sims=64): also a near-total wash** — dead-even 10/10 win split, and cost
+  rose only ~6% (not the "roughly linear with k" scaling predicted going
+  in). Likely reason: even a bare candidate-generator probe at `k=8` never
+  produced more than 2-3 distinct real directives on these seeds — the CAP
+  isn't binding most turns, so raising it mostly goes unused. **Three
+  consecutive macro-mcts levers this session (`sims`, `rollout_nn_min_depth`,
+  `k`) and only one showed any real effect at all, and that one was a pure
+  cost increase with no benefit** — this configuration looks close to a
+  local plateau along every axis tested so far. If `k` is revisited, the
+  more informative next step is instrumenting how many distinct real
+  candidates a typical turn actually offers, not another blind cap sweep.
 
 ### ⭐ Why games are won and lost: the third city (352-game autopsy, EXP_ELO_M2)
 
