@@ -21795,3 +21795,76 @@ rate this cleanly eventually shows up as a real win-rate gain, and/or
 stacking it with the turn-conditional c_puct ramp (the two are
 mechanistically complementary — the ramp changes how much prior-vs-Q
 matters, this ensures every candidate actually gets sampled at all).
+
+## EXP_ELO_151 — ship `POLYFISH_NET_ROOT_SOURCE=main_net` as the
+production default (Verdi's model of micro-mcts: "we invoke the model,
+it gives us up to k candidates for a move this ply, then search seeks
+to verify [which] of these k is the winner" — "let's go toward this...
+even do this 1:1 if possible")
+
+CONTEXT. Verdi's stated mental model of what micro-mcts should be doing
+already exists in the codebase, nearly 1:1: `POLYFISH_NET_ROOT_SOURCE=
+main_net` (EXP_ELO_133, Sep 7 2026) switches the real-per-ply root-
+candidate builder (`rank_view_net_or_cpu`) from the CPU `rank_plies`
+heuristic to a direct forward pass through the production network's own
+policy heads, blended 50/50 with the heuristic score
+(`POLYFISH_NET_ROOT_HEURISTIC_W`, default 0.5 — not a pure net proposal,
+a knob toward one). EXP_ELO_133 measured this 6 days ago: quality tied
+the best CPU arm (41.9%, beating the alternatives' 38.7%) but throughput
+was 7.67 moves/sec vs. 17.56-38.97 for the alternatives (>2x slower) —
+REJECTED against its own two-sided bar, recommending a distilled cheap
+ranker instead of eating the main net's per-ply cost directly.
+
+FRESH RE-MEASUREMENT (today's binary, isolated scratch dir, copied
+`model.safetensors`, `self_play --num-games 16 --actors 14 --anchor-frac
+1.0`, exact EXP_ELO_133 macro-mcts recipe): confirms the 6-day-old
+finding still holds despite the intervening wave-batching work (which
+targets macro-mcts's own internal rollout leaves, not this once-per-
+real-ply, unbatchable-by-construction call — `net_rank_root_candidates`
+is a single synchronous `source.forward(feats)`, nothing else):
+
+| | moves/sec | micro-mcts override rate |
+|---|---|---|
+| CPU `rank_plies` (current default) | 41.77 | 44.3% (1524/3442) |
+| `POLYFISH_NET_ROOT_SOURCE=main_net` | **16.00** | **13.1%** (541/4117) |
+
+**~2.6x slower self-play generation, same proportional cost EXP_ELO_133
+found — but the override-rate drop is bigger than previously measured
+and bigger than any other lever in this campaign (EXP_ELO_150's forced-
+playouts fix: 47.7%→28.9%; the c_puct ramp: 48.6%→45.5%).** When the net
+proposes candidates directly, search barely has to correct it — direct,
+quantified confirmation of Verdi's model: a network good enough to
+propose sensible candidates itself needs verification, not rescue.
+
+DECISION (Verdi, presented with the throughput/quality trade-off via
+AskUserQuestion — options were "ship now," "distill a cheap ranker
+first," "try pure-net (`NET_ROOT_HEURISTIC_W=1.0`) first," or "park it"):
+**"Eat the cost, ship main_net now."**
+
+CHANGE (`run_training_loop.sh` only — no Rust default changed, so
+`arena`/`trainer`/the interactive server/tests are all unaffected unless
+they explicitly set the env var, exactly as before): inside the
+`MACRO_GEN=1` block, `export POLYFISH_NET_ROOT_SOURCE="${POLYFISH_NET_ROOT_SOURCE:-main_net}"`
+— defaults to `main_net` for both the self-play generation call AND
+`run_gauge_match`'s arena calls later in the same script run (train and
+gauge now use the same real-ply candidate source, matching EXP_ELO_127's
+own "mirror the exact production recipe" convention). Reversible: export
+`POLYFISH_NET_ROOT_SOURCE=cpu` (or anything other than exactly
+`main_net`) before launching to opt back out, same pattern as
+`LADDER_FREEZE_DISABLED`. `CONFIG` echo line extended with
+`net_root_source=...` per this script's own EXP_ELO_006 silent-
+misconfiguration lesson. `bash -n run_training_loop.sh` clean.
+
+DISPOSITION. Not yet run through a real multi-iteration training loop —
+this is the config change landing, not a trained-checkpoint result.
+**Expect self-play data generation to run at roughly 40% of its prior
+rate per wall-clock hour** — the explicit, accepted cost of this
+decision. First real run under this default should watch: (a) does the
+now-13% override rate persist once training-time exploration (Gumbel-
+style softmax-of-Q, not deterministic argmax) is back in the loop, not
+just this anchor-vs-Greedy deterministic probe; (b) whether the
+per-iteration wall-clock hit is worth it once measured against actual
+training-signal quality (behavior-cloning targets are now sourced from
+a search that trusts its own candidates far more) rather than only
+throughput. `model.safetensors` untouched by this change itself — no
+training run launched this entry, config only.

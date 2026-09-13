@@ -464,6 +464,19 @@ do
     # A/B (net leaf vs heuristic leaf) before it touches the tree.
     BACKEND_FLAG=""
     if [ -n "${MACRO_GEN:-}" ]; then
+        # EXP_ELO_151: real-per-ply root candidates come from the main net's
+        # own policy heads by default now (POLYFISH_NET_ROOT_SOURCE=main_net,
+        # EXP_ELO_133's mechanism) instead of the CPU rank_plies heuristic --
+        # Verdi's explicit "eat the cost, ship main_net now" call after a
+        # fresh measurement confirmed EXP_ELO_133's Sep 7 finding still
+        # holds: search's own override rate on the proposed candidates drops
+        # 44.3%->13.1% (the net's proposals need far less correction), at a
+        # real ~2.6x self-play throughput cost (41.77->16.00 moves/sec, same
+        # recipe, today's binary). Set POLYFISH_NET_ROOT_SOURCE=cpu before
+        # launching to opt back out to the old CPU-heuristic path (any value
+        # other than exactly "main_net" falls through, per net_root.rs's own
+        # check) -- scoped to MACRO_GEN since Gumbel never reads this var.
+        export POLYFISH_NET_ROOT_SOURCE="${POLYFISH_NET_ROOT_SOURCE:-main_net}"
         # MACRO_LEAF=net makes the tree consult the network at its leaves (and
         # supplies a turn-level root value for the TD bootstrap). Until these
         # flags existed the backend silently ran MacroParams::default(), i.e.
@@ -700,7 +713,7 @@ do
     # One-line config echo so silent env misconfigurations (ITER_OFFSET,
     # LABEL_REL_W, BOOTSTRAP) are visible in the log — EXP_ELO_006 post-mortem:
     # two runs voided by a missing ITER_OFFSET that nothing surfaced.
-    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} label_abs_debias=${LABEL_ABS_DEBIAS:-0} value_recenter_dose=${VALUE_RECENTER_DOSE:-0} value_recenter_table=${VALUE_RECENTER_TABLE:-none} bootstrap_own_w=${BOOTSTRAP_OWN_W:-0} calib_loss_w=${CALIB_LOSS_W:-0} pov_consistency_w=${POV_CONSISTENCY_W:-0} wl_labels=${WL_LABELS:-0} td_missing=${TD_MISSING} goal_channels=${GOAL_CHANNELS:-0} goal_w_tree=${GOAL_W_TREE:-1} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=${NUM_GAMES}x${SELF_PLAY_LOOPS} mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0} macro_stance_w=${MACRO_STANCE_W:-0} macro_order_w=${MACRO_ORDER_W:-0} macro_root_prior_w=${MACRO_ROOT_PRIOR_W:-0} macro_rollout_nn_w=${MACRO_ROLLOUT_NN_W:-0}"
+    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} label_abs_debias=${LABEL_ABS_DEBIAS:-0} value_recenter_dose=${VALUE_RECENTER_DOSE:-0} value_recenter_table=${VALUE_RECENTER_TABLE:-none} bootstrap_own_w=${BOOTSTRAP_OWN_W:-0} calib_loss_w=${CALIB_LOSS_W:-0} pov_consistency_w=${POV_CONSISTENCY_W:-0} wl_labels=${WL_LABELS:-0} td_missing=${TD_MISSING} goal_channels=${GOAL_CHANNELS:-0} goal_w_tree=${GOAL_W_TREE:-1} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=${NUM_GAMES}x${SELF_PLAY_LOOPS} mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0} macro_stance_w=${MACRO_STANCE_W:-0} macro_order_w=${MACRO_ORDER_W:-0} macro_root_prior_w=${MACRO_ROOT_PRIOR_W:-0} macro_rollout_nn_w=${MACRO_ROLLOUT_NN_W:-0} net_root_source=${POLYFISH_NET_ROOT_SOURCE:-off}"
 
     SP_LOG=$(mktemp)
     for ((sp=1; sp<=SELF_PLAY_LOOPS; sp++)); do
