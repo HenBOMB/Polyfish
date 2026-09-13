@@ -23,8 +23,16 @@
 //! tree grows one new ply per simulation along the PUCT-selected path and
 //! stops naturally at the real turn boundary (`is_terminal`). `MicroParams::
 //! depth` is only a defensive recursion ceiling, not a target.
+//!
+//! Wave batching (`MicroParams::leaf_batch`, see its own doc comment):
+//! `micro_search_pick` collects up to `leaf_batch` simulations' worth of
+//! descents (`micro_collect_wave`) before making one batched
+//! `evaluator.evaluate()` call and backing every leaf up
+//! (`micro_resolve_wave`) — `leaf_batch == 1` is byte-identical to the old
+//! strictly-sequential loop this replaced.
 
 use crate::ai::eval_server::Evaluator;
+use crate::ai::search::mcts_common::VIRTUAL_LOSS;
 use crate::ai::oracle_macro::MacroGoal;
 use crate::ai::search::goal_aux::GoalAux;
 use crate::ai::search::macro_exec::gate_ok;
@@ -106,6 +114,18 @@ pub struct MicroParams {
     /// pursued, the same shape as EXP_ELO_150's clean per-unit-goal fix.
     /// `0.0` (default) is a byte-identical no-op.
     pub goal_prior_w: f32,
+    /// Leaves coalesced into one evaluator.evaluate() call per wave, mirroring
+    /// `MacroParams::leaf_batch`'s convention exactly: `1` (default) is
+    /// today's strictly-sequential sim loop, byte-identical -- every existing
+    /// test constructs `MicroParams` with this at 1 and keeps passing
+    /// unchanged. Values `>1` change move-selection behavior via virtual loss
+    /// (see `select_child`'s doc comment and `collect_wave`), not just
+    /// throughput: sims spent widening a wave's root-candidate coverage
+    /// instead of deepening one line trade search depth for round-trip count.
+    /// At the tiny production `sims` budget (8), a large `leaf_batch` can
+    /// leave little room for the tree to differentiate at all past the first
+    /// wave -- start small (2-4) when validating, not `sims` itself.
+    pub leaf_batch: usize,
 }
 
 impl Default for MicroParams {
@@ -118,6 +138,7 @@ impl Default for MicroParams {
             net_prior_w: 0.0,
             forced_playouts: false,
             goal_prior_w: 0.0,
+            leaf_batch: 1,
         }
     }
 }
@@ -180,7 +201,13 @@ pub fn micro_mcts_params() -> Option<MicroParams> {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(0.0);
-        Some(MicroParams { sims, depth, k, c_puct, net_prior_w, forced_playouts, goal_prior_w })
+        // Inert by default (1 = sequential, byte-identical) -- see
+        // `MicroParams::leaf_batch`'s own doc comment.
+        let leaf_batch: usize = std::env::var("POLYFISH_MICRO_MCTS_LEAF_BATCH")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+        Some(MicroParams { sims, depth, k, c_puct, net_prior_w, forced_playouts, goal_prior_w, leaf_batch })
     })
 }
 
@@ -282,6 +309,14 @@ struct MicroChild {
     mv: Box<dyn Move>,
     prior: f32,
     node: Option<MicroNode>,
+    /// Wave-batching: phantom visit weight charged while a pending leaf
+    /// beneath this edge hasn't backed up yet, removed once it does. Always
+    /// 0.0 between waves (every wave collected is fully resolved before the
+    /// next starts, or before `micro_search_pick` returns) -- so a MicroChild
+    /// freshly built at the root, or a subtree carried in from `MicroTreeCarry`,
+    /// is always born/received at 0.0. Zero everywhere makes `select_child`
+    /// reduce byte-for-byte to the pre-wave-batching formula.
+    virtual_loss: f32,
 }
 
 /// Debug-only snapshot of one root child, before vs. after the PUCT search:
@@ -394,89 +429,242 @@ fn cheap_candidates(
     scored
 }
 
-/// The only place this module touches `eval_server`. One position, one
-/// forward -- batching multiple simulations' leaves into a single
-/// `evaluate(vec![...])` call is a real, worthwhile fast-follow (the walks
-/// to reach each leaf are already independent) but not built here; this
-/// mirrors macro-mcts's own `leaf_value`, which is also one-at-a-time.
-fn leaf_value(game: &Game, pov: PlayerId, goal: &MacroGoal, evaluator: &Evaluator) -> f32 {
-    crate::ai::features::state_to_cpu_features_goal(&game.state, pov, None, Some(goal))
-        .ok()
-        .and_then(|f| evaluator.evaluate(vec![f]).into_iter().next().map(|r| r.0))
-        .unwrap_or(0.0)
-}
 
-/// Returns `(leaf value, absolute depth reached along this path)` — depth
-/// is `params.depth - depth_remaining` at the point a leaf is hit, used by
-/// `micro_search_pick` to measure the search's real emergent depth
-/// (EXP_ELO_079) instead of assuming it from the unrelated GumbelMctsAgent
-/// curve cited in this module's own doc comment.
-#[allow(clippy::too_many_arguments)]
-fn select_and_expand(
-    node: &mut MicroNode,
-    pov: PlayerId,
-    goal: &MacroGoal,
-    star_gate: bool,
-    aux: &GoalAux,
-    evaluator: &Evaluator,
-    params: &MicroParams,
-    depth_remaining: usize,
-) -> (f32, usize) {
-    let current_depth = params.depth - depth_remaining;
-    if node.is_terminal || depth_remaining == 0 {
-        return (leaf_value(&node.game, pov, goal, evaluator), current_depth);
-    }
-    if node.children.is_empty() {
-        let cands = cheap_candidates(&node.game, goal, star_gate, aux, params.k);
-        if cands.len() == 1 && cands[0].0.move_type() == MoveType::EndTurn {
-            // Turn is genuinely over: nothing left to explore, and we never
-            // simulate past our own EndTurn into the opponent's turn.
-            node.is_terminal = true;
-            return (leaf_value(&node.game, pov, goal, evaluator), current_depth);
-        }
-        let scores: Vec<f32> = cands.iter().map(|(_, s)| *s).collect();
-        let priors = softmax_priors(&scores);
-        node.children = cands
-            .into_iter()
-            .zip(priors)
-            .map(|((mv, _), prior)| MicroChild { mv, prior, node: None })
-            .collect();
-    }
-
-    let total_visits: u32 =
-        node.children.iter().map(|c| c.node.as_ref().map_or(0, |n| n.visits)).sum();
+/// Virtual-loss-aware PUCT selection over `node.children` (cold-start FPU =
+/// 0.0, matching the pre-wave-batching formula exactly). Reduces byte-for-
+/// byte to that formula whenever every child's `virtual_loss` is 0.0 --
+/// always true between waves, so `leaf_batch == 1` search is unaffected.
+fn select_child(node: &MicroNode, c_puct: f32) -> usize {
+    let total_eff: f32 = node
+        .children
+        .iter()
+        .map(|c| c.node.as_ref().map_or(0.0, |n| n.visits as f32) + c.virtual_loss)
+        .sum();
     let mut best_idx = 0;
     let mut best_score = f32::MIN;
     for (i, c) in node.children.iter().enumerate() {
-        let (q, n) = c.node.as_ref().map_or((0.0, 0u32), |n| (n.q(), n.visits));
-        let u = params.c_puct * c.prior * (total_visits.max(1) as f32).sqrt() / (1.0 + n as f32);
+        let (value_sum, real_n) =
+            c.node.as_ref().map_or((0.0, 0.0), |n| (n.value_sum, n.visits as f32));
+        let n_eff = real_n + c.virtual_loss;
+        // Each phantom visit is charged the pessimistic value -1 -- same
+        // convention as `macro_mcts.rs`'s `edge_values[i] - edge_virtual_loss[i]`
+        // (`VIRTUAL_LOSS == 1.0` makes "amount charged" and "phantom visit
+        // count" the same number, so this subtraction and the `n_eff` in the
+        // denominator stay consistent).
+        let q = if n_eff > 0.0 { (value_sum - c.virtual_loss) / n_eff } else { 0.0 };
+        let u = c_puct * c.prior * total_eff.max(1.0).sqrt() / (1.0 + n_eff);
         let s = q + u;
         if s > best_score {
             best_score = s;
             best_idx = i;
         }
     }
+    best_idx
+}
 
-    let (value, depth) = if node.children[best_idx].node.is_none() {
-        let mut child_game = node.game.clone();
-        let ok = child_game.simulate_move(node.children[best_idx].mv.as_ref()).is_some();
-        let terminal = !ok || child_game.state.settings.current_player_turn_id != pov;
-        let v = leaf_value(&child_game, pov, goal, evaluator);
-        node.children[best_idx].node = Some(MicroNode {
-            game: child_game,
-            visits: 1,
-            value_sum: v,
+/// Walks `path`'s child indices from `root`, returning the node reached.
+/// Every element of a `micro_descend_once` path names an already-real node
+/// to walk THROUGH except possibly the last, which may still be `None` (a
+/// brand-new leaf) -- callers pass `&path[..path.len() - 1]` in that case.
+fn node_at_path_mut<'a>(root: &'a mut MicroNode, path: &[usize]) -> &'a mut MicroNode {
+    let mut cursor = root;
+    for &idx in path {
+        cursor = cursor.children[idx].node.as_mut().unwrap();
+    }
+    cursor
+}
+
+fn node_at_path<'a>(root: &'a MicroNode, path: &[usize]) -> &'a MicroNode {
+    let mut cursor = root;
+    for &idx in path {
+        cursor = cursor.children[idx].node.as_ref().unwrap();
+    }
+    cursor
+}
+
+/// One root-to-frontier descent using `select_child` at every level, and
+/// `path[i]` is the child index chosen at tree depth `i` -- walking it via
+/// `node_at_path`/`node_at_path_mut` always reaches the same node. Charges
+/// `VIRTUAL_LOSS` on every edge walked, unconditionally, mirroring
+/// `macro_mcts.rs`'s own wave-batching descent: the charge does not depend
+/// on how the descent ends, so `micro_apply_leaf`'s removal is always
+/// exactly paired.
+///
+/// Stops at the first node needing a fresh `leaf_value` call: either a
+/// brand-new child (`node: None`, returned as `Some((child_game, terminal))`
+/// so `micro_apply_leaf` can materialize it once scored) or an ALREADY-real
+/// node being re-visited because it's terminal or depth-capped (`None` --
+/// mirrors the pre-wave-batching design's behavior of re-scoring such a node
+/// on every visit without touching ITS OWN stored visits/value_sum, only its
+/// ancestors').
+fn micro_descend_once(
+    root: &mut MicroNode,
+    pov: PlayerId,
+    goal: &MacroGoal,
+    star_gate: bool,
+    aux: &GoalAux,
+    params: &MicroParams,
+) -> (Vec<usize>, Option<(Game, bool)>) {
+    let mut path: Vec<usize> = Vec::new();
+    let mut cursor: &mut MicroNode = root;
+    loop {
+        if cursor.is_terminal || path.len() >= params.depth {
+            return (path, None);
+        }
+        if cursor.children.is_empty() {
+            let cands = cheap_candidates(&cursor.game, goal, star_gate, aux, params.k);
+            if cands.len() == 1 && cands[0].0.move_type() == MoveType::EndTurn {
+                // Turn is genuinely over: nothing left to explore, and we
+                // never simulate past our own EndTurn into the opponent's.
+                cursor.is_terminal = true;
+                return (path, None);
+            }
+            let scores: Vec<f32> = cands.iter().map(|(_, s)| *s).collect();
+            let priors = softmax_priors(&scores);
+            cursor.children = cands
+                .into_iter()
+                .zip(priors)
+                .map(|((mv, _), prior)| MicroChild { mv, prior, node: None, virtual_loss: 0.0 })
+                .collect();
+        }
+        let best_idx = select_child(cursor, params.c_puct);
+        cursor.children[best_idx].virtual_loss += VIRTUAL_LOSS;
+        path.push(best_idx);
+        if cursor.children[best_idx].node.is_none() {
+            let mut child_game = cursor.game.clone();
+            let ok = child_game.simulate_move(cursor.children[best_idx].mv.as_ref()).is_some();
+            let terminal = !ok || child_game.state.settings.current_player_turn_id != pov;
+            return (path, Some((child_game, terminal)));
+        }
+        cursor = cursor.children[best_idx].node.as_mut().unwrap();
+    }
+}
+
+/// One in-flight leaf awaiting a batched eval call, mirroring
+/// `macro_mcts.rs::PendingLeaf`. `new_leaf` is `Some` when the descent
+/// stopped at a not-yet-created child (its simulated game + whether it's
+/// already terminal, ready to materialize once scored); `None` when it
+/// stopped at an already-real node being re-visited (see
+/// `micro_descend_once`'s doc). `count`: a repeat pick of the exact same
+/// path within one wave bumps this instead of adding a second entry, so its
+/// one real result backs up multiple times.
+struct MicroPendingLeaf {
+    path: Vec<usize>,
+    new_leaf: Option<(Game, bool)>,
+    feat_offset: usize,
+    count: u32,
+}
+
+/// Materializes a pending leaf (if new) and backs up `value` `count` times:
+/// `visits += count, value_sum += value * count` on every node from `root`
+/// down to (not including) the leaf itself, and removes the
+/// `VIRTUAL_LOSS * count` charged along the full path during collection.
+/// The leaf's OWN stored visits/value_sum are set once at creation and never
+/// touched again on a later re-visit -- matches the pre-wave-batching
+/// design, see `MicroPendingLeaf`'s doc.
+fn micro_apply_leaf(root: &mut MicroNode, path: &[usize], new_leaf: Option<(Game, bool)>, value: f32, count: u32) {
+    if path.is_empty() {
+        // Only reachable with `params.depth == 0` (root itself can't be
+        // `is_terminal` at construction) -- the pre-wave-batching top-level
+        // call's own early return touched no node's counters at all in this
+        // case; preserve that exactly.
+        return;
+    }
+    if let Some((game, terminal)) = new_leaf {
+        let parent = node_at_path_mut(root, &path[..path.len() - 1]);
+        let last = *path.last().unwrap();
+        parent.children[last].node = Some(MicroNode {
+            game,
+            visits: count,
+            value_sum: value * count as f32,
             children: Vec::new(),
             is_terminal: terminal,
         });
-        (v, current_depth + 1)
-    } else {
-        let child = node.children[best_idx].node.as_mut().unwrap();
-        select_and_expand(child, pov, goal, star_gate, aux, evaluator, params, depth_remaining - 1)
-    };
-    node.visits += 1;
-    node.value_sum += value;
-    (value, depth)
+    }
+    let mut cursor = root;
+    cursor.visits += count;
+    cursor.value_sum += value * count as f32;
+    for &idx in &path[..path.len() - 1] {
+        cursor.children[idx].virtual_loss -= VIRTUAL_LOSS * count as f32;
+        cursor = cursor.children[idx].node.as_mut().unwrap();
+        cursor.visits += count;
+        cursor.value_sum += value * count as f32;
+    }
+    let last = *path.last().unwrap();
+    cursor.children[last].virtual_loss -= VIRTUAL_LOSS * count as f32;
+}
+
+/// Collects up to `budget` simulations' worth of descents in one wave:
+/// repeated `micro_descend_once` calls, immediately backing up any leaf
+/// whose features fail to build (mirrors `leaf_value`'s own `unwrap_or(0.0)`
+/// fallback -- no eval call is possible for it either way), and
+/// accumulating every other leaf (plus its feature row) for one batched
+/// eval call. Returns the count of immediately-resolved sims plus whatever's
+/// left pending for `micro_resolve_wave`.
+#[allow(clippy::too_many_arguments)]
+fn micro_collect_wave(
+    root: &mut MicroNode,
+    pov: PlayerId,
+    goal: &MacroGoal,
+    star_gate: bool,
+    aux: &GoalAux,
+    params: &MicroParams,
+    budget: usize,
+) -> (u32, Vec<MicroPendingLeaf>, Vec<crate::ai::features::RawFeatures>) {
+    let mut immediate = 0u32;
+    let mut pending: Vec<MicroPendingLeaf> = Vec::new();
+    let mut features: Vec<crate::ai::features::RawFeatures> = Vec::new();
+    let mut dedup: std::collections::HashMap<Vec<usize>, usize> = std::collections::HashMap::new();
+    loop {
+        let done = immediate as usize + pending.iter().map(|p| p.count as usize).sum::<usize>();
+        if done >= budget {
+            break;
+        }
+        let (path, new_leaf) = micro_descend_once(root, pov, goal, star_gate, aux, params);
+        if let Some(&pi) = dedup.get(&path) {
+            pending[pi].count += 1;
+            continue;
+        }
+        let feats = match &new_leaf {
+            Some((game, _)) => {
+                crate::ai::features::state_to_cpu_features_goal(&game.state, pov, None, Some(goal)).ok()
+            }
+            None => {
+                let n = node_at_path(root, &path);
+                crate::ai::features::state_to_cpu_features_goal(&n.game.state, pov, None, Some(goal)).ok()
+            }
+        };
+        match feats {
+            Some(f) => {
+                let feat_offset = features.len();
+                features.push(f);
+                dedup.insert(path.clone(), pending.len());
+                pending.push(MicroPendingLeaf { path, new_leaf, feat_offset, count: 1 });
+            }
+            None => {
+                micro_apply_leaf(root, &path, new_leaf, 0.0, 1);
+                immediate += 1;
+            }
+        }
+    }
+    (immediate, pending, features)
+}
+
+/// The one batched `evaluator.evaluate()` call for a wave's pending leaves,
+/// then applies each one's real result via `micro_apply_leaf` (`leaf.count`
+/// times each, undoing exactly the virtual loss its `count` descents
+/// charged).
+fn micro_resolve_wave(
+    root: &mut MicroNode,
+    pending: Vec<MicroPendingLeaf>,
+    features: Vec<crate::ai::features::RawFeatures>,
+    evaluator: &Evaluator,
+) {
+    let results = evaluator.evaluate(features);
+    for leaf in pending {
+        let v = results.get(leaf.feat_offset).map(|r| r.0).unwrap_or(0.0);
+        micro_apply_leaf(root, &leaf.path, leaf.new_leaf, v, leaf.count);
+    }
 }
 
 /// Root children are `rank_view`'s own top candidates (already paid for,
@@ -639,7 +827,7 @@ pub fn micro_search_pick(
             } else {
                 None
             };
-            MicroChild { mv: dyn_clone::clone_box(mv.as_ref()), prior, node }
+            MicroChild { mv: dyn_clone::clone_box(mv.as_ref()), prior, node, virtual_loss: 0.0 }
         })
         .collect();
     let mut root = MicroNode {
@@ -652,6 +840,11 @@ pub fn micro_search_pick(
     let mut max_depth_this_call: usize = 0;
     let mut spent_sims = 0usize;
     if params.forced_playouts {
+        // One deterministic pass over every not-yet-visited root child (no
+        // PUCT/virtual-loss dance needed -- each is targeted at most once by
+        // construction), batched into a single eval call.
+        let mut feats: Vec<crate::ai::features::RawFeatures> = Vec::new();
+        let mut forced_pending: Vec<(usize, Game, bool)> = Vec::new();
         for i in 0..root.children.len() {
             if spent_sims >= params.sims {
                 break;
@@ -662,23 +855,56 @@ pub fn micro_search_pick(
             let mut child_game = root.game.clone();
             let ok = child_game.simulate_move(root.children[i].mv.as_ref()).is_some();
             let terminal = !ok || child_game.state.settings.current_player_turn_id != pov;
-            let v = leaf_value(&child_game, pov, goal, evaluator);
-            root.children[i].node = Some(MicroNode {
-                game: child_game,
-                visits: 1,
-                value_sum: v,
-                children: Vec::new(),
-                is_terminal: terminal,
-            });
-            root.visits += 1;
-            root.value_sum += v;
-            max_depth_this_call = max_depth_this_call.max(1);
+            match crate::ai::features::state_to_cpu_features_goal(&child_game.state, pov, None, Some(goal)).ok() {
+                Some(f) => {
+                    feats.push(f);
+                    forced_pending.push((i, child_game, terminal));
+                }
+                None => {
+                    root.children[i].node = Some(MicroNode {
+                        game: child_game,
+                        visits: 1,
+                        value_sum: 0.0,
+                        children: Vec::new(),
+                        is_terminal: terminal,
+                    });
+                    root.visits += 1;
+                    max_depth_this_call = max_depth_this_call.max(1);
+                }
+            }
             spent_sims += 1;
         }
+        if !forced_pending.is_empty() {
+            let results = evaluator.evaluate(feats);
+            for (offset, (i, child_game, terminal)) in forced_pending.into_iter().enumerate() {
+                let v = results.get(offset).map(|r| r.0).unwrap_or(0.0);
+                root.children[i].node = Some(MicroNode {
+                    game: child_game,
+                    visits: 1,
+                    value_sum: v,
+                    children: Vec::new(),
+                    is_terminal: terminal,
+                });
+                root.visits += 1;
+                root.value_sum += v;
+                max_depth_this_call = max_depth_this_call.max(1);
+            }
+        }
     }
-    for _ in spent_sims..params.sims {
-        let (_, d) = select_and_expand(&mut root, pov, goal, star_gate, aux, evaluator, params, params.depth);
-        max_depth_this_call = max_depth_this_call.max(d);
+    let batch = params.leaf_batch.max(1);
+    let mut done = spent_sims;
+    while done < params.sims {
+        let want = (params.sims - done).min(batch);
+        let (immediate, pending, features) =
+            micro_collect_wave(&mut root, pov, goal, star_gate, aux, params, want);
+        done += immediate as usize;
+        max_depth_this_call = max_depth_this_call.max(1);
+        if !pending.is_empty() {
+            done += pending.iter().map(|p| p.count as usize).sum::<usize>();
+            let deepest = pending.iter().map(|p| p.path.len()).max().unwrap_or(0);
+            max_depth_this_call = max_depth_this_call.max(deepest);
+            micro_resolve_wave(&mut root, pending, features, evaluator);
+        }
     }
     MICRO_MCTS_DEPTH_SUM.fetch_add(max_depth_this_call as u64, std::sync::atomic::Ordering::Relaxed);
     MICRO_MCTS_DEPTH_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -734,479 +960,7 @@ pub fn micro_search_pick(
     (Some(picked_orig_idx), next_carry, picked_q, child_trace)
 }
 
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ai::eval_server::{DummyEvalHandle, Evaluator};
-    use crate::ai::oracle_macro::compute_macro_goal;
-    use crate::ai::search::goal_aux::compute_goal_aux;
-    use crate::ai::search::macro_exec::rank_plies;
-
-    /// EXP_ELO_079: measure this search's OWN emergent depth at production
-    /// params (sims=64, k=4 -- POLYFISH_MICRO_MCTS_SIMS=64 was the only
-    /// override in EXP_ELO_074's launch config, K/DEPTH/CPUCT stayed at
-    /// their env-var defaults), instead of trusting the unrelated old-
-    /// GumbelMctsAgent depth/sims curve cited in this module's own doc
-    /// comment. Uses `Evaluator::Dummy` (constant leaf value) so this is a
-    /// mechanics-only measurement, independent of any trained checkpoint --
-    /// a real network's sharper Q differences would let PUCT concentrate
-    /// visits (and thus depth) along a preferred line MORE than this
-    /// constant-value floor does, so this measurement is a conservative
-    /// lower bound on production depth, not an exact match.
-    #[test]
-    fn measures_own_emergent_depth_at_production_params() {
-        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-        let params = MicroParams { sims: 64, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0 , forced_playouts: false, goal_prior_w: 0.0 };
-
-        for seed in 0..6i64 {
-            let mut game = Game::new();
-            game.state = crate::mapgen::generate(crate::mapgen::MapGenSettings {
-                size: crate::types::MapSize::Tiny,
-                map_type: crate::types::MapType::Drylands,
-                tribes: vec![crate::types::TribeType::Imperius, crate::types::TribeType::Bardur],
-                seed,
-                version: 115,
-            });
-            game.post_load();
-            let pov = game.state.settings.current_player_turn_id;
-            let mut view = game.clone_for_mcts(pov);
-            let goal = compute_macro_goal(&view.state, pov, 0);
-            let aux = compute_goal_aux(&view.state, pov, &goal, 0, 0, None);
-            let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
-            let ranked = rank_plies(&mut view, pov, &goal, &aux, star_gate, 1.0, None, None);
-            if ranked.len() < 2 {
-                continue;
-            }
-            micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, false);
-        }
-
-        let calls = MICRO_MCTS_DEPTH_CALLS.load(std::sync::atomic::Ordering::Relaxed);
-        let sum = MICRO_MCTS_DEPTH_SUM.load(std::sync::atomic::Ordering::Relaxed);
-        let max_seen = MICRO_MCTS_MAX_DEPTH_SEEN.load(std::sync::atomic::Ordering::Relaxed);
-        assert!(calls > 0, "search never actually ran (every root ply was trivial EndTurn-only?)");
-        let mean = sum as f64 / calls as f64;
-        eprintln!(
-            "EXP_ELO_079 measured depth @ sims=64,k=4: calls={calls} mean_max_depth={mean:.2} deepest_line_seen={max_seen}"
-        );
-        // Not a pass/fail assertion on the exact number -- this test's job is
-        // to print the real measurement; see the ledger entry for the read.
-    }
-
-    /// EXP_ELO_153: `goal_prior_w` must be a no-op at 0.0 (proven by
-    /// construction -- the whole block is gated on `!= 0.0`, already
-    /// exercised by every other test in this file passing `goal_prior_w:
-    /// 0.0`) and must measurably shift PUCT priors toward the candidate that
-    /// reduces distance to the committed EXPAND target when nonzero. Finds a
-    /// real unit with 2+ legal Step destinations at different distances from
-    /// a chosen far target, so the two candidates differ ONLY in
-    /// destination -- same source unit, same base score (0.0, synthetic) --
-    /// isolating the new term as the sole source of any prior difference.
-    #[test]
-    fn goal_prior_w_shifts_priors_toward_the_closer_expand_candidate() {
-        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
-        use crate::coords::Coords;
-
-        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-        for seed in 0..20i64 {
-            let game = tiny_game_at_seed(seed);
-            let pov = game.state.settings.current_player_turn_id;
-            let size = game.state.settings.size;
-            let moves = game.legal_moves();
-
-            let mut by_source: std::collections::HashMap<i32, Vec<&Box<dyn Move>>> =
-                std::collections::HashMap::new();
-            for m in moves.iter().filter(|m| m.move_type() == MoveType::Step) {
-                if let Ok(src) = m.source_idx() {
-                    by_source.entry(src as i32).or_default().push(m);
-                }
-            }
-            let Some(cands) = by_source.values().find(|v| v.len() >= 2) else { continue };
-
-            let far_target = size * size - 1;
-            let far_coords = Coords::from_index(far_target, size);
-            let mut dists: Vec<(i32, usize)> = cands
-                .iter()
-                .enumerate()
-                .map(|(i, m)| {
-                    let t = m.target_idx().unwrap() as i32;
-                    (Coords::from_index(t, size).chebyshev_distance_to(&far_coords), i)
-                })
-                .collect();
-            dists.sort_by_key(|&(d, _)| d);
-            let (closer_d, closer_i) = dists[0];
-            let (farther_d, farther_i) = *dists.last().unwrap();
-            if farther_d - closer_d < 2 {
-                continue; // not enough spread on this seed's map -- try another
-            }
-
-            let ranked: Vec<(f32, Box<dyn Move>)> =
-                cands.iter().map(|m| (0.0f32, dyn_clone::clone_box(m.as_ref()))).collect();
-            let goal = MacroGoal {
-                orders: vec![(OrderKind::Expand, far_target)],
-                stance: Stance::Grow,
-                save_target: None,
-                prepare: None,
-            };
-            let aux = compute_goal_aux(&game.state, pov, &goal, 0, 0, None);
-            let base =
-                MicroParams { sims: 1, depth: 64, k: ranked.len().max(4), c_puct: 1.5, net_prior_w: 0.0, forced_playouts: false, goal_prior_w: 0.0 };
-            let boosted = MicroParams { goal_prior_w: 50.0, ..base };
-
-            let (_, _, _, trace0) =
-                micro_search_pick(&game, pov, &goal, &ranked, &aux, false, &evaluator, &base, None, false);
-            let (_, _, _, trace1) =
-                micro_search_pick(&game, pov, &goal, &ranked, &aux, false, &evaluator, &boosted, None, false);
-            assert_eq!(trace0.len(), ranked.len());
-            assert_eq!(trace1.len(), ranked.len());
-
-            let closer_gain = trace1[closer_i].prior - trace0[closer_i].prior;
-            let farther_gain = trace1[farther_i].prior - trace0[farther_i].prior;
-            assert!(
-                closer_gain > farther_gain,
-                "seed {seed}: closer candidate's prior should gain more than the \
-                 farther one's when goal_prior_w > 0 (closer {closer_d} tiles away \
-                 gained {closer_gain:+.4}, farther {farther_d} tiles away gained \
-                 {farther_gain:+.4})"
-            );
-            return;
-        }
-        panic!("no seed in 0..20 produced a usable same-unit, 2+-destination scenario");
-    }
-
-    fn tiny_game_at_seed(seed: i64) -> Game {
-        let mut game = Game::new();
-        game.state = crate::mapgen::generate(crate::mapgen::MapGenSettings {
-            size: crate::types::MapSize::Tiny,
-            map_type: crate::types::MapType::Drylands,
-            tribes: vec![crate::types::TribeType::Imperius, crate::types::TribeType::Bardur],
-            seed,
-            version: 115,
-        });
-        game.post_load();
-        game
-    }
-
-    fn uniform_policy(spatial: usize) -> crate::ai::network::RawPolicyOutput {
-        crate::ai::network::RawPolicyOutput {
-            fog: None,
-            macro_stance: None,
-            macro_order: None,
-            rollout_value: None,
-            action_type: vec![0.0; 11],
-            source_spatial: vec![0.0; spatial],
-            target_spatial: vec![0.0; spatial],
-            move_option: vec![0.0; 192],
-        }
-    }
-
-    /// EXP_ELO_126: `net_prior_w == 0.0` must fully gate off the widening
-    /// path -- the whole point of the gate is that this fix is byte-
-    /// identical to the pre-EXP_ELO_126 behavior when the net prior is
-    /// disabled. Checked via the RETURNED PICK, not the shared
-    /// `MICRO_MCTS_UNION_WIDENED` atomic -- that counter is a process-wide
-    /// static and `cargo test` runs tests in parallel by default, so a
-    /// concurrently-running test that deliberately triggers widening (e.g.
-    /// `union_pick_maps_back_to_the_original_ranked_index`) can and does
-    /// increment it mid-run here, producing a false failure. The pick
-    /// itself has no such cross-test interference.
-    #[test]
-    fn union_widening_is_fully_gated_off_at_net_prior_w_zero() {
-        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-        let params = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0 , forced_playouts: false, goal_prior_w: 0.0 };
-        let mut ran_any = false;
-        for seed in 0..8i64 {
-            let game = tiny_game_at_seed(seed);
-            let pov = game.state.settings.current_player_turn_id;
-            let mut view = game.clone_for_mcts(pov);
-            let goal = compute_macro_goal(&view.state, pov, 0);
-            let aux = compute_goal_aux(&view.state, pov, &goal, 0, 0, None);
-            let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
-            let ranked = rank_plies(&mut view, pov, &goal, &aux, star_gate, 1.0, None, None);
-            if ranked.len() < 2 {
-                continue;
-            }
-            let heur_top = ranked.len().min(4);
-            ran_any = true;
-            let (picked, _, _, _) =
-                micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, false);
-            if let Some(idx) = picked {
-                assert!(
-                    idx < heur_top,
-                    "seed {seed}: net_prior_w == 0.0 but the pick ({idx}) fell outside the \
-                     heuristic's own top-{heur_top} -- the widening gate is not actually closed"
-                );
-            }
-        }
-        assert!(ran_any, "no seed produced a real search call -- test setup is broken");
-    }
-
-    /// `net_root` rework: `root_already_net_ranked == true` must fully gate
-    /// off the second-forward-pass widening block even when `net_prior_w`
-    /// is nonzero -- there's nothing left for it to add once `ranked` is
-    /// already net-derived. Checked via the returned pick staying inside
-    /// `ranked`'s own top-k, not the shared `MICRO_MCTS_UNION_WIDENED`
-    /// atomic -- per `union_pick_maps_back_to_the_original_ranked_index`'s
-    /// own note below, that counter is a process-wide static and `cargo
-    /// test` runs tests in parallel by default, so it isn't a reliable
-    /// per-test signal.
-    #[test]
-    fn root_already_net_ranked_fully_gates_off_the_widening_block() {
-        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-        let params = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.3 , forced_playouts: false, goal_prior_w: 0.0 };
-        let mut ran_any = false;
-        for seed in 0..8i64 {
-            let game = tiny_game_at_seed(seed);
-            let pov = game.state.settings.current_player_turn_id;
-            let mut view = game.clone_for_mcts(pov);
-            let goal = compute_macro_goal(&view.state, pov, 0);
-            let aux = compute_goal_aux(&view.state, pov, &goal, 0, 0, None);
-            let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
-            let ranked = rank_plies(&mut view, pov, &goal, &aux, star_gate, 1.0, None, None);
-            if ranked.len() < 2 {
-                continue;
-            }
-            let heur_top = ranked.len().min(4);
-            ran_any = true;
-            let (picked, _, _, _) = micro_search_pick(
-                &view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, true,
-            );
-            if let Some(idx) = picked {
-                assert!(
-                    idx < heur_top,
-                    "seed {seed}: root_already_net_ranked == true but the pick ({idx}) fell \
-                     outside the top-{heur_top} -- the widening block did not gate off"
-                );
-            }
-        }
-        assert!(ran_any, "no seed produced a real search call -- test setup is broken");
-    }
-
-    /// EXP_ELO_126: the core regression this fix exists to prevent. Before
-    /// this fix, `micro_search_pick` returned an index into its OWN
-    /// children vector, which happened to equal the index into `ranked`
-    /// only because children were always exactly `ranked[..top_n]` in
-    /// order. Once the candidate set can be a union that appends net-only
-    /// moves after the heuristic's own top-k, returning the raw
-    /// children-vector position would silently point at the wrong move.
-    /// This finds a real position with legal moves outside the heuristic's
-    /// top-4, crafts a policy that the REAL `compute_move_priors_raw`
-    /// (ground truth, not a hand-derived guess about `mapper.rs`'s
-    /// internals) actually prefers for one of those excluded moves, forces
-    /// a deterministic single-simulation pick of it (`sims: 1` -- PUCT's
-    /// very first selection, with every child unvisited, is exactly
-    /// `argmax(prior)`; `net_prior_w: 1.0` makes prior purely net-driven),
-    /// and asserts the returned index is the move's ORIGINAL position in
-    /// `ranked`, not its position among the union's children.
-    #[test]
-    fn union_pick_maps_back_to_the_original_ranked_index() {
-        for seed in 0..20i64 {
-            let game = tiny_game_at_seed(seed);
-            let pov = game.state.settings.current_player_turn_id;
-            let mut view = game.clone_for_mcts(pov);
-            // Must match `micro_search_pick`'s own `map_size` derivation
-            // exactly -- Tiny maps are NOT the 11x11 feature-space
-            // constant, so hardcoding 11 here silently miscoordinates
-            // every spatial index crafted below against a different grid
-            // width than the real function decodes against.
-            let map_size = view.state.settings.size as usize;
-            let spatial = map_size * map_size;
-            let goal = compute_macro_goal(&view.state, pov, 0);
-            let aux = compute_goal_aux(&view.state, pov, &goal, 0, 0, None);
-            let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
-            let ranked = rank_plies(&mut view, pov, &goal, &aux, star_gate, 1.0, None, None);
-            let heur_top = ranked.len().min(4);
-            if ranked.len() <= heur_top {
-                continue; // nothing outside the heuristic's own top-k here
-            }
-            let all_moves: Vec<Box<dyn Move>> =
-                ranked.iter().map(|(_, mv)| dyn_clone::clone_box(mv.as_ref())).collect();
-
-            // Try biasing one coordinate at a time across all four policy
-            // tensors until the REAL decode function clearly prefers a
-            // move outside the heuristic's top-k.
-            let tensor_lens = [11usize, spatial, spatial, 192];
-            let mut winner: Option<(crate::ai::network::RawPolicyOutput, usize)> = None;
-            'search: for (tensor, &len) in tensor_lens.iter().enumerate() {
-                for i in 0..len {
-                    let mut policy = uniform_policy(spatial);
-                    match tensor {
-                        0 => policy.action_type[i] = 50.0,
-                        1 => policy.source_spatial[i] = 50.0,
-                        2 => policy.target_spatial[i] = 50.0,
-                        _ => policy.move_option[i] = 50.0,
-                    }
-                    let scores = crate::ai::search::policy_composer::compute_move_priors_raw(
-                        &policy, &all_moves, map_size, false,
-                    );
-                    // Lowest-index-wins-ties argmax, matching
-                    // `micro_search_pick`'s own `net_order` sort exactly --
-                    // `Iterator::max_by` breaks ties toward the LAST
-                    // element, the opposite direction, which silently
-                    // picked a different (tied) winner than production
-                    // here during development.
-                    let mut best_i = 0usize;
-                    let mut best_s = scores[0];
-                    for (i, &s) in scores.iter().enumerate().skip(1) {
-                        if s > best_s {
-                            best_s = s;
-                            best_i = i;
-                        }
-                    }
-                    // Require a clean margin over EVERY other candidate
-                    // (not just the heuristic's own top-k) -- a move that
-                    // merely edges out the top-4 while nearly tying some
-                    // OTHER excluded move (e.g. two units able to step onto
-                    // the same tile) is exactly the ambiguous case a
-                    // tie-break-direction mismatch can flip.
-                    let second_best = scores
-                        .iter()
-                        .enumerate()
-                        .filter(|&(i, _)| i != best_i)
-                        .map(|(_, &s)| s)
-                        .fold(f32::MIN, f32::max);
-                    if best_i >= heur_top && best_s > second_best * 2.0 + 1e-6 {
-                        winner = Some((policy, best_i));
-                        break 'search;
-                    }
-                }
-            }
-            let Some((policy, target_idx)) = winner else {
-                continue; // this seed's move set didn't yield a clean case, try another
-            };
-
-            let evaluator = Evaluator::Dummy(DummyEvalHandle::new().with_policy(policy));
-            let params = MicroParams { sims: 1, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 1.0 , forced_playouts: false, goal_prior_w: 0.0 };
-            let (picked, _, _, _) =
-                micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, false);
-            assert_eq!(
-                picked,
-                Some(target_idx),
-                "seed {seed}: expected the net-only candidate at ranked[{target_idx}] (outside \
-                 the heuristic's top-{heur_top}) to be returned by its ORIGINAL ranked index, got {picked:?}"
-            );
-            return; // one confirmed case is enough to pin the invariant
-        }
-        panic!("no seed across 0..20 produced a usable net-only-candidate scenario -- test setup needs a wider seed range");
-    }
-
-    /// EXP_ELO_119: pins the fix for EXP_ELO_079's own collapse -- a real
-    /// gap this project has actually measured (idx177, GARRISON_49) no
-    /// longer zeroes every other candidate's prior.
-    #[test]
-    fn softmax_priors_no_longer_collapses_on_a_real_measured_gap() {
-        let scores = [873.678, 446.889, 445.889, 168.399, 41.915, 27.000];
-        let priors = softmax_priors(&scores);
-        assert!((priors.iter().sum::<f32>() - 1.0).abs() < 1e-4, "priors must sum to 1: {priors:?}");
-        for (i, p) in priors.iter().enumerate() {
-            assert!(
-                *p > 0.01,
-                "candidate {i} (score {}) got a near-zero prior ({p}) -- the collapse EXP_ELO_079 \
-                 diagnosed is back: PUCT's exploration term can never pull visits toward it",
-                scores[i]
-            );
-        }
-        assert!(priors[0] > priors[1], "the top-scoring candidate should still lead");
-    }
-
-    /// A genuine outlier (not just a "big" gap, but overwhelmingly clear of
-    /// a tight cluster) should still concentrate the bulk of the mass on
-    /// it. Population std is measured INCLUDING the outlier, so a single
-    /// extreme value inflates its own denominator ("self-dilution") --
-    /// this candidate set's z-score comes out to ~2.65, giving ~0.75 rather
-    /// than the near-1.0 a naive read might expect. That's still a real,
-    /// large majority (vs. the flat 1.0/0.0 EXP_ELO_079 diagnosed), so it's
-    /// pinned at a looser bound, not tightened until a real gauge says the
-    /// dilution itself costs something.
-    #[test]
-    fn softmax_priors_still_favors_a_genuine_outlier() {
-        let scores = [1000.0, 10.0, 10.5, 9.5, 10.2, 9.8, 10.1, 9.9];
-        let priors = softmax_priors(&scores);
-        assert!(priors[0] > 0.5, "a true outlier should still clearly dominate: {priors:?}");
-    }
-
-    /// EXP_ELO_150: `forced_playouts` must be a true no-op when off (the
-    /// project's standing convention for every opt-in flag) -- same pick,
-    /// same child trace, as the exact same call with the field omitted from
-    /// the sims loop entirely.
-    #[test]
-    fn forced_playouts_off_is_byte_identical_to_the_old_sims_loop() {
-        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-        let base = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0, forced_playouts: false, goal_prior_w: 0.0 };
-        let mut ran_any = false;
-        for seed in 0..8i64 {
-            let game = tiny_game_at_seed(seed);
-            let pov = game.state.settings.current_player_turn_id;
-            let mut view = game.clone_for_mcts(pov);
-            let goal = compute_macro_goal(&view.state, pov, 0);
-            let aux = compute_goal_aux(&view.state, pov, &goal, 0, 0, None);
-            let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
-            let ranked = rank_plies(&mut view, pov, &goal, &aux, star_gate, 1.0, None, None);
-            if ranked.len() < 5 {
-                continue; // want at least a few real root children
-            }
-            ran_any = true;
-            let (pick_a, _, _, trace_a) =
-                micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &base, None, false);
-            let (pick_b, _, _, trace_b) =
-                micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &base, None, false);
-            assert_eq!(pick_a, pick_b, "seed {seed}: same off params must reproduce the same pick");
-            assert_eq!(
-                trace_a.iter().map(|c| c.visits).collect::<Vec<_>>(),
-                trace_b.iter().map(|c| c.visits).collect::<Vec<_>>(),
-                "seed {seed}: same off params must reproduce the same visit distribution"
-            );
-        }
-        assert!(ran_any, "no seed produced a ply with >=5 real candidates -- widen the seed range");
-    }
-
-    /// EXP_ELO_150: the whole point of the warm start -- with `sims >=
-    /// num_root_children`, every child gets a real visit, closing the "a
-    /// candidate the heuristic ranked far ahead can end the search with
-    /// zero visits, purely from early PUCT path-dependence" failure mode
-    /// this experiment measured directly on real games (28/176 Step moves
-    /// by a goal-committed unit misaligned, see the ledger entry).
-    #[test]
-    fn forced_playouts_guarantees_every_root_child_at_least_one_visit() {
-        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-        let params = MicroParams { sims: 8, depth: 64, k: 4, c_puct: 1.5, net_prior_w: 0.0, forced_playouts: true, goal_prior_w: 0.0 };
-        let mut checked_any = false;
-        for seed in 0..8i64 {
-            let game = tiny_game_at_seed(seed);
-            let pov = game.state.settings.current_player_turn_id;
-            let mut view = game.clone_for_mcts(pov);
-            let goal = compute_macro_goal(&view.state, pov, 0);
-            let aux = compute_goal_aux(&view.state, pov, &goal, 0, 0, None);
-            let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
-            let ranked = rank_plies(&mut view, pov, &goal, &aux, star_gate, 1.0, None, None);
-            if ranked.len() < 2 {
-                continue;
-            }
-            let (_, _, _, trace) =
-                micro_search_pick(&view, pov, &goal, &ranked, &aux, star_gate, &evaluator, &params, None, false);
-            if trace.len() > params.sims {
-                continue; // only meaningful when sims can cover every actual root child
-            }
-            checked_any = true;
-            for (i, c) in trace.iter().enumerate() {
-                assert!(
-                    c.visits >= 1,
-                    "seed {seed}, child {i} ({}): forced_playouts must give every root child >= 1 visit, got {}",
-                    c.mv,
-                    c.visits
-                );
-            }
-        }
-        assert!(checked_any, "no seed produced ranked.len() in [2, sims] -- widen the seed range");
-    }
-
-    /// Near-equal scores (std -> floor) must not blow up into a wild,
-    /// artificially spread distribution.
-    #[test]
-    fn softmax_priors_stays_reasonable_when_scores_are_nearly_equal() {
-        let scores = [10.0, 10.01, 9.99, 10.02];
-        let priors = softmax_priors(&scores);
-        for p in &priors {
-            assert!(*p > 0.15 && *p < 0.35, "near-equal scores should land close to uniform: {priors:?}");
-        }
-    }
-}
+#[path = "micro_mcts_tests.rs"]
+mod tests;
