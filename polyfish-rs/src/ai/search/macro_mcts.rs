@@ -2194,6 +2194,17 @@ mod tests {
     /// on the Dummy evaluator -- a bare one returns `rollout_value:
     /// None`, which makes an "eligible to freeze" edge silently fall
     /// through to full simulation instead, masking this entirely).
+    ///
+    /// `PROBE_K` (default 4, `MacroParams::default()`'s own value): root
+    /// candidate breadth, threaded into both the root's own
+    /// `enumerate_candidates` call and `MacroParams.k` (the latter only
+    /// matters for candidate enumeration at nodes deeper than the
+    /// `rollout_nn_min_depth` freeze point). EXP_ELO_158 (Sep 13): at
+    /// production's `rollout_nn_w=1.0`/`min_depth=1`, every root
+    /// candidate is a real `expand_execute` simulation (root-adjacent
+    /// edges never freeze) -- so node count and wall time scale
+    /// ~linearly with `k` itself, unlike `sims` (EXP_ELO_156, no effect
+    /// once `sims >= k`).
     #[test]
     #[ignore]
     fn smoke_stats_probe() {
@@ -2203,7 +2214,11 @@ mod tests {
             let mut sim = game.clone_for_mcts(pov);
             let mut lane_states: [LaneState; 2] = Default::default();
             let mut counters = [TurnCounters::default(); 2];
-            for _ in 0..8 {
+            let warmup_plies: usize = std::env::var("PROBE_WARMUP_PLIES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(8);
+            for _ in 0..warmup_plies {
                 if sim.state.settings._game_over {
                     break;
                 }
@@ -2225,8 +2240,12 @@ mod tests {
             }
             let pov = sim.state.settings.current_player_turn_id;
             let base = compute_macro_goal(&sim.state, pov, counters[seat(pov)].tier3_bought);
+            let probe_k: usize = std::env::var("PROBE_K")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(4);
             let cands =
-                enumerate_candidates(&sim.state, pov, base, counters[seat(pov)], 4);
+                enumerate_candidates(&sim.state, pov, base, counters[seat(pov)], probe_k);
             let k = cands.len();
             let sims = std::env::var("PROBE_SIMS")
                 .ok()
@@ -2252,7 +2271,7 @@ mod tests {
                 cands,
                 counters[seat(pov)],
                 &lane_states[seat(pov)],
-                &MacroParams { sims, rollout_nn_w, rollout_nn_min_depth, ..Default::default() },
+                &MacroParams { sims, rollout_nn_w, rollout_nn_min_depth, k: probe_k, ..Default::default() },
                 &evaluator,
             );
             println!(
