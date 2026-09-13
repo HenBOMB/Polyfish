@@ -22606,3 +22606,210 @@ where "distance to the EXPAND target" is a less meaningful signal to
 begin with — untested, a real confound the current implementation
 doesn't guard against). Code stays committed, default `0.0`, zero
 production risk either way.
+
+## EXP_ELO_154 — micro-mcts wave batching (collect_wave/resolve_wave)
+
+STATUS: BUILT, unit-tested (14 tests: 10 pre-existing all still pass
+unchanged including the reproducibility check, 4 new), default OFF
+(`leaf_batch: 1`, byte-identical to the old sequential loop). Compiles
+clean against `self_play`/`arena`. Smoke-run through `self_play` with
+`POLYFISH_MICRO_MCTS_LEAF_BATCH=4` (see EXP_ELO_155's entry, run
+together). **Not yet arena-measured for throughput or win-rate impact
+at any `leaf_batch > 1`.**
+
+CONTEXT: Verdi asked whether it'd be worth running micro-mcts inside
+macro-mcts's own root-candidate rollouts (replacing the greedy
+`execute_turn_net_greedy` per-ply executor), reasoning the existing
+actor pool + eval-server batching infrastructure might absorb the extra
+CPU->GPU dispatch boundaries for free. Explicitly deferred ("we wont
+turn on... to be perfectly clear") pending a real measurement — the
+concrete concern raised was that this codebase is documented
+actor-latency-bound, not GPU-compute-bound (`candle Metal 19x slower`,
+the MPSGraph pipeline's own "actor-latency-bound" finding), and
+micro-mcts's OWN real per-ply search already has no internal batching:
+"the walks to reach each leaf are already independent... not built
+here" (the module's own pre-existing doc comment) — EXP_ELO_119
+measured `sims=8` alone costing ~2.2x baseline self-play throughput
+(21.7 vs 46.85 moves/s) purely from that sequential round-trip cost.
+Macro-mcts already solved the identical problem for its own tree
+(`MacroParams::leaf_batch`, `collect_wave`/`resolve_wave`, shipped this
+session in `b6605d1b`/`5fe4ad7b`/`7058de26`/`996daf38`) — porting the
+same mechanism to micro-mcts closes that throughput gap independent of
+the (still-deferred) question of whether to also use it inside macro's
+rollouts.
+
+DESIGN: mirror macro's virtual-loss + wave pattern exactly, adapted to
+micro's shape. Two structural differences from macro made this
+SIMPLER, not harder: (1) micro-mcts has no negamax sign-flip -- a
+single fixed `pov` throughout one ply's search, so backprop just adds
+the same value up every ancestor, no `r(edge) - v(child)` bookkeeping;
+(2) micro has no "cheap frozen estimate vs. full simulation" duality --
+every leaf touch (a brand-new child OR a re-visited already-terminal/
+depth-capped node) pays exactly one `leaf_value` net call, so there's
+no Path-B/Path-C split to reproduce, just one uniform wave.
+
+BUILT (`micro_mcts.rs`, `mcts_common::VIRTUAL_LOSS` reused): 
+`MicroParams::leaf_batch` (new field, default `1`, env var
+`POLYFISH_MICRO_MCTS_LEAF_BATCH`, no CLI flag yet -- same as
+`goal_prior_w`'s precedent). `MicroChild::virtual_loss: f32` (new
+field). Replaced the old recursive `select_and_expand` with:
+`select_child` (virtual-loss-aware PUCT, `q = (value_sum -
+virtual_loss)/(real_n + virtual_loss)`, same pessimistic-phantom-visit
+convention as macro's `edge_values[i] - edge_virtual_loss[i]`),
+`micro_descend_once` (one root-to-frontier walk, ITERATIVE not
+recursive -- builds a `Vec<usize>` path of child indices, charging
+`VIRTUAL_LOSS` at every level walked, stopping at the first node
+needing a fresh eval call), `micro_apply_leaf` (materializes a new leaf
+if any + backs up `value` along the path + removes the virtual loss
+charged, verified by hand for both the new-child and re-visit-terminal
+cases at every depth), `micro_collect_wave`/`micro_resolve_wave`
+(mirror macro's names/shape exactly: collect up to `leaf_batch`
+descents -- deduping exact repeat picks within one wave onto a bumped
+`count`, resolving any feature-build failure immediately at value 0.0
+(matches the old `leaf_value`'s own `unwrap_or(0.0)`) -- then one
+batched `evaluator.evaluate()` call). `forced_playouts`'s own
+warm-start loop (previously one `leaf_value` call per untouched root
+child, sequential) is now ALSO batched into a single eval call, since
+it needed no PUCT/virtual-loss machinery at all (each child visited at
+most once by construction).
+
+Split `micro_mcts.rs`'s inline `#[cfg(test)] mod tests` out to a
+sibling `micro_mcts_tests.rs` (CLAUDE.md's sanctioned pattern, matching
+`goal_potential.rs`/`goal_potential_tests.rs`) -- the file was already
+past the ~1000-line guideline before this work (1212 lines) and would
+have been ~1650 after adding coverage in place.
+
+VERIFICATION: `leaf_batch == 1` byte-identical to the pre-existing
+sequential loop -- proven by hand (traced the exact backprop arithmetic
+for a depth-1 new-child case, a depth-2 new-grandchild case, and a
+depth-2 re-visit-terminal case; every ancestor's `visits`/`value_sum`
+update matches the old recursive code term-for-term) and confirmed by
+the pre-existing `forced_playouts_off_is_byte_identical_to_the_old_sims_loop`
+reproducibility test still passing unchanged. Four new tests:
+- `wave_batching_conserves_total_visits_at_every_leaf_batch_size`:
+  `root.visits == sims` holds at `leaf_batch` in {1, 2, 3, sims}.
+- `wave_batching_leaves_no_residual_virtual_loss`: recursive check over
+  the whole tree after a full search -- no leftover charge (a leftover
+  would silently bias the NEXT ply's search via `MicroTreeCarry`, which
+  moves a resolved subtree forward).
+- `wave_batching_dedups_repeat_picks_onto_one_pending_entry`: a
+  single-legal-child root forces every descent in a `leaf_batch=4` wave
+  onto the identical path -- asserts exactly 1 pending entry with
+  `count == 4`, not 4 separate entries.
+- `wave_batching_spreads_a_wave_across_more_distinct_children_than_sequential`:
+  hand-derived on a deliberately skewed synthetic prior
+  (`[0.5, 0.1, 0.1, 0.1, 0.1, 0.1]`, `c_puct=1.5`, `sims=6`, constant
+  Dummy leaf value so Q ties at 0.0 everywhere) -- sequential search
+  visits the dominant candidate 5 times and the next one once (2
+  distinct children touched); one wave of 6 visits every candidate
+  exactly once (6 distinct). Confirmed by the passing test, not just
+  the derivation.
+
+NOT YET MEASURED: real throughput or win-rate impact at `leaf_batch >
+1`. The mechanism trades search depth for round-trip count at a fixed
+`sims` budget (same tradeoff macro's own `leaf_batch` doc warns about)
+-- at production `sims=8`, a large `leaf_batch` could leave little room
+for the tree to differentiate past the first wave. Recommend starting
+small (2-4) in a paired arena A/B before considering it for
+`run_training_loop.sh`, and separately measuring self-play moves/s to
+confirm the throughput win actually materializes (the theoretical case
+is strong -- EXP_ELO_119's 2.2x cost was entirely round-trip-bound, and
+this mechanism directly attacks that -- but every other lever in this
+codebase gets measured before being trusted, this one included).
+
+## EXP_ELO_155 — micro-mcts policy target: real visit distribution, not one-hot
+
+STATUS: BUILT, unit-tested, compiles clean against `self_play`/`arena`.
+Smoke-run through `self_play` (see below). Ships live immediately on
+the macro-mcts backend (no env gate -- this changes what gets RECORDED
+as the training label for a ply already searched, not the search or
+the move actually played, so there's no "off" switch the way
+search-affecting params have one; the pre-existing one-hot behavior
+survives as the correct fallback for exactly the plies micro-mcts
+doesn't search). **Not yet validated through an actual training
+iteration** -- that's the real test of whether this helps, still
+pending.
+
+CONTEXT: Verdi's request, following the same-session architecture
+review: "I would like to close the gap for the micro-mcts to make sure
+it is faithful and true to the tree distillation." The gap: micro-mcts
+already runs a real PUCT search every ply (default `sims=8`) and
+produces genuine per-child visit counts at its root, but
+`brain.rs`'s own comment on the `SearchAgent::MacroMcts` arm of
+`select_move_with_decomposed_visits` said plainly what happened to
+them: "the macro tree's executed move becomes a one-hot policy target
+— behavior-cloning data for the training loop." The search's actual
+preference distribution -- which candidates it considered close, which
+it dismissed outright -- was computed and then thrown away, collapsed
+to a single winner before the label was built. Contrast:
+`dataset.rs:466`'s `macro_policy_targets(candidates, visits)` already
+gives the MACRO directive head (stance/order) the real AlphaZero-style
+soft visit-count target off macro-mcts's own root ballot; only the
+head that actually plays >95% of real decisions (action_type/
+source_spatial/target_spatial/move_option) was on the weak, one-hot,
+pure-behavior-cloning form.
+
+DESIGN: expose the same `root.children` snapshot `micro_search_pick`
+already builds for its debug trace (`MicroChildTrace`, string-keyed,
+tracing-only) a second way, keyed by real `Move` objects instead of
+serialized strings, so it can be turned into training-consumable
+`MoveVisit`s.
+
+BUILT: `MoveVisit::weighted(m, visits)` (new constructor in
+`mcts_types.rs`; `one_hot` is now `weighted(m, 1.0)`; `MoveVisit`
+gained `Clone`). `micro_search_pick` returns a 5th value,
+`Vec<MoveVisit>`, built alongside `child_trace` from the same
+`root.children` iteration -- one entry per root child (INCLUDING
+0-visit ones; `decompose_visits` sums by weight, so a 0-visit entry is
+mathematically inert, matching `MicroChildTrace`'s own
+include-everything convention). `MacroMctsAgent` gained
+`last_micro_visits: Vec<MoveVisit>` (mirrors `last_micro_root_q`'s
+field/reset/accessor pattern exactly) and a `last_micro_visits()`
+accessor. `brain.rs`'s `SearchAgent::MacroMcts` arm: after
+`a.select_move(game)`, read `a.last_micro_visits()` -- use it directly
+if non-empty, fall back to `MoveVisit::one_hot` on the executed move
+exactly when it's empty (micro-mcts didn't run this ply: disabled via
+`POLYFISH_MICRO_MCTS_SIMS=0`, or nothing to search -- a lone EndTurn or
+`ranked.len() < 2`, `micro_search_pick`'s own early-return conditions).
+
+No downstream change needed. `decompose_visits` (`result.rs:195-226`,
+sums `mv.visits` per (action_type/source_spatial/target_spatial/
+move_option) bucket, normalizes by total) already handles an arbitrary
+multi-entry weighted distribution correctly -- proven by the fact that
+the Zero/Gumbel/Heuristic backends already feed real distributions
+through this exact function (`mcts_zero.rs:272`,
+`gumbel_mcts/finish.rs:139`, `heuristic_mcts.rs:115,225`). This was
+purely a producer-side wiring gap on the macro-mcts path.
+
+VERIFICATION: full lib suite green (403 tests), `cargo test --lib
+--tests --bin self_play` green (compiles + integration tests pass),
+`arena` binary compiles clean. Ran a 2-game smoke test through the real
+`self_play` binary (`--search-backend macro-mcts --goal-channels`,
+`POLYFISH_MICRO_MCTS_LEAF_BATCH=4` to exercise EXP_ELO_154 in the same
+pass, debug build, killed partway through game 2 once game 1 finished
+clean -- 192 real moves, no panics, winner decided). Inspected the
+resulting `ply_trace.jsonl` (`POLYFISH_PLY_TRACE`'s per-ply dump,
+feeding the same `root.children` snapshot `micro_child_trace` and the
+new `visit_dist` both come from) directly -- confirms the visit
+distributions reaching the training pipeline are genuinely
+multi-candidate, not degenerate one-hot or uniform-noise. Real rows
+from the run: a 4-candidate Step ply split `[2, 2, 2, 2]` (leaf_batch=4
+spreading two waves of 4 evenly across close-prior siblings -- the
+exact wave-batching signature EXP_ELO_154's unit test predicted); a
+7-candidate ply split `[2, 2, 2, 2, 0, 0, 0]`; a 5-candidate ply split
+`[2, 3, 1, 0, 0]` -- a real preference gradient, not just "visited vs.
+not." This is concrete evidence for the claim in EXP_ELO_154's own
+`wave_batching_spreads_a_wave_across_more_distinct_children_than_sequential`
+test, and for this entry's own core claim (a one-hot label could never
+represent "2 vs. 3 vs. 1" -- it would have recorded only the winner).
+
+CAVEAT, stated plainly rather than buried: at the CURRENT production
+`sims=8` budget (`k` up to 4-8 candidates, `forced_playouts` off by
+default), the resulting distribution is low-resolution -- a handful of
+visits split across several candidates carries real signal (a genuine
+tie now reads as a tie; a strong second choice gets partial credit
+instead of zero) but won't resemble a smooth AlphaZero π. Whether
+that's still meaningfully richer than one-hot for training, or whether
+it needs a higher `sims` budget to pay off -- which reopens EXP_ELO_154's
+exact throughput tradeoff -- is an empirical question for the next real
+training iteration to answer, not something to claim resolved here.

@@ -191,6 +191,34 @@ The model now trains and gauges under a scripted macro layer: **goal channels** 
   since a blanket per-candidate Δφ also touches Attack/Build/Research
   candidates where "distance to the EXPAND target" is a weaker signal
   to begin with) or a much larger confirmatory n.
+- **Micro-mcts gained wave batching and stopped throwing away its own
+  search results (Sep 13, EXP_ELO_154/155).** Two related fixes from the
+  same architecture-alignment session. (1) **Wave batching**: micro-mcts's
+  real per-ply search (default `sims=8`, on by default, EXP_ELO_119
+  measured it alone costing ~2.2x baseline throughput) had no internal
+  batching — every simulation paid its own sequential eval-server round
+  trip. Ported macro-mcts's own `leaf_batch`/`collect_wave`/`resolve_wave`
+  mechanism (`MicroParams::leaf_batch`, env var
+  `POLYFISH_MICRO_MCTS_LEAF_BATCH`, default `1` = byte-identical to the
+  old sequential loop, verified by hand for every backprop case plus the
+  existing reproducibility test). **Not yet arena-measured** at
+  `leaf_batch > 1` for throughput or quality — code is shipped and tested,
+  the number isn't. (2) **Real visit distribution instead of one-hot**:
+  the policy training target for the heads that actually play the game
+  (action_type/source/target/option) was a one-hot label on the executed
+  move — `brain.rs`'s own comment said so plainly. Micro-mcts's real
+  post-search visit counts over its root children existed and were
+  computed every ply already, just discarded. Now surfaced as
+  `MoveVisit::weighted` entries (`micro_search_pick`'s new 5th return
+  value → `MacroMctsAgent::last_micro_visits` → `brain.rs`, falling back
+  to one-hot exactly when micro-mcts didn't run). No downstream change
+  needed — `decompose_visits` already handles real weighted distributions
+  for Zero/Gumbel/Heuristic. **Caveat stated up front, not buried**: at
+  `sims=8` the resulting distribution is low-resolution; whether it's
+  meaningfully richer than one-hot for training, or needs a higher `sims`
+  budget to pay off (which reopens (1)'s exact throughput tradeoff), is
+  for the next real training iteration to show — not yet run. Full detail
+  in `hypothesis_driven_improvements.md`'s EXP_ELO_154/155.
 
 ### ⭐ Why games are won and lost: the third city (352-game autopsy, EXP_ELO_M2)
 
