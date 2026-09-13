@@ -128,8 +128,9 @@ The model now trains and gauges under a scripted macro layer: **goal channels** 
   redundant per-wave CPU setup/dedup-bookkeeping overhead.
   `--macro-leaf-batch 8` (an intermediate point) is a **regression**
   (-28%): the wave overhead costs more than partial batching recovers
-  below `leaf_batch ≈ macro_sims`. Not yet shipped as a default —
-  pending Verdi's own sign-off (session ran unsupervised overnight).
+  below `leaf_batch ≈ macro_sims`. **Shipped** (Sep 13, Verdi's
+  explicit go-ahead) as `run_training_loop.sh`'s `MACRO_GEN` default
+  (`MACRO_LEAF_BATCH=64`, override `=1` for a control arm).
 - **A second, independent, unfixed tax**: production's own self_play
   invocation uses `NUM_GAMES=ACTORS=32` (1:1) — observed directly
   (twice) that the last slice of a batch drains at a small fraction of

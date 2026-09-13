@@ -22161,11 +22161,14 @@ holds) — `--macro-leaf-batch 64` (self_play) /
 this project's own pre-registered bar.** Per this session's own
 standing instruction (unlike EXP_150/151, no real-time sign-off
 available this session — Verdi asleep, explicitly asked to be told
-later, not to have `run_training_loop.sh` changed unsupervised), **NOT
-shipped as a default change this entry.** Recommend, pending Verdi's
-own go-ahead: set `MACRO_LEAF_BATCH=64` (a new env-gated flag mirroring
-`MACRO_ROLLOUT_NN_W`'s pattern) in `run_training_loop.sh`'s `MACRO_GEN`
-block, defaulting to 64 threaded to self_play's `--macro-leaf-batch`.
+later, not to have `run_training_loop.sh` changed unsupervised), not
+shipped as a default change in this entry's own overnight portion.
+
+**UPDATE (Sep 13, later same day): Verdi's explicit "let's turn it on"
+call.** Shipped `MACRO_LEAF_BATCH` (default 64) into
+`run_training_loop.sh`'s `MACRO_GEN` block, threaded to self_play's
+`--macro-leaf-batch`, mirroring `MACRO_ROLLOUT_NN_W`'s pattern.
+Override `MACRO_LEAF_BATCH=1` for a control arm. Commit `e02bbc25`.
 
 ### Overall disposition for this entry
 
