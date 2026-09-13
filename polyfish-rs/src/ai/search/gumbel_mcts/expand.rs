@@ -158,10 +158,11 @@ impl<'a> GumbelMctsAgent<'a> {
         if self.prior_heuristic_weight > 0.0 && leaf_data.terminal_value.is_none() {
             let moves = leaf_data.legal_moves.borrow();
             if !moves.is_empty() {
+                let road_cache = crate::ai::movement::RoadReliefCache::default();
                 leaf_data.heuristic_scores = Some(
                     moves
                         .iter()
-                        .map(|m| crate::ai::scoring::score_move(game, m.as_ref()))
+                        .map(|m| crate::ai::scoring::score_move_cached(game, m.as_ref(), &road_cache))
                         .collect(),
                 );
             }

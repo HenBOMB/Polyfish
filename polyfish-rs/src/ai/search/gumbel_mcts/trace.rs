@@ -31,6 +31,7 @@ impl<'a> GumbelMctsAgent<'a> {
         let raw_probs = softmax(raw_logits);
         let blended_logits: Vec<f32> = root.children.iter().map(|c| c.logit).collect();
         let blended_probs = softmax(&blended_logits);
+        let road_cache = crate::ai::movement::RoadReliefCache::default();
         for (i, child) in root.children.iter().enumerate() {
             let Some(mv) = child.move_to_here.as_ref() else {
                 continue;
@@ -45,7 +46,7 @@ impl<'a> GumbelMctsAgent<'a> {
                 visits: 0.0,
                 edge_reward: None,
                 raw_net_prob: raw_probs[i],
-                heuristic_score: crate::ai::scoring::score_move(game, mv.as_ref()),
+                heuristic_score: crate::ai::scoring::score_move_cached(game, mv.as_ref(), &road_cache),
                 search_prior_prob: blended_probs[i],
                 gumbel_noise: child.gumbel,
                 in_top_k: in_cut.contains(&i),

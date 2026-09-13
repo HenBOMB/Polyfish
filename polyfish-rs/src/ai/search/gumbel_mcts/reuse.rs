@@ -102,9 +102,10 @@ pub(super) fn blend_heuristic_prior(game: &Game, children: &mut [GumbelNode], we
         return;
     }
     let mut logits: Vec<f32> = children.iter().map(|c| c.logit).collect();
+    let road_cache = crate::ai::movement::RoadReliefCache::default();
     let scores: Vec<f32> = children.iter()
         .map(|c| c.move_to_here.as_ref()
-            .map_or(0.0, |m| crate::ai::scoring::score_move(game, m.as_ref())))
+            .map_or(0.0, |m| crate::ai::scoring::score_move_cached(game, m.as_ref(), &road_cache)))
         .collect();
     crate::ai::search::policy_composer::blend_heuristic_into_logits(&mut logits, &scores, weight);
     for (child, l) in children.iter_mut().zip(logits.into_iter()) {

@@ -388,6 +388,48 @@ pub fn connect_remaining(state: &GameState, player: PlayerId) -> Vec<(i32, i32)>
 /// between a city pair. Priced for mobility/map-control: this measures how
 /// much closer the road network gets, independent of what the tile yields.
 pub fn road_relief(state: &GameState, player: PlayerId, tile_idx: i32) -> i32 {
+    road_relief_impl(state, player, tile_idx, None)
+}
+
+/// EXP_ELO_152: same as [`road_relief`], but reuses a `RoadReliefCache`'s
+/// `force_free=None` BFS ("before") across every candidate tile scored for
+/// the SAME state instead of recomputing it per candidate. Profiling found
+/// this "before" recompute (`connect_dist_map`, a full 0-1 BFS from the
+/// capital) as self_play's single largest non-blocking CPU cost — up to
+/// one per `Build Road` candidate scored, and `score_road` has no way to
+/// know two calls share a state on its own. Only the caller can know that:
+/// construct one `RoadReliefCache` right before a flat loop that scores
+/// every legal move for ONE state, never across a state mutation or into a
+/// recursive/nested scoring pass for a different state (the "after" BFS,
+/// which genuinely depends on `tile_idx`, is never cached — this only
+/// removes the ply-invariant half).
+pub fn road_relief_cached(
+    state: &GameState,
+    player: PlayerId,
+    tile_idx: i32,
+    cache: &RoadReliefCache,
+) -> i32 {
+    road_relief_impl(state, player, tile_idx, Some(cache))
+}
+
+/// Per-scoring-pass cache for `road_relief`'s ply-invariant "before" BFS.
+/// Not thread-shared, not keyed/validated against a state fingerprint —
+/// correctness instead relies entirely on construction discipline: a fresh
+/// instance per flat loop over one state's candidates, per
+/// [`road_relief_cached`]'s own doc comment. Mirrors `score_move_with_unit_
+/// goals`'s existing "optional extra context, `None` for untouched callers"
+/// shape rather than any global/thread-local state.
+#[derive(Default)]
+pub struct RoadReliefCache {
+    before: std::cell::OnceCell<Option<std::collections::HashMap<i32, i32>>>,
+}
+
+fn road_relief_impl(
+    state: &GameState,
+    player: PlayerId,
+    tile_idx: i32,
+    cache: Option<&RoadReliefCache>,
+) -> i32 {
     let Some(tribe) = state.tribes.get(&player) else {
         return 0;
     };
@@ -403,7 +445,15 @@ pub fn road_relief(state: &GameState, player: PlayerId, tile_idx: i32) -> i32 {
     if targets.is_empty() {
         return 0;
     }
-    let Some(before) = connect_dist_map(state, player, None) else {
+    let before_owned;
+    let before = match cache {
+        Some(c) => c.before.get_or_init(|| connect_dist_map(state, player, None)).as_ref(),
+        None => {
+            before_owned = connect_dist_map(state, player, None);
+            before_owned.as_ref()
+        }
+    };
+    let Some(before) = before else {
         return 0;
     };
     let Some(after) = connect_dist_map(state, player, Some(tile_idx)) else {
@@ -529,5 +579,119 @@ mod race_confidence_tests {
     fn no_tribe_for_player_gives_zero_confidence() {
         let state = GameState::default();
         assert_eq!(village_race_confidence(&state, 1, 5), 0.0);
+    }
+}
+
+/// EXP_ELO_152: `road_relief_cached` must be byte-identical to `road_relief`
+/// for every candidate, and reusing ONE cache across many different
+/// `tile_idx` calls must never leak a stale "after" result -- only the
+/// ply-invariant "before" BFS is shared; "after" always recomputes fresh.
+#[cfg(test)]
+mod road_relief_cache_tests {
+    use super::*;
+    use crate::states::{CityState, GameState, TechnologyState, TileState, TribeState};
+    use crate::types::{TechnologyType, TerrainType};
+
+    /// A capital at idx 0 and an unconnected city 10 tiles east along one
+    /// row, with buildable Field tiles the whole way between them.
+    fn state_with_unconnected_city(size: i32) -> GameState {
+        let mut state = GameState::default();
+        state.settings.size = size;
+        let mut tribe = TribeState { id: 1, ..Default::default() };
+        tribe.tech_vanilla.push(TechnologyState {
+            tech_type: TechnologyType::Roads,
+            discovered: true,
+            discovered_turn: 0,
+        });
+        tribe.cities.push(CityState { idx: 0, owner: 1, ..Default::default() });
+        tribe.cities.push(CityState { idx: 10, owner: 1, connected_to_capital: false, ..Default::default() });
+        state.tribes.insert(1, tribe);
+
+        let mut cap_tile = TileState { terrain_type: TerrainType::Field, ..Default::default() };
+        cap_tile.owner = 1;
+        cap_tile.capital_of = 1;
+        state.tiles.insert(0, cap_tile);
+        for idx in 1..=10 {
+            let mut t = TileState { terrain_type: TerrainType::Field, ..Default::default() };
+            t.owner = 1;
+            state.tiles.insert(idx, t);
+        }
+        state
+    }
+
+    #[test]
+    fn cached_before_matches_uncached_across_multiple_candidates() {
+        let state = state_with_unconnected_city(11);
+        let cache = RoadReliefCache::default();
+        for &tile_idx in &[1, 3, 5, 7, 9] {
+            let uncached = road_relief(&state, 1, tile_idx);
+            let cached = road_relief_cached(&state, 1, tile_idx, &cache);
+            assert_eq!(
+                uncached, cached,
+                "tile_idx {tile_idx}: cached path diverged from uncached"
+            );
+        }
+    }
+
+    #[test]
+    fn cached_after_recomputes_per_tile_not_pinned_to_the_first_call() {
+        // A 15-wide single row (no wraparound within idx 0..=10): capital
+        // at col 0, city A at col 5, city B at col 10, both reached along
+        // the SAME corridor (city A is free once reached, since a city
+        // counts as road_here, so city B's path continues through it).
+        // idx 1..4 sit on the path to BOTH cities; idx 6..9 sit on city
+        // B's segment alone. Freeing a shared-prefix tile (idx 2) relieves
+        // BOTH cities (total 2); freeing a B-only tile (idx 7) relieves
+        // only city B (total 1). If the cache wrongly reused the first
+        // call's `after` map instead of recomputing it per `tile_idx`,
+        // querying idx 7 right after idx 2 on the SAME cache would wrongly
+        // inherit idx 2's total (2) instead of computing its own (1).
+        let size = 15;
+        let mut state = GameState::default();
+        state.settings.size = size;
+        let mut tribe = TribeState { id: 1, ..Default::default() };
+        tribe.tech_vanilla.push(TechnologyState {
+            tech_type: TechnologyType::Roads,
+            discovered: true,
+            discovered_turn: 0,
+        });
+        tribe.cities.push(CityState { idx: 0, owner: 1, ..Default::default() });
+        tribe.cities.push(CityState { idx: 5, owner: 1, connected_to_capital: false, ..Default::default() });
+        tribe.cities.push(CityState { idx: 10, owner: 1, connected_to_capital: false, ..Default::default() });
+        state.tribes.insert(1, tribe);
+        let mut cap_tile = TileState { terrain_type: TerrainType::Field, ..Default::default() };
+        cap_tile.owner = 1;
+        cap_tile.capital_of = 1;
+        state.tiles.insert(0, cap_tile);
+        for idx in [1, 2, 3, 4, 6, 7, 8, 9] {
+            let mut t = TileState { terrain_type: TerrainType::Field, ..Default::default() };
+            t.owner = 1;
+            state.tiles.insert(idx, t);
+        }
+
+        // Sanity: computed independently (fresh cache each), the two
+        // candidates must actually differ before the shared-cache
+        // assertion below means anything.
+        let cache_a = RoadReliefCache::default();
+        let shared_prefix = road_relief_cached(&state, 1, 2, &cache_a);
+        let cache_b = RoadReliefCache::default();
+        let city_b_only = road_relief_cached(&state, 1, 7, &cache_b);
+        assert_eq!(shared_prefix, 2, "idx 2 sits on both cities' path");
+        assert_eq!(city_b_only, 1, "idx 7 sits on city B's segment alone");
+
+        // Now share ONE cache across both calls, in each order, and
+        // confirm every call still gets its own correct `after`.
+        let cache = RoadReliefCache::default();
+        let first_then_second = (
+            road_relief_cached(&state, 1, 2, &cache),
+            road_relief_cached(&state, 1, 7, &cache),
+        );
+        let cache2 = RoadReliefCache::default();
+        let second_then_first = (
+            road_relief_cached(&state, 1, 7, &cache2),
+            road_relief_cached(&state, 1, 2, &cache2),
+        );
+        assert_eq!(first_then_second, (shared_prefix, city_b_only));
+        assert_eq!(second_then_first, (city_b_only, shared_prefix));
     }
 }

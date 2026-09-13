@@ -22212,3 +22212,121 @@ stated 720-games/hr bar) by itself — leaf_batch=64 alone
 plausibly stack toward it, but the open Gumbel-regression question
 means there is very likely more throughput on the table that this
 entry did not find. Not a dead end; not solved tonight either.
+
+### The Gumbel regression, found and fixed: `connect_dist_map` (Sep 13,
+later same session — Verdi: "figure out why gumbel has gotten 10x
+slower... if we find and resolve that source, we could likely see
+gains in our newest setup")
+
+**Method**: a macOS `sample` profile (5s, 1ms interval, all threads) of
+a live, properly-scaled Gumbel run (`--num-games 128 --actors 32
+--max-turns 25`, same isolated scratch model as this entry's earlier
+measurements), mirroring EXP_ELO_134's own Sep-7 methodology. "Sort by
+top of stack" ranked application functions:
+
+| function | samples | share of top app functions |
+|---|---|---|
+| `polyfish::ai::movement::connect_dist_map` | **4,713** | dominant — ~2x the next entry |
+| `polyfish::rules::eco_plan::city::city_build_on` | 2,398 | — |
+| `indexmap::map::IndexMap::get` | 2,092 | — |
+| `polyfish::ai::eval_server::Evaluator::evaluate` | 1,546 | — |
+
+**Root cause, confirmed by code reading**: `connect_dist_map`
+(`movement.rs`) is a full 0-1 BFS from the capital, pricing road
+connectivity (EXP_ELO_052/055). `road_relief(state, player, tile_idx)`
+calls it TWICE per invocation — once for `force_free=None` ("before")
+and once for `force_free=Some(tile_idx)` ("after") — and `road_relief`
+is called once per `Build Road` candidate via `score_road`/
+`score_move`. The "before" half is IDENTICAL for every `Build Road`
+candidate scored against the same state (it doesn't depend on
+`tile_idx` at all), yet was recomputed fresh on every single call —
+the exact same bug class this project already found and fixed once for
+`eco_plan::enumerate_empire` (`d5d8d5f2`, Sep 9: "cross-turn caching +
+connectivity decomposition"), just in a different module, never
+touched by that fix.
+
+**Fix (`RoadReliefCache`, `movement.rs`)**: a `OnceCell`-backed cache
+of the "before" BFS, populated on first use and reused for the rest of
+its lifetime. Correctness relies entirely on CONSTRUCTION DISCIPLINE,
+not a fingerprint/hash key (an eco_plan-style order-independent hash
+over the full road/tile layout was considered and rejected as either
+unsafe — a cheap proxy like tile count can collide across genuinely
+different road layouts — or as expensive as the BFS itself to compute
+safely): a fresh `RoadReliefCache` is constructed immediately before
+each FLAT loop that scores every legal move of ONE state (never across
+a state mutation, never shared into a nested/recursive scoring pass
+for a different state). This mirrors `score_move_with_unit_goals`'s
+existing "optional extra context, `None` for untouched callers" shape
+— `score_move`/`road_relief`'s original signatures are UNCHANGED and
+still byte-identical for every existing caller; new `_cached` entry
+points (`score_move_cached`, `score_move_with_unit_goals_cached`,
+`road_relief_cached`) are additive.
+
+**Wired into 7 hot flat-scoring-loop call sites** (every one of
+`score_move`/`score_move_with_unit_goals`'s callers): `gumbel_mcts/
+expand.rs` (leaf heuristic-score map), `gumbel_mcts/reuse.rs`
+(`blend_heuristic_prior`), `gumbel_mcts/trace.rs` (decision-trace
+recording, off by default), `heuristic_mcts.rs` (2 sites — move
+ordering and the interactive-trainer/UI-analysis backend's greedy
+rollout), `micro_mcts.rs` (heur-top-candidates), `macro_exec.rs`
+(`rank_plies`, the real per-ply commit + macro-mcts's own rollout
+scoring), `net_root.rs` (`net_rank_root_candidates`, EXP_ELO_151's
+shipped main-net root path). One caller per loop iteration correctly
+scoped the cache to its own state-mutation boundary (`heuristic_mcts.
+rs`'s `simulate_to_turn_end`: cache constructed INSIDE the rollout's
+`for` loop, fresh each ply, since `game` mutates via `simulate_move`
+between iterations — hoisting it outside the loop would have been the
+exact stale-cache bug this design is supposed to prevent).
+
+**Correctness verification**: two new differential tests
+(`movement.rs`'s `road_relief_cache_tests`) — `cached_before_matches_
+uncached_across_multiple_candidates` (cached vs uncached results match
+for 5 different `tile_idx` values) and `cached_after_recomputes_per_
+tile_not_pinned_to_the_first_call` (a two-city fixture where a shared-
+corridor tile relieves both cities, total 2, and a single-city-segment
+tile relieves only one, total 1 — order-independent across two calls
+sharing one cache, which would diverge from the correct values if
+`after`, not just `before`, were ever wrongly cached). Both pass. Full
+suite: 403/403 lib tests (was 401, +2), 0 failed, all integration
+tests green, `cargo build --release --features apple` clean.
+
+**Throughput, measured twice — the second measurement supersedes the
+first**:
+
+1. Unpaired 128-game comparison (same recipe as this entry's earlier
+   Gumbel reference): 44.95 → 37.75 moves/sec, a *nominal regression*.
+   Investigated and rejected as a real result: `forwards`/`rows` were
+   nearly IDENTICAL between the two runs (673,716/3,305,645 pre vs
+   668,616/3,333,168 post — the fix cannot change eval-server call
+   volume, it's pure CPU-side `score_move` cost), while wall-clock rose
+   from 1288s to 1525s — the post-fix run drew a substantially worse
+   end-of-batch tail straggler (the same tail-latency pathology this
+   entry's item 4 already flagged), which at n=1 games-run-to-
+   completion can swing a 128-game aggregate by many minutes in either
+   direction independent of any real per-move cost change. Confirmed
+   via a live `sample` during the same post-fix run: `connect_dist_map`
+   4,713 → 2,098 samples (~55% cut, exactly the "before"-only half of
+   the fix's scope — "after" is still recomputed per candidate, by
+   design), `city_build_on` (eco_plan) now the new top application
+   function at 4,317 samples, unexplored this entry.
+2. **Clean paired same-seed comparison** (`--base-seed 42424242`,
+   `--num-games 64 --actors 16 --max-turns 25`, pre-fix and post-fix
+   binaries built from the exact same source tree via `git stash`/
+   `stash pop`, run sequentially): pre-fix **25.20 moves/sec** (29,821
+   moves, 1183.23s) vs post-fix **31.50 moves/sec** (30,081 moves,
+   954.93s) — **+25.0% throughput, -19.3% wall-clock, on effectively
+   matched total work** (the 0.87% move-count difference is this
+   project's own known, pre-existing, benign actor-timing-dependent
+   float non-determinism in batched NN summation — not a correctness
+   regression; unrelated to and predating this fix). `avg_batch`
+   actually ticked down slightly (4.80→4.30), confirming — consistent
+   with the `leaf_batch=64` finding above — that this win is CPU-side
+   cost reduction, not bigger GPU batches.
+
+**Disposition: SHIPPED.** Zero behavior change by construction (every
+existing call site's original function signature is untouched;
+`_cached` variants are strictly additive), positive and consistent
+throughput win once measured cleanly, full test suite green. Committed
+alongside this entry. `city_build_on` (eco_plan) flagged as the next
+candidate hotspot — not investigated this entry, per Verdi's own
+pacing.

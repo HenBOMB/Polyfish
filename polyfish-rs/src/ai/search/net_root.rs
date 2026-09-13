@@ -133,9 +133,10 @@ pub fn net_rank_root_candidates(
     if logits.len() != moves.len() {
         return None;
     }
+    let road_cache = crate::ai::movement::RoadReliefCache::default();
     let heur_scores: Vec<f32> = moves
         .iter()
-        .map(|m| scoring::score_move_with_unit_goals(game, m.as_ref(), unit_goals, eco_plan))
+        .map(|m| scoring::score_move_with_unit_goals_cached(game, m.as_ref(), unit_goals, eco_plan, &road_cache))
         .collect();
     blend_heuristic_into_logits(&mut logits, &heur_scores, net_root_heuristic_blend_w());
 

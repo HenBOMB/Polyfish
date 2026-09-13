@@ -136,8 +136,25 @@ The model now trains and gauges under a scripted macro layer: **goal channels** 
   (twice) that the last slice of a batch drains at a small fraction of
   peak throughput once concurrent siblings finish first. Pure config
   fix available (`--num-games` >> `--actors`), not yet quantified or
-  shipped. See `hypothesis_driven_improvements.md`'s EXP_ELO_152 for
-  full method/numbers on all of the above.
+  shipped.
+- **The Gumbel-specific regression's real cause, found and fixed**:
+  `connect_dist_map` (a full 0-1 BFS pricing road connectivity,
+  `movement.rs`) was the single largest non-blocking CPU cost in a live
+  `sample` profile — `road_relief` recomputed its `tile_idx`-invariant
+  "before" half fresh on EVERY `Build Road` candidate scored, once per
+  flat scoring loop, across 7 hot call sites (Gumbel's own leaf/prior
+  scoring, `heuristic_mcts`, `micro_mcts`, `macro_exec::rank_plies`,
+  `net_root`'s main-net path) — the same bug class already fixed once
+  for `eco_plan::enumerate_empire` (Sep 9), never touched there.
+  **Shipped** (`RoadReliefCache`, construction-scoped — a fresh cache
+  per flat loop, no fingerprint/hash key, zero behavior change by
+  construction; 2 new differential tests, 403/403 suite green). Clean
+  paired same-seed measurement (`--base-seed 42424242`, pre/post-fix
+  binaries from the same tree): **25.20 → 31.50 moves/sec, +25%**, on
+  matched total work. `city_build_on` (eco_plan) is now the next-
+  largest hotspot, not yet investigated. See `hypothesis_driven_
+  improvements.md`'s EXP_ELO_152 for full method/numbers on all of the
+  above.
 
 ### ⭐ Why games are won and lost: the third city (352-game autopsy, EXP_ELO_M2)
 

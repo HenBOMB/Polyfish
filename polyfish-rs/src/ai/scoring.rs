@@ -19,7 +19,23 @@ const MINE_PARTNERS_COMMITTED_HUB_BONUS: f32 = 12.0;
 
 /// Score a move based on heuristics
 pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
-    score_move_inner(game, mv, None, None)
+    score_move_inner(game, mv, None, None, None)
+}
+
+/// EXP_ELO_152: same as [`score_move`], but a shared `RoadReliefCache`
+/// lets every `Build Road` candidate scored in the same flat loop (over
+/// ONE state's legal moves) reuse one `road_relief` "before" BFS instead
+/// of recomputing it per candidate — profiling found that recompute as
+/// self_play's single largest non-blocking CPU cost. Construct one cache
+/// right before such a loop; never reuse it across a state mutation or a
+/// nested/recursive scoring pass for a different state (see
+/// `RoadReliefCache`'s own doc comment). A no-op for every other move type.
+pub fn score_move_cached(
+    game: &Game,
+    mv: &dyn Move,
+    road_cache: &crate::ai::movement::RoadReliefCache,
+) -> f32 {
+    score_move_inner(game, mv, None, None, Some(road_cache))
 }
 
 /// Same as [`score_move`], but the Step branch's capturable-pull search
@@ -38,7 +54,21 @@ pub fn score_move_with_unit_goals(
     unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
     eco_plan: Option<&crate::ai::eco_plan_commit::EcoPlanCommit>,
 ) -> f32 {
-    score_move_inner(game, mv, unit_goals, eco_plan)
+    score_move_inner(game, mv, unit_goals, eco_plan, None)
+}
+
+/// Same as [`score_move_with_unit_goals`], plus [`score_move_cached`]'s
+/// shared `RoadReliefCache` — the real per-ply commit path
+/// (`macro_exec::rank_plies`) and macro-mcts's own rollout scoring both
+/// score every legal move of one state in a flat loop and want both.
+pub fn score_move_with_unit_goals_cached(
+    game: &Game,
+    mv: &dyn Move,
+    unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
+    eco_plan: Option<&crate::ai::eco_plan_commit::EcoPlanCommit>,
+    road_cache: &crate::ai::movement::RoadReliefCache,
+) -> f32 {
+    score_move_inner(game, mv, unit_goals, eco_plan, Some(road_cache))
 }
 
 fn score_move_inner(
@@ -46,6 +76,7 @@ fn score_move_inner(
     mv: &dyn Move,
     unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
     eco_plan: Option<&crate::ai::eco_plan_commit::EcoPlanCommit>,
+    road_cache: Option<&crate::ai::movement::RoadReliefCache>,
 ) -> f32 {
     let state = &game.state;
     let move_type = mv.move_type();
@@ -429,7 +460,7 @@ fn score_move_inner(
                     }
 
                     if s_type == StructureType::Road {
-                        score += score_road(state, target as i32);
+                        score += score_road(state, target as i32, road_cache);
                     }
 
                     // Monuments (`reward_score > 0` is the settings-table
@@ -889,7 +920,11 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
 /// per the project's q-gap method before trusting it.
 const RELIEF_PER_TILE: f32 = 5.0;
 
-fn score_road(state: &crate::states::GameState, tile_idx: i32) -> f32 {
+fn score_road(
+    state: &crate::states::GameState,
+    tile_idx: i32,
+    road_cache: Option<&crate::ai::movement::RoadReliefCache>,
+) -> f32 {
     let player_id = state.settings.current_player_turn_id;
 
     let tribe = match state.tribes.get(&player_id) {
@@ -901,7 +936,10 @@ fn score_road(state: &crate::states::GameState, tile_idx: i32) -> f32 {
         return -3.0; // Only 1 city — roads are not useful yet
     }
 
-    let relief = crate::ai::movement::road_relief(state, player_id, tile_idx);
+    let relief = match road_cache {
+        Some(cache) => crate::ai::movement::road_relief_cached(state, player_id, tile_idx, cache),
+        None => crate::ai::movement::road_relief(state, player_id, tile_idx),
+    };
     let mut score = -3.0 + RELIEF_PER_TILE * relief as f32;
 
     let adj = get_adjacent_indices(state, tile_idx, 1);

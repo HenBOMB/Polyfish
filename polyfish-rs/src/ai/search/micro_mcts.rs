@@ -28,7 +28,7 @@ use crate::ai::eval_server::Evaluator;
 use crate::ai::oracle_macro::MacroGoal;
 use crate::ai::search::goal_aux::GoalAux;
 use crate::ai::search::macro_exec::gate_ok;
-use crate::ai::scoring::score_move;
+use crate::ai::scoring::score_move_cached;
 use crate::game::Game;
 use crate::moves::{EndTurnMove, Move};
 use crate::states::PlayerId;
@@ -347,10 +347,11 @@ fn cheap_candidates(
     if moves.is_empty() {
         return vec![(Box::new(EndTurnMove) as Box<dyn Move>, 0.0)];
     }
+    let road_cache = crate::ai::movement::RoadReliefCache::default();
     let mut scored: Vec<(Box<dyn Move>, f32)> = moves
         .into_iter()
         .map(|m| {
-            let s = score_move(game, m.as_ref());
+            let s = score_move_cached(game, m.as_ref(), &road_cache);
             (m, s)
         })
         .collect();

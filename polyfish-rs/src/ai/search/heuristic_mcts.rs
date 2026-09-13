@@ -42,9 +42,10 @@ impl Node {
             };
 
             // Move Ordering: Sort by heuristic score ascending (best moves at the end for .pop())
+            let road_cache = crate::ai::movement::RoadReliefCache::default();
             filtered.sort_by(|a, b| {
-                let score_a = crate::ai::scoring::score_move(game, a.as_ref());
-                let score_b = crate::ai::scoring::score_move(game, b.as_ref());
+                let score_a = crate::ai::scoring::score_move_cached(game, a.as_ref(), &road_cache);
+                let score_b = crate::ai::scoring::score_move_cached(game, b.as_ref(), &road_cache);
                 score_a
                     .partial_cmp(&score_b)
                     .unwrap_or(std::cmp::Ordering::Equal)
@@ -128,9 +129,10 @@ impl GreedyHeuristicAgent {
             return (Some(Box::new(EndTurnMove)), Vec::new());
         }
 
+        let road_cache = crate::ai::movement::RoadReliefCache::default();
         let scores: Vec<f32> = moves
             .iter()
-            .map(|m| crate::ai::scoring::score_move(game, m.as_ref()))
+            .map(|m| crate::ai::scoring::score_move_cached(game, m.as_ref(), &road_cache))
             .collect();
         let max_score = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
         let probs: Vec<f32> = {
@@ -456,12 +458,13 @@ impl HeuristicMctsAgent {
             }
 
             // Pick the highest-scored move greedily
+            let road_cache = crate::ai::movement::RoadReliefCache::default();
             let best_idx = moves
                 .iter()
                 .enumerate()
                 .max_by(|(_, a), (_, b)| {
-                    let sa = crate::ai::scoring::score_move(game, a.as_ref());
-                    let sb = crate::ai::scoring::score_move(game, b.as_ref());
+                    let sa = crate::ai::scoring::score_move_cached(game, a.as_ref(), &road_cache);
+                    let sb = crate::ai::scoring::score_move_cached(game, b.as_ref(), &road_cache);
                     sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .map(|(i, _)| i)

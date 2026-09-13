@@ -413,10 +413,11 @@ pub fn rank_plies(
     }
     let turn = game.state.settings.turn;
     let map_size = game.state.settings.size as usize;
+    let road_cache = crate::ai::movement::RoadReliefCache::default();
     let mut scored: Vec<(f32, Box<dyn Move>)> = moves
         .into_iter()
         .map(|m| {
-            let mut s = scoring::score_move_with_unit_goals(game, m.as_ref(), unit_goals, eco_plan);
+            let mut s = scoring::score_move_with_unit_goals_cached(game, m.as_ref(), unit_goals, eco_plan, &road_cache);
             if lambda != 0.0 && m.move_type() != MoveType::EndTurn {
                 // EXP_ELO_111: resolve the acting unit's id from its
                 // PRE-move coords before simulate_move relocates it.
