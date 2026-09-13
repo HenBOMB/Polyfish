@@ -525,8 +525,26 @@ do
         # speedup -- ships as the new default, not opt-in. Override
         # MACRO_ROLLOUT_NN_W=0.0 for a control arm.
         MACRO_ROLLOUT_NN_FLAG="--macro-rollout-nn-w ${MACRO_ROLLOUT_NN_W:-1.0} --macro-rollout-nn-min-depth ${MACRO_ROLLOUT_NN_MIN_DEPTH:-1}"
-        BACKEND_FLAG="--search-backend macro-mcts --macro-leaf ${MACRO_LEAF:-net-asym} --macro-sims ${MACRO_SIMS:-64} --macro-k ${MACRO_K:-6} $MACRO_ROLLOUT_LAMBDA_FLAG $MACRO_ROOT_PRIOR_FLAG $MACRO_ROLLOUT_NN_FLAG"
-        echo "🌲 MACRO_GEN=1 (Stage 3): macro-mcts generates self-play games (behavior cloning + on-distribution value labels), leaf=${MACRO_LEAF:-net-asym} sims=${MACRO_SIMS:-64} k=${MACRO_K:-6} rollout_lambda=${MACRO_ROLLOUT_LAMBDA:-default} root_prior_w=${MACRO_ROOT_PRIOR_W:-0.05} rollout_nn_w=${MACRO_ROLLOUT_NN_W:-1.0}/depth${MACRO_ROLLOUT_NN_MIN_DEPTH:-1} macro_stance_w=${MACRO_STANCE_W} macro_order_w=${MACRO_ORDER_W}."
+        # EXP_ELO_152 (Sep 13): wave-batching (built+unit-tested Sep 9,
+        # 996daf38..b6605d1b, never measured until this entry). Default 64
+        # = production's own --macro-sims, so one real turn decision's
+        # entire sims budget resolves in ONE wave instead of up to 64
+        # sequential ones -- the win is eliminating redundant per-wave
+        # CPU setup/dedup-bookkeeping, NOT bigger GPU batches (avg_batch
+        # barely moves, 2.92->3.24 measured). Validated both required
+        # gates before shipping: throughput +46% (self_play, actors=16:
+        # 82.50->120.28 moves/sec) to +5% (arena's higher-concurrency
+        # reading -- magnitude is concurrency-dependent, not yet fully
+        # reconciled); quality flat (arena n=200 paired eval_seeds:
+        # 51.0%/49.0%, inside the ~7-8pp noise floor). An intermediate
+        # value is NOT safe to assume interpolates -- leaf_batch=8
+        # measured a -28% REGRESSION (wave overhead exceeds the thin
+        # batching gain below leaf_batch≈macro_sims). Verdi's explicit
+        # "let's turn it on" call. Override MACRO_LEAF_BATCH=1 to revert
+        # to the pre-152 strictly-sequential sim loop for a control arm.
+        MACRO_LEAF_BATCH_FLAG="--macro-leaf-batch ${MACRO_LEAF_BATCH:-64}"
+        BACKEND_FLAG="--search-backend macro-mcts --macro-leaf ${MACRO_LEAF:-net-asym} --macro-sims ${MACRO_SIMS:-64} --macro-k ${MACRO_K:-6} $MACRO_ROLLOUT_LAMBDA_FLAG $MACRO_ROOT_PRIOR_FLAG $MACRO_ROLLOUT_NN_FLAG $MACRO_LEAF_BATCH_FLAG"
+        echo "🌲 MACRO_GEN=1 (Stage 3): macro-mcts generates self-play games (behavior cloning + on-distribution value labels), leaf=${MACRO_LEAF:-net-asym} sims=${MACRO_SIMS:-64} k=${MACRO_K:-6} rollout_lambda=${MACRO_ROLLOUT_LAMBDA:-default} root_prior_w=${MACRO_ROOT_PRIOR_W:-0.05} rollout_nn_w=${MACRO_ROLLOUT_NN_W:-1.0}/depth${MACRO_ROLLOUT_NN_MIN_DEPTH:-1} macro_stance_w=${MACRO_STANCE_W} macro_order_w=${MACRO_ORDER_W} macro_leaf_batch=${MACRO_LEAF_BATCH:-64}."
 
         # EXP_ELO_061 (Aug 2026): ACTORS=128 below is tuned for the eval-server-
         # bound Gumbel/net-leaf path, where actors park (no CPU) awaiting a
@@ -713,7 +731,7 @@ do
     # One-line config echo so silent env misconfigurations (ITER_OFFSET,
     # LABEL_REL_W, BOOTSTRAP) are visible in the log — EXP_ELO_006 post-mortem:
     # two runs voided by a missing ITER_OFFSET that nothing surfaced.
-    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} label_abs_debias=${LABEL_ABS_DEBIAS:-0} value_recenter_dose=${VALUE_RECENTER_DOSE:-0} value_recenter_table=${VALUE_RECENTER_TABLE:-none} bootstrap_own_w=${BOOTSTRAP_OWN_W:-0} calib_loss_w=${CALIB_LOSS_W:-0} pov_consistency_w=${POV_CONSISTENCY_W:-0} wl_labels=${WL_LABELS:-0} td_missing=${TD_MISSING} goal_channels=${GOAL_CHANNELS:-0} goal_w_tree=${GOAL_W_TREE:-1} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=${NUM_GAMES}x${SELF_PLAY_LOOPS} mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0} macro_stance_w=${MACRO_STANCE_W:-0} macro_order_w=${MACRO_ORDER_W:-0} macro_root_prior_w=${MACRO_ROOT_PRIOR_W:-0} macro_rollout_nn_w=${MACRO_ROLLOUT_NN_W:-0} net_root_source=${POLYFISH_NET_ROOT_SOURCE:-off}"
+    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} label_abs_debias=${LABEL_ABS_DEBIAS:-0} value_recenter_dose=${VALUE_RECENTER_DOSE:-0} value_recenter_table=${VALUE_RECENTER_TABLE:-none} bootstrap_own_w=${BOOTSTRAP_OWN_W:-0} calib_loss_w=${CALIB_LOSS_W:-0} pov_consistency_w=${POV_CONSISTENCY_W:-0} wl_labels=${WL_LABELS:-0} td_missing=${TD_MISSING} goal_channels=${GOAL_CHANNELS:-0} goal_w_tree=${GOAL_W_TREE:-1} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=${NUM_GAMES}x${SELF_PLAY_LOOPS} mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0} macro_stance_w=${MACRO_STANCE_W:-0} macro_order_w=${MACRO_ORDER_W:-0} macro_root_prior_w=${MACRO_ROOT_PRIOR_W:-0} macro_rollout_nn_w=${MACRO_ROLLOUT_NN_W:-0} net_root_source=${POLYFISH_NET_ROOT_SOURCE:-off} macro_leaf_batch=${MACRO_LEAF_BATCH:-off}"
 
     SP_LOG=$(mktemp)
     for ((sp=1; sp<=SELF_PLAY_LOOPS; sp++)); do
