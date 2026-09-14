@@ -219,6 +219,23 @@ The model now trains and gauges under a scripted macro layer: **goal channels** 
   budget to pay off (which reopens (1)'s exact throughput tradeoff), is
   for the next real training iteration to show — not yet run. Full detail
   in `hypothesis_driven_improvements.md`'s EXP_ELO_154/155.
+  ⚠️ **Update (Sep 14, EXP_ELO_159): now run, and the caveat was right to
+  flag — real training shows a genuine, if modest, cost.** An overnight run
+  regressed sharply (70.5%→64.5%→60.5% vs greedy across 3 gauge readings)
+  right when this mechanism first got exercised in real training; a
+  two-phase controlled test (killswitch: `POLYFISH_DISABLE_VISIT_
+  DISTILLATION`) separated two independent causes. A NUM_GAMES/ITER_OFFSET
+  config drift on resume was the DOMINANT cause (phase 1: config fixed,
+  distillation still off, recovered cleanly to 69.0%/68.0%). But
+  re-enabling the distillation alone on that same corrected config (phase
+  2) produced a real, smaller, three-reading decline of its own
+  (66.5%→66.0%→63.0%, corroborated by the cities curve eroding in step) —
+  smaller than the config-drift effect and masked by it initially, but
+  real. Read: at `sims=8`, the distilled distribution is too coarse/noisy
+  to be a net-positive training signal, exactly the risk this entry
+  originally flagged. **Not shipped as default-on** — the killswitch is
+  active for the remainder of that run. Untested next step: does raising
+  `sims` fix it, or is the mechanism a net negative regardless of budget.
 - **Macro-mcts's tree never goes past depth 2 in production, regardless of
   `sims` — and that ceiling was never deliberately chosen (Sep 13,
   EXP_ELO_156/157).** `rollout_nn_min_depth=1` (shipped default, EXP_ELO_125
