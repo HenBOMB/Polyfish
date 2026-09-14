@@ -6,6 +6,15 @@ use crate::ai::mcts_zero::ZeroMctsAgent;
 use crate::game::Game;
 use crate::moves::{Move, generate_legal_moves};
 
+/// EXP_ELO_155 killswitch: `POLYFISH_DISABLE_VISIT_DISTILLATION=1` reverts
+/// the macro-mcts backend's policy target to one-hot-on-executed-move (the
+/// pre-EXP_ELO_155 behavior), bypassing micro-mcts's real post-search visit
+/// distribution even when it's available. Off (distillation on) unless set.
+fn disable_visit_distillation() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var("POLYFISH_DISABLE_VISIT_DISTILLATION").is_ok())
+}
+
 /// Which search backend `Brain` should use to select moves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchBackend {
@@ -169,8 +178,18 @@ impl<'a> SearchAgent<'a> {
             // search) -- see `MacroMctsAgent::last_micro_visits`'s doc.
             SearchAgent::MacroMcts(a) => {
                 let m = a.select_move(game);
+                // EXP_ELO_155 killswitch (Sep 14 2026): a live overnight run
+                // regressed for the first several iterations after this
+                // mechanism started being exercised for the first time ever
+                // in real training (it shipped this same session). Root cause
+                // not yet isolated -- a NUM_GAMES/ITER_OFFSET config drift on
+                // resume is the leading suspect, but this flag lets a run be
+                // restarted with the distillation itself held at its
+                // pre-session behavior (one-hot) as a clean control arm while
+                // that's investigated, without reverting the shipped code.
+                // Unset = distillation on (today's normal behavior).
                 let micro_visits = a.last_micro_visits();
-                let visits = if !micro_visits.is_empty() {
+                let visits = if !micro_visits.is_empty() && !disable_visit_distillation() {
                     micro_visits.to_vec()
                 } else {
                     m.as_ref().map(|mv| vec![MoveVisit::one_hot(mv.as_ref())]).unwrap_or_default()
