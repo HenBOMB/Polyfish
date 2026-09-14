@@ -185,6 +185,16 @@ def _append_reading(data, args, kind, opponent):
         "kind": kind,
         "model": _model_label(args),
         "opponent": opponent["name"],
+        # Sep 14 2026: who was ACTUALLY played, distinct from `opponent` above
+        # (which stays the tracked anchor used for elo scaling / plateau
+        # grouping in `_gauge_series` -- do not repurpose it, changing it
+        # would silently break that filter for every future gauge reading).
+        # Gauge mode has unconditionally played greedy since EXP_ELO_127
+        # (2026-09-06) regardless of which anchor is "active", so the two can
+        # legitimately differ -- falls back to `opponent["name"]` for callers
+        # that don't pass it (e.g. `--kind audit`, where the anchor IS who
+        # was played).
+        "opponent_played": getattr(args, "actual_opponent", "") or opponent["name"],
         "games": args.wins + args.losses + args.draws,
         "wins": args.wins,
         "losses": args.losses,
@@ -233,7 +243,14 @@ def cmd_record(args):
     _save(data)
     verdict = {
         "action": action,
-        "opponent": opponent["name"],
+        # The reading's own `opponent_played` (see `_append_reading`'s doc),
+        # not `opponent["name"]` -- that's the elo/plateau-grouping anchor,
+        # which for gauge readings has been stale since EXP_ELO_127 (pinned
+        # on whatever last froze, Sep 5 in this ladder.json) while the actual
+        # match has unconditionally been vs greedy since the very next day.
+        # Verdi, Sep 14 2026: fixing this after a misreported gauge caused
+        # real confusion -- see hypothesis_driven_improvements.md.
+        "opponent": reading["opponent_played"],
         "win_rate": reading["win_rate"],
         "elo_est": reading["elo_est"],
         "plateau_strikes": data["plateau_strikes"],
@@ -294,6 +311,11 @@ def main():
     match_args(rec)
     rec.add_argument("--kind", choices=["gauge", "audit"], default="gauge")
     rec.add_argument("--opponent", help="anchor name (required for --kind audit)")
+    rec.add_argument("--actual-opponent", default="",
+                      help="who this reading's arena match actually played (e.g. "
+                           "\"greedy\") -- distinct from the tracked anchor used "
+                           "for elo scaling, which for gauge readings can be stale. "
+                           "Reported verbatim in the verdict/reading when given.")
     rec.set_defaults(func=cmd_record)
 
     frz = sub.add_parser("freeze")

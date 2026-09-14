@@ -910,6 +910,7 @@ do
                 --mcts "$GAUGE_MCTS_EFF" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
                 --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
                 --model-path "$GAUGE_SNAPSHOT" \
+                --actual-opponent "$ANCHOR_NAME" \
                 --stats-dir "$GAUGE_STATS_DIR")
             echo "GAUGE: $VERDICT"
             GAUGE_ACTION=$(echo "$VERDICT" | jq -r '.action')
