@@ -306,6 +306,17 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = 0.05)]
     pub(crate) macro_root_prior_w: f32,
 
+    /// EXP_ELO_165: 0 = off. When nonzero, the SAME root eval call
+    /// `--macro-root-prior-w` uses also synthesizes one new candidate
+    /// directly from the macro policy head's (stance, order) prediction
+    /// (mirrors the scripted base's order-kind shape, substitutes the
+    /// net's own top target/stance) and adds it to the ballot alongside
+    /// the scripted candidates, instead of only using the prediction to
+    /// reweight them. Untested, opt-in only -- see the EXP_ELO_165 ledger
+    /// entry before shipping as a default.
+    #[arg(long, default_value_t = 0.0)]
+    pub(crate) macro_net_candidates_w: f32,
+
     /// EXP_ELO_125 (piece 4): weight on the cheap `pi_rollout_value` NN
     /// estimator. When nonzero, edges deeper than
     /// `--macro-rollout-nn-min-depth` freeze on the estimator's value

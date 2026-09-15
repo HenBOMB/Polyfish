@@ -7,7 +7,7 @@
 
 use crate::ai::macro_agent::{MacroLeaf, MacroParams, enumerate_candidates};
 use crate::ai::macro_exec::{self, TurnCounters};
-use crate::ai::oracle_macro::{LaneState, MacroGoal, StanceCommit, compute_macro_goal, commit_macro_goal};
+use crate::ai::oracle_macro::{LaneState, MacroGoal, OrderKind, Stance, StanceCommit, compute_macro_goal, commit_macro_goal};
 use crate::ai::search::mcts_common::VIRTUAL_LOSS;
 use crate::game::Game;
 use crate::moves::Move;
@@ -36,6 +36,15 @@ fn ply_trace_path() -> Option<&'static str> {
 fn turn_goal_debug() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("POLYFISH_DEBUG_TURN_GOAL").is_ok())
+}
+
+/// EXP_ELO_165 diagnostic: one line per decision where a net-synthesized
+/// candidate was offered, reporting whether it won. Env-gated, same
+/// pattern as `turn_goal_debug`, no-op when unset -- grep the count from
+/// stderr rather than adding new cross-game aggregation plumbing.
+fn net_candidate_debug() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("POLYFISH_DEBUG_NET_CANDIDATE").is_ok())
 }
 
 /// Value-head-calibration diagnostic (Sep 7 2026): `POLYFISH_MACRO_ROOT_OWN_VALUE=1`
@@ -544,6 +553,58 @@ fn decode_macro_prior(
     raw
 }
 
+/// EXP_ELO_165: instead of only using the macro policy head's (stance,
+/// order) prediction to reweight the scripted ballot (`decode_macro_prior`),
+/// synthesize ONE new candidate directly from it, so search can consider
+/// (and truth-check via real simulation, same as every scripted candidate)
+/// a directive the scripted enumerator never proposed. Mirrors the FIRST
+/// candidate's order-kind shape (by convention the scripted base,
+/// `enumerate_candidates_with_belief`'s `out[0]`) so the result is
+/// structurally identical to an already-known-valid candidate — only the
+/// target tile per order kind and the stance are replaced with the net's
+/// own top choice. Stance argmax is restricted to {Grow, Arm, Unlock}
+/// (index 3, Save, needs a real `save_target` from `eco_plan` this
+/// function has no access to; a Save candidate without one is not a
+/// coherent goal, so it's excluded rather than constructed wrong).
+/// Returns `None` when there's nothing to mirror, the decoded target
+/// would be out of bounds, or the result duplicates an existing candidate.
+fn net_proposed_candidate(
+    stance_probs: &[f32],
+    order_maps: &[f32],
+    existing: &[MacroGoal],
+    map_size: usize,
+) -> Option<MacroGoal> {
+    let board = map_size * map_size;
+    let base = existing.first()?;
+    let net_stance = stance_probs
+        .iter()
+        .take(3)
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| match i {
+            0 => Stance::Grow,
+            1 => Stance::Arm,
+            _ => Stance::Unlock,
+        })?;
+    let mut orders: Vec<(OrderKind, i32)> = Vec::with_capacity(base.orders.len());
+    for &(kind, _) in &base.orders {
+        let start = kind as usize * board;
+        let slice = order_maps.get(start..start + board)?;
+        let target = slice
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i as i32)?;
+        orders.push((kind, target));
+    }
+    orders.sort();
+    let candidate = MacroGoal { orders, stance: net_stance, save_target: None, prepare: base.prepare };
+    if existing.iter().any(|g| *g == candidate) {
+        return None;
+    }
+    Some(candidate)
+}
+
 /// Search telemetry from the last `run` call (smoke instrumentation).
 #[derive(Clone, Debug, Default)]
 pub struct MacroMctsStats {
@@ -566,6 +627,14 @@ pub struct MacroMctsStats {
     /// decisions wait until there's real data to design against.
     pub root_candidates: Vec<MacroGoal>,
     pub root_visits: Vec<f32>,
+    /// EXP_ELO_165: index into `root_candidates`/`root_visits` of the
+    /// net-synthesized candidate (`net_proposed_candidate`), if one was
+    /// added this decision. `None` when `net_candidates_w == 0.0`, or the
+    /// eval call failed, or the synthesized candidate duplicated an
+    /// existing one. Lets a caller check `root_visits[i]` (did search take
+    /// it seriously) and whether the final `pick` equals `i` (did it win)
+    /// without re-deriving the candidate itself.
+    pub net_candidate_index: Option<usize>,
 }
 
 pub struct MacroMctsSearch<'a> {
@@ -705,18 +774,10 @@ impl<'a> MacroMctsSearch<'a> {
         let mut root =
             Node::new(root_game.clone(), pov, counters, lane_states, root_turn, params.k, None, &leaf_fn);
         root.candidates = root_candidates;
-        let n = root.candidates.len();
-        root.children = vec![None; n];
-        root.edge_visits = vec![0.0; n];
-        root.edge_values = vec![0.0; n];
-        root.edge_shape = vec![0.0; n];
-        root.edge_frozen = vec![None; n];
-        root.edge_virtual_loss = vec![0.0; n];
-        root.virtual_visits = 0.0;
 
-        // War-room item 3: inject the macro policy head as a PUCT-style
-        // prior at the root only, one eval call per real turn decision (not
-        // per rollout — cheap). EXP_ELO_066: the first version of this
+        // War-room item 3 + EXP_ELO_165: one shared eval call for both root
+        // PUCT-prior injection and net-candidate synthesis — either wanting
+        // it is enough to pay for it. EXP_ELO_066: the first version of this
         // painted the scripted base goal here, matching `leaf_value`'s
         // fallback convention — but that convention was WRONG for this
         // specific head. Every existing macro_stance/macro_order training
@@ -727,11 +788,11 @@ impl<'a> MacroMctsSearch<'a> {
         // out-of-distribution input — measured as a real −18.75pp
         // regression, not a weak prior. The fix is training-side (repaint
         // those label rows `None` = goal-blind) and this call must paint
-        // the SAME way for the two to agree once retrained. Off (0.0
-        // weight) by default: skips the eval call entirely and leaves
-        // `edge_prior` empty, so `select_edge` is byte-identical to plain
-        // UCT unless explicitly turned on.
-        if params.root_prior_w > 0.0 && n > 0 {
+        // the SAME way for the two to agree once retrained. Both weights at
+        // 0.0 skips the eval call entirely, byte-identical to plain UCT.
+        let mut net_eval: Option<(Vec<f32>, Vec<f32>)> = None;
+        if (params.root_prior_w > 0.0 || params.net_candidates_w > 0.0) && !root.candidates.is_empty()
+        {
             if let Ok(feats) = crate::ai::features::state_to_cpu_features_goal(
                 &root_game.state,
                 pov,
@@ -740,14 +801,45 @@ impl<'a> MacroMctsSearch<'a> {
             ) {
                 if let Some(result) = evaluator.evaluate(vec![feats]).into_iter().next() {
                     if let (Some(stance), Some(order)) =
-                        (&result.2.macro_stance, &result.2.macro_order)
+                        (result.2.macro_stance.clone(), result.2.macro_order.clone())
                     {
-                        let map_size = root_game.state.settings.size as usize;
-                        let prior = decode_macro_prior(stance, order, &root.candidates, map_size);
-                        root.edge_prior =
-                            prior.iter().map(|p| p * params.root_prior_w).collect();
+                        net_eval = Some((stance, order));
                     }
                 }
+            }
+        }
+
+        // EXP_ELO_165: synthesize one new candidate from the net's own
+        // (stance, order) prediction and add it to the ballot BEFORE sizing
+        // the per-edge arrays below, so it's a real, fully-searched root
+        // edge like every scripted candidate — not a post-hoc addition.
+        let mut net_candidate_index: Option<usize> = None;
+        if params.net_candidates_w > 0.0 {
+            if let Some((stance, order)) = &net_eval {
+                let map_size = root_game.state.settings.size as usize;
+                if let Some(candidate) =
+                    net_proposed_candidate(stance, order, &root.candidates, map_size)
+                {
+                    net_candidate_index = Some(root.candidates.len());
+                    root.candidates.push(candidate);
+                }
+            }
+        }
+
+        let n = root.candidates.len();
+        root.children = vec![None; n];
+        root.edge_visits = vec![0.0; n];
+        root.edge_values = vec![0.0; n];
+        root.edge_shape = vec![0.0; n];
+        root.edge_frozen = vec![None; n];
+        root.edge_virtual_loss = vec![0.0; n];
+        root.virtual_visits = 0.0;
+
+        if params.root_prior_w > 0.0 && n > 0 {
+            if let Some((stance, order)) = &net_eval {
+                let map_size = root_game.state.settings.size as usize;
+                let prior = decode_macro_prior(stance, order, &root.candidates, map_size);
+                root.edge_prior = prior.iter().map(|p| p * params.root_prior_w).collect();
             }
         }
 
@@ -756,7 +848,7 @@ impl<'a> MacroMctsSearch<'a> {
             pov,
             eval: evaluator,
             leaf,
-            stats: MacroMctsStats::default(),
+            stats: MacroMctsStats { net_candidate_index, ..MacroMctsStats::default() },
         };
         // leaf_batch=1 (the default) makes this identical to a plain
         // `for _ in 0..sims { search.simulate(...) }` loop, one wave per
@@ -1610,6 +1702,16 @@ impl<'a> MacroMctsAgent<'a> {
             if pick != 0 {
                 self.divergent_turns += 1;
             }
+            if net_candidate_debug() {
+                if let Some(idx) = self.last_stats.net_candidate_index {
+                    let visits = self.last_stats.root_visits.get(idx).copied().unwrap_or(0.0);
+                    eprintln!(
+                        "NET_CANDIDATE_DEBUG turn={} pov={pov} offered=1 picked={} visits={visits}",
+                        view0.state.settings.turn,
+                        (pick == idx) as u8
+                    );
+                }
+            }
             let picked_class = tagged.get(pick).map(|(_, c)| *c);
             if let Some(c) = picked_class {
                 self.class_picks[c as usize] += 1;
@@ -1631,7 +1733,14 @@ impl<'a> MacroMctsAgent<'a> {
                 self.belief_repicks += 1;
             }
             self.last_belief_target = belief_target;
-            self.turn_goal = candidates.into_iter().nth(pick);
+            // EXP_ELO_165: `pick` can index PAST `candidates`' own length
+            // when it's the net-synthesized candidate (appended inside
+            // `run_with`, never part of this locally-built `candidates`
+            // vec) -- `self.last_stats.root_candidates` is the tree's own
+            // final ballot (`run_with` copies `root.candidates` into it
+            // verbatim, net candidate included), so it's always the correct
+            // source of truth for `pick`, unlike the local `candidates` var.
+            self.turn_goal = self.last_stats.root_candidates.get(pick).cloned();
             // EXP_ELO_119: a standalone probe's own `commit_macro_goal`
             // reconstruction (fresh StanceCommit/LaneState) does not
             // reliably reproduce this turn's REAL committed goal -- ballot
@@ -2345,6 +2454,80 @@ mod tests {
         for p in prior {
             assert!((p - 1.0 / 3.0).abs() < 1e-6, "expected ~1/3, got {p}");
         }
+    }
+
+    #[test]
+    fn net_proposed_candidate_mirrors_shape_substitutes_net_choices() {
+        let map_size = 3;
+        let board = map_size * map_size;
+        let mut stance_probs = vec![0.1f32; 4];
+        stance_probs[Stance::Arm as usize] = 0.8; // net strongly prefers Arm
+        let mut order_maps = vec![0.05f32; 3 * board];
+        order_maps[OrderKind::Expand as usize * board + 7] = 0.9; // net prefers tile 7 for Expand
+
+        let base = MacroGoal {
+            orders: vec![(OrderKind::Expand, 2)], // scripted base targets a different tile
+            stance: Stance::Grow,
+            save_target: None,
+            prepare: None,
+        };
+        let existing = vec![base];
+
+        let candidate = net_proposed_candidate(&stance_probs, &order_maps, &existing, map_size)
+            .expect("should synthesize a candidate");
+        assert_eq!(candidate.stance, Stance::Arm, "should adopt the net's top-1 stance");
+        assert_eq!(
+            candidate.orders,
+            vec![(OrderKind::Expand, 7)],
+            "should keep the base's order-kind shape (one Expand order) but substitute the net's own top target"
+        );
+    }
+
+    #[test]
+    fn net_proposed_candidate_excludes_save_stance() {
+        // Save (index 3) is the net's strongly-preferred stance, but a Save
+        // candidate needs a real save_target this function can't supply --
+        // it must fall back to the best of {Grow, Arm, Unlock} instead.
+        let map_size = 3;
+        let board = map_size * map_size;
+        let mut stance_probs = vec![0.05f32; 4];
+        stance_probs[Stance::Save as usize] = 0.9;
+        stance_probs[Stance::Unlock as usize] = 0.5; // best of the eligible three
+        let order_maps = vec![0.1f32; 3 * board];
+        let existing = vec![MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None, prepare: None }];
+
+        let candidate = net_proposed_candidate(&stance_probs, &order_maps, &existing, map_size)
+            .expect("should synthesize a candidate");
+        assert_eq!(candidate.stance, Stance::Unlock);
+        assert_ne!(candidate.stance, Stance::Save);
+    }
+
+    #[test]
+    fn net_proposed_candidate_dedupes_against_existing() {
+        let map_size = 3;
+        let board = map_size * map_size;
+        let mut stance_probs = vec![0.0f32; 4];
+        stance_probs[Stance::Grow as usize] = 1.0;
+        let mut order_maps = vec![0.0f32; 3 * board];
+        order_maps[OrderKind::Defend as usize * board + 5] = 1.0;
+
+        let base = MacroGoal {
+            orders: vec![(OrderKind::Defend, 5)],
+            stance: Stance::Grow,
+            save_target: None,
+            prepare: None,
+        };
+        // The net's own top choice reconstructs `base` exactly -- must not
+        // offer a duplicate candidate.
+        let existing = vec![base];
+        assert!(net_proposed_candidate(&stance_probs, &order_maps, &existing, map_size).is_none());
+    }
+
+    #[test]
+    fn net_proposed_candidate_none_when_no_existing_to_mirror() {
+        let stance_probs = vec![0.25f32; 4];
+        let order_maps = vec![0.0f32; 27];
+        assert!(net_proposed_candidate(&stance_probs, &order_maps, &[], 3).is_none());
     }
 
     fn bare_node(game: &Game, root_turn: i32, candidates: usize) -> Node {

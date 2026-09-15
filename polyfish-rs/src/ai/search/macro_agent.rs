@@ -95,6 +95,18 @@ pub struct MacroParams {
     /// virtual loss, not just throughput; see `Node::select_edge`'s doc
     /// comment and `MacroMctsSearch::collect_wave`.
     pub leaf_batch: usize,
+    /// EXP_ELO_165: 0.0 = off (this struct's own default). When > 0.0, the
+    /// SAME root eval call `root_prior_w` uses also synthesizes one new
+    /// candidate directly from the macro policy head's (stance, order)
+    /// prediction (`net_proposed_candidate`) instead of only using that
+    /// prediction to reweight the scripted ballot — the net gets a real
+    /// chance to propose a directive the scripted enumerator never would,
+    /// truth-checked by the same real simulation every candidate gets. The
+    /// weight then applies to the net candidate's OWN root_prior term
+    /// exactly like every other candidate's (no separate meaning) — the
+    /// nonzero check is only what gates whether the eval call fires and the
+    /// candidate gets synthesized at all.
+    pub net_candidates_w: f32,
 }
 
 impl Default for MacroParams {
@@ -128,6 +140,7 @@ impl Default for MacroParams {
             rollout_nn_w: 0.0,
             rollout_nn_min_depth: usize::MAX,
             leaf_batch: 1,
+            net_candidates_w: 0.0,
         }
     }
 }

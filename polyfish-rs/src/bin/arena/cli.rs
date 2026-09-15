@@ -283,6 +283,17 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = 0.0)]
     pub(crate) macro_root_prior_w2: f32,
 
+    /// EXP_ELO_165: config 1's weight on synthesizing one new candidate
+    /// from the macro policy head's (stance, order) prediction, added to
+    /// the ballot alongside the scripted candidates. 0 = off. Shares the
+    /// same eval call as `--macro-root-prior-w1`.
+    #[arg(long, default_value_t = 0.0)]
+    pub(crate) macro_net_candidates_w1: f32,
+
+    /// Same as --macro-net-candidates-w1, for config 2.
+    #[arg(long, default_value_t = 0.0)]
+    pub(crate) macro_net_candidates_w2: f32,
+
     /// EXP_ELO_125 (piece 4): weight on the cheap `pi_rollout_value` NN
     /// estimator, config 1 (0 = off, the default).
     #[arg(long, default_value_t = 0.0)]
