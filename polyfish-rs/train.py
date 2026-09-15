@@ -54,12 +54,20 @@ DETACH_VALUE_TRUNK = os.environ.get("DETACH_VALUE_TRUNK", "0") == "1"
 DETACH_MACRO_HEADS = os.environ.get("DETACH_MACRO_HEADS", "0") == "1"
 # Random rot90/flip per batch (D4 dihedral): 8x effective spatial data.
 # Geometrically valid (no feature plane, player scalar, or rule is
-# orientation-dependent) but OFF by default: enabling it MID-RUN on the
-# 586K-param net collapsed play for ~8 iterations (run 1783556259 — policy
-# lost its orientation-specific fit, degraded games then fed back through
-# self-play). Opt in only for from-scratch runs, where the net never learns
-# orientation shortcuts to begin with.
-AUGMENT_D4 = os.environ.get("AUGMENT_D4", "0") == "1"
+# orientation-dependent). Default ON as of Sep 15 2026 (EXP_ELO_161: isolated
+# matched-pair ablation, held-out policy_loss -8%/value_loss -10%, the first
+# thing in a long campaign to move held-out value_loss at all) — Verdi's
+# explicit "make it a default" call.
+# ⚠️ Known failure mode, still real: enabling it MID-RUN on an already-trained
+# (non-from-scratch) net once collapsed play for ~8 iterations (run
+# 1783556259 — policy lost its orientation-specific fit it had learned
+# without augmentation, degraded games fed back through self-play). EXP_ELO_161
+# only validated a frozen-dataset loss comparison, NOT a live generate-and-
+# retrain cycle, so it does not clear this specific risk. Resuming an existing
+# (non-from-scratch) run with this default requires a deliberate check first
+# (e.g. a short live-loop cycle) — do not assume it's safe just because it's
+# now the default.
+AUGMENT_D4 = os.environ.get("AUGMENT_D4", "1") == "1"
 # Mix teachers/ into every iteration (see the teacher-anchor note in train()).
 # Set 0 to train on self-play data only — matters most right after an archive
 # clear, where the teachers would otherwise dominate the first few iterations.
