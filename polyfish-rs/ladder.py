@@ -22,7 +22,7 @@ FREEZE_WR = 0.80
 # both more legible. NOT a removal: unset (or set to "0") to restore the
 # original graduate-past-greedy behavior once greedy is saturated (~99%).
 FREEZE_DISABLED = os.environ.get("LADDER_FREEZE_DISABLED", "0") == "1"
-PLATEAU_WINDOW = 8  # gauge readings vs the same anchor (= 80 iters at interval 10)
+PLATEAU_WINDOW = 8  # gauge readings vs the same anchor (= 40 iters at GAUGE_INTERVAL=5)
 PLATEAU_STRIKES = 2  # consecutive flagged readings before the loop stops
 
 
