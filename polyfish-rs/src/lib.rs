@@ -22,13 +22,14 @@ pub mod moves;
 // existing `crate::prediction::X` / `polyfish::prediction::X` path still resolves.
 pub use ai::belief::prediction;
 pub mod recorder;
-pub mod rules;
 pub mod replayer;
+pub mod rules;
 pub mod score;
 pub mod settings;
 pub mod states;
-pub mod types;
 pub mod training_api;
+pub mod types;
+pub mod utils;
 pub mod version_sync;
 
 pub use coords::Coords;

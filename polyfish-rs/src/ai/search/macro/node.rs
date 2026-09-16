@@ -1,20 +1,16 @@
-use crate::ai::macro_agent::{MacroLeaf, MacroParams, enumerate_candidates};
-use crate::ai::macro_exec::{self, TurnCounters};
-use crate::ai::oracle_macro::{
-    LaneState, MacroGoal, OrderKind, Stance, StanceCommit, commit_macro_goal, compute_macro_goal,
-};
-use crate::ai::search::macro_mcts::{EXPLORATION, TURN_DEPTH_CAP, fog_order_dead, terminal_value};
-use crate::ai::search::mcts_common::VIRTUAL_LOSS;
+use crate::ai::macro_agent::enumerate_candidates;
+use crate::ai::macro_exec::TurnCounters;
+use crate::ai::oracle_macro::{LaneState, MacroGoal, OrderKind, compute_macro_goal};
+use crate::ai::search::macro_mcts::{TURN_DEPTH_CAP, fog_order_dead, terminal_value};
 use crate::game::Game;
-use crate::moves::Move;
-use crate::states::{GameState, PlayerId};
+use crate::states::PlayerId;
 use crate::utils::converter::player_id_to_usize;
 
 /// UCT exploration constant, tuned so a 0.03 q01 gap is decisive (~10 visits); ties split evenly.
 pub(crate) const UCT_EXPLORATION_CONSTANT: f32 = 0.05;
 
 // A node represents a turn boundary in the tree.
-struct Node {
+pub(super) struct Node {
     /// The game state.
     game: Game,
     /// The player whose turn it is.
@@ -50,9 +46,10 @@ struct Node {
     virtual_visits: f32,
 }
 
+// Node implementation for the macro search tree.
 impl Node {
     /// Create a new node for the given game state, player, and counters.
-    fn new(
+    pub(super) fn new(
         game: Game,
         player: PlayerId,
         counters: [TurnCounters; 2],
@@ -121,46 +118,29 @@ impl Node {
             virtual_visits: 0.0,
         }
     }
-
-    /// UCT over edges on [0,1]-mapped Q; unvisited edges first, in candidate
-    /// order (base first) — ALWAYS, regardless of `edge_prior`. A first
-    /// version let the prior reorder cold-start too, but `argmax(w·p)` picks
-    /// the same edge for every `w > 0` — that reordering was a hard on/off
-    /// switch, not a dial, and with only `sims`=16-64 split across a handful
-    /// of candidates, cold start alone can dominate the whole tree's visit
-    /// budget. Measured: `root_prior_w=0.05` regressed nearly as hard as
-    /// `1.0` (EXP_ELO_067 sweep, Aug 21) — the smoking gun for exactly this.
-    /// Cold start now stays prior-agnostic on principle (byte-identical to
-    /// plain UCT at this stage, prior or not); once every edge has a visit,
-    /// the exploration score gets a PUCT-style `prior/(1+n)` bonus on top of
-    /// the existing UCT term (added, not replacing it), which IS genuinely
-    /// continuous in `root_prior_w` — this is the only place the prior acts.
-    fn select_edge(&self) -> usize {
-        // Cold start checks EFFECTIVE (real + virtual) visits: within one
-        // wave, an edge already claimed by an earlier descent (but not yet
-        // backed up) reads as "visited" here, so the next descent moves on
-        // to the next unvisited edge instead of repeating the same pick.
-        // All-zero virtual loss (always true at leaf_batch==1) makes this
-        // identical to a plain `edge_visits[i] == 0.0` check.
-        if let Some(i) = (0..self.edge_visits.len())
-            .find(|&i| self.edge_visits[i] + self.edge_virtual_loss[i] == 0.0)
-        {
-            return i;
+    /// UCT: cold start ignores prior; picks unvisited edge in base order.
+    /// After all visited, adds PUCT-style prior/(1+n) bonus to UCT score.
+    /// Only here does root prior act; ensures unbiased cold start.
+    pub(super) fn select_edge(&self) -> usize {
+        // Cold start UCT selection rule: Finds the first unvisited edge.
+        let unvisited_edge_idx = (0..self.edge_visits.len())
+            .find(|&i| self.edge_visits[i] + self.edge_virtual_loss[i] == 0.0);
+        if let Some(unvisited_edge_idx) = unvisited_edge_idx {
+            return unvisited_edge_idx;
         }
-        let eff_n = self.visits + self.virtual_visits;
-        let ln_n = eff_n.max(1.0).ln();
-        let sqrt_n = eff_n.max(1.0).sqrt();
+
+        // After all visited, adds PUCT-style prior/(1+n) bonus to UCT score.
+        let effective_n = self.visits + self.virtual_visits;
+        let ln_n = effective_n.max(1.0).ln();
+        let sqrt_n = effective_n.max(1.0).sqrt();
         let mut best = 0;
         let mut best_score = f32::NEG_INFINITY;
         for i in 0..self.candidates.len() {
-            // A pending (not-yet-backed-up) visit is scored as a loss --
-            // value -1, the pessimistic end of the [-1,1] negamax range --
-            // same convention as `mcts_common::VIRTUAL_LOSS`. Zero virtual
-            // loss makes `ev`/`q01`/`score` reduce byte-for-byte to the
-            // plain-UCT formula this replaced.
+            // Pending (unbacked) visits are scored as losses (value -1).
+            // Zero virtual loss reduces to plain UCT.
             let ev = self.edge_visits[i] + self.edge_virtual_loss[i];
-            let q01 = ((self.edge_values[i] - self.edge_virtual_loss[i]) / ev + 1.0) / 2.0;
-            let mut score = q01 + UCT_EXPLORATION_CONSTANT * (ln_n / ev).sqrt();
+            let q_val = ((self.edge_values[i] - self.edge_virtual_loss[i]) / ev + 1.0) / 2.0;
+            let mut score = q_val + UCT_EXPLORATION_CONSTANT * (ln_n / ev).sqrt();
             if let Some(&p) = self.edge_prior.get(i) {
                 score += p * sqrt_n / (1.0 + ev);
             }
