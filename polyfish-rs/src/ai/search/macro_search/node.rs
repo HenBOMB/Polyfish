@@ -2,6 +2,7 @@ use crate::ai::macro_agent::enumerate_candidates;
 use crate::ai::macro_exec::TurnCounters;
 use crate::ai::oracle_macro::{LaneState, MacroGoal, OrderKind, compute_macro_goal};
 use crate::ai::search::macro_mcts::{TURN_DEPTH_CAP, fog_order_dead, terminal_value};
+use crate::ai::search::mcts_common::VIRTUAL_LOSS;
 use crate::game::Game;
 use crate::states::PlayerId;
 use crate::utils::converter::player_id_to_usize;
@@ -9,7 +10,7 @@ use crate::utils::converter::player_id_to_usize;
 /// UCT exploration constant, tuned so a 0.03 q01 gap is decisive (~10 visits); ties split evenly.
 pub(crate) const UCT_EXPLORATION_CONSTANT: f32 = 0.05;
 
-// A node represents a turn boundary in the tree.
+/// A node represents a turn boundary in the tree.
 pub(super) struct Node {
     /// The game state.
     game: Game,
@@ -30,23 +31,23 @@ pub(super) struct Node {
     /// EXP_ELO_036b: potential-based edge reward w·(φ(s',g)−φ(s,g)) from the
     /// EDGE OWNER's perspective; nonzero only on the root player's edges.
     edge_shape: Vec<f32>,
-    // Number of visits to this node.
+    /// Number of visits to this node.
     visits: f32,
-    // Terminal/game over or depth-capped leaf value from this player's perspective.
+    /// Terminal/game over or depth-capped leaf value from this player's perspective.
     frozen_value: Option<f32>,
-    // Edge that produced this node: (player, directive) or None at root.
+    /// Edge that produced this node: (player, directive) or None at root.
     from: Option<(PlayerId, MacroGoal)>,
-    // Root-only prior over candidates from the macro policy head.
+    /// Root-only prior over candidates from the macro policy head.
     edge_prior: Vec<f32>,
-    // Cached rollout_value for frozen edge; None if edge has child or before frozen.
+    /// Cached rollout_value for frozen edge; None if edge has child or before frozen.
     edge_frozen: Vec<Option<f32>>,
-    // Per-edge virtual loss charged during wave-batching, removed after backup.
+    /// Per-edge virtual loss charged during wave-batching, removed after backup.
     edge_virtual_loss: Vec<f32>,
-    // Sum of edge_virtual_loss, mirrors visits for UCT sqrt/exploration term.
+    /// Sum of edge_virtual_loss, mirrors visits for UCT sqrt/exploration term.
     virtual_visits: f32,
 }
 
-// Node implementation for the macro search tree.
+/// Node implementation for the macro search tree.
 impl Node {
     /// Create a new node for the given game state, player, and counters.
     pub(super) fn new(
@@ -150,6 +151,29 @@ impl Node {
             }
         }
         best
+    }
+
+    /// Calculate Q values for each edge, excluding edges with no visits.
+    pub(super) fn edge_q_values(&self) -> Vec<Option<f32>> {
+        self.edge_visits
+            .iter()
+            .enumerate()
+            .map(|(i, visit)| (*visit > 0.0).then_some(self.edge_values[i] / visit))
+            .collect()
+    }
+
+    /// Converts the value from the child's POV to this node's POV and records it.
+    pub(super) fn backup(&mut self, edge: usize, mut value: f32, times: f32) -> f32 {
+        value = self.edge_shape[edge] - value;
+
+        // Update node statistics.
+        self.visits += times;
+        self.edge_visits[edge] += times;
+        self.edge_values[edge] += value * times;
+        self.edge_virtual_loss[edge] -= VIRTUAL_LOSS * times;
+        self.virtual_visits -= VIRTUAL_LOSS * times;
+
+        value
     }
 }
 

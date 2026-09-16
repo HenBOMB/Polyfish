@@ -16,7 +16,7 @@ use crate::ai::search::mcts_common::VIRTUAL_LOSS;
 use crate::game::Game;
 use crate::moves::Move;
 use crate::states::{GameState, PlayerId};
-use super::r#macro;
+use super::macro_belief;
 
 /// Single-game deep inspection (not a standing feature, not sampled): when
 /// `POLYFISH_PLY_TRACE=<path>` is set, `MacroMctsAgent::select_move` appends
@@ -422,7 +422,7 @@ struct Node {
     /// is all-zero.
     virtual_visits: f32,
     /// Synthetic, FOW-honest world state for branch-local materialization.
-    branch_belief: Option<r#macro::belief::BranchBelief>,
+    branch_belief: Option<macro_belief::BranchBelief>,
 }
 
 impl Node {
@@ -442,7 +442,7 @@ impl Node {
         // `expand_execute`'s doc comment for how this gets derived for free
         // from `Node.from` with zero new persistent state.
         own_last_goal: Option<&MacroGoal>,
-        branch_belief: Option<r#macro::belief::BranchBelief>,
+        branch_belief: Option<macro_belief::BranchBelief>,
     ) -> Self {
         let frozen_value = if game.state.settings._game_over {
             Some(terminal_value(&game.state, player))
@@ -1069,7 +1069,7 @@ impl<'a> MacroMctsSearch<'a> {
         let mut sanitized_root;
         let root_game = if params.tree_belief_materialization && belief.is_some() {
             sanitized_root = root_game.clone();
-            r#macro::belief::BranchBelief::sanitize_fog_view(&mut sanitized_root.state, pov);
+            macro_belief::BranchBelief::sanitize_fog_view(&mut sanitized_root.state, pov);
             &sanitized_root
         } else {
             root_game
@@ -1113,7 +1113,7 @@ impl<'a> MacroMctsSearch<'a> {
         let has_branch_belief = params.tree_belief_materialization && belief.is_some();
         if has_branch_belief {
             root.branch_belief = belief.map(|belief| {
-                r#macro::belief::BranchBelief::new_with_salt(
+                macro_belief::BranchBelief::new_with_salt(
                     belief,
                     &root.game.state,
                     particle_salt,
@@ -1548,7 +1548,7 @@ impl<'a> MacroMctsSearch<'a> {
                 p.lane_states.clone(),
                 p.candidates[edge].clone(),
                 p.from.clone(),
-                p.branch_belief.as_ref().map(r#macro::belief::BranchBelief::fork),
+                p.branch_belief.as_ref().map(macro_belief::BranchBelief::fork),
             )
         };
         // EXP_ELO_170/171: `parent.from` already records (who acted, what
@@ -2093,7 +2093,7 @@ impl<'a> MacroMctsAgent<'a> {
             use crate::ai::macro_agent::{BeliefMode, CandidateClass};
             let mut view0 = game.clone_for_mcts(pov);
             if self.params.tree_belief_materialization && self.belief.is_some() {
-                r#macro::belief::BranchBelief::sanitize_fog_view(&mut view0.state, pov);
+                macro_belief::BranchBelief::sanitize_fog_view(&mut view0.state, pov);
             }
             let use_world = matches!(
                 self.params.belief_mode,
@@ -2825,8 +2825,8 @@ mod tests {
         let pov = game.state.settings.current_player_turn_id;
         let own = game.state.tribes.get(&pov).unwrap().cities[0].idx;
         let mut view = game.clone_for_mcts(pov);
-        r#macro::belief::BranchBelief::sanitize_fog_view(&mut view.state, pov);
-        let mut branch = r#macro::belief::BranchBelief::new(
+        macro_belief::BranchBelief::sanitize_fog_view(&mut view.state, pov);
+        let mut branch = macro_belief::BranchBelief::new(
             crate::ai::belief::BeliefState::new(11, 2, own, pov, other(pov)),
             &view.state,
         );
@@ -2869,7 +2869,7 @@ mod tests {
         let tile = view.state.tiles.get_mut(&fog).unwrap();
         tile.capital_of = other(pov);
         tile.climate = 7;
-        r#macro::belief::BranchBelief::sanitize_fog_view(&mut view.state, pov);
+        macro_belief::BranchBelief::sanitize_fog_view(&mut view.state, pov);
         let tile = view.state.tiles.get(&fog).unwrap();
         assert_eq!(tile.capital_of, 0);
         assert_eq!(tile.climate, 0);
@@ -2881,8 +2881,8 @@ mod tests {
         let pov = game.state.settings.current_player_turn_id;
         let own = game.state.tribes.get(&pov).unwrap().cities[0].idx;
         let mut view = game.clone_for_mcts(pov);
-        r#macro::belief::BranchBelief::sanitize_fog_view(&mut view.state, pov);
-        let branch = r#macro::belief::BranchBelief::new(
+        macro_belief::BranchBelief::sanitize_fog_view(&mut view.state, pov);
+        let branch = macro_belief::BranchBelief::new(
             crate::ai::belief::BeliefState::new(11, 2, own, pov, other(pov)),
             &view.state,
         );
