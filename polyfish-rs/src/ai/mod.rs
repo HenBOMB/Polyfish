@@ -28,4 +28,5 @@ pub use search::{
     macro_mcts, mcts, mcts_common, mcts_types, mcts_zero, policy_composer,
 };
 pub use evaluator::evaluate_state;
+pub use evaluator::oracle_v2::evaluate_state_v2;
 pub use mcts::{MctsAgent, MctsAnalysis, MoveEvaluation};

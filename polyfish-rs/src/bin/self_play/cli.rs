@@ -317,6 +317,13 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = 0.0)]
     pub(crate) macro_net_candidates_w: f32,
 
+    /// EXP_ELO_170/171: offer "continue the directive this player already
+    /// committed to two plies back" as an explicit candidate at every
+    /// non-root node in the macro tree. Off by default pending measurement
+    /// (see the EXP_ELO_171 ledger entry before shipping as a default).
+    #[arg(long)]
+    pub(crate) macro_tree_continuation: bool,
+
     /// EXP_ELO_125 (piece 4): weight on the cheap `pi_rollout_value` NN
     /// estimator. When nonzero, edges deeper than
     /// `--macro-rollout-nn-min-depth` freeze on the estimator's value

@@ -21,6 +21,10 @@ use crate::states::{GameState, PlayerId};
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MacroLeaf {
     Heuristic,
+    /// Phase A of the value-target rework: `evaluate_state_v2` in place of
+    /// `evaluate_state` -- same dispatch shape as `Heuristic`, zero training
+    /// involved. See `ai::evaluator::oracle_v2`.
+    HeuristicV2,
     Net,
     /// EXP_ELO_047 B2: `NetAsym` plus aligned painting — the half belonging
     /// to the player who just executed the incoming edge is painted with that
@@ -107,6 +111,21 @@ pub struct MacroParams {
     /// nonzero check is only what gates whether the eval call fires and the
     /// candidate gets synthesized at all.
     pub net_candidates_w: f32,
+    /// EXP_ELO_170/171: when true, every non-root node the tree expands
+    /// offers "continue the same directive this player already committed to
+    /// two plies back" as an explicit candidate (`CandidateClass::
+    /// Continuation`), sourced from `Node.from` -- free, no new persistent
+    /// state (see `expand_execute`'s doc comment). `false` = byte-identical
+    /// to pre-171 behavior: `Node::new`'s candidate generation was
+    /// content-blind to anything upstream of the state itself.
+    pub tree_continuation: bool,
+    /// Sample a generator-grounded branch-local fog world; contents become
+    /// visible only when that rollout explores their tile.
+    /// Off by default pending the task-4 arena measurement.
+    pub tree_belief_materialization: bool,
+    /// Independent latent worlds to average for a belief-tree decision.
+    /// Each receives a share of `sims`; one preserves the single-tree path.
+    pub map_particles: usize,
 }
 
 impl Default for MacroParams {
@@ -141,6 +160,9 @@ impl Default for MacroParams {
             rollout_nn_min_depth: usize::MAX,
             leaf_batch: 1,
             net_candidates_w: 0.0,
+            tree_continuation: false,
+            tree_belief_materialization: false,
+            map_particles: 1,
         }
     }
 }
@@ -660,6 +682,9 @@ impl<'a> MacroLookaheadAgent<'a> {
             match self.params.leaf {
                 MacroLeaf::Heuristic => {
                     scores[i] = Some(crate::ai::evaluate_state(&sim.state, pov));
+                }
+                MacroLeaf::HeuristicV2 => {
+                    scores[i] = Some(crate::ai::evaluate_state_v2(&sim.state, pov));
                 }
                 // NetAsym collapses to Net here: this agent ranks every
                 // candidate from `pov` alone and never negates, so the

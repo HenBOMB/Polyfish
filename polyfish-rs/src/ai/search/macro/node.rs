@@ -1,0 +1,181 @@
+use crate::ai::macro_agent::{MacroLeaf, MacroParams, enumerate_candidates};
+use crate::ai::macro_exec::{self, TurnCounters};
+use crate::ai::oracle_macro::{
+    LaneState, MacroGoal, OrderKind, Stance, StanceCommit, commit_macro_goal, compute_macro_goal,
+};
+use crate::ai::search::macro_mcts::{EXPLORATION, TURN_DEPTH_CAP, fog_order_dead, terminal_value};
+use crate::ai::search::mcts_common::VIRTUAL_LOSS;
+use crate::game::Game;
+use crate::moves::Move;
+use crate::states::{GameState, PlayerId};
+use crate::utils::converter::player_id_to_usize;
+
+/// UCT exploration constant, tuned so a 0.03 q01 gap is decisive (~10 visits); ties split evenly.
+pub(crate) const UCT_EXPLORATION_CONSTANT: f32 = 0.05;
+
+// A node represents a turn boundary in the tree.
+struct Node {
+    /// The game state.
+    game: Game,
+    /// The player whose turn it is.
+    player: PlayerId,
+    /// The counters for the two players.
+    counters: [TurnCounters; 2],
+    /// The lane states of the two players.
+    lane_states: [LaneState; 2],
+    /// The candidate macro goals for this node.
+    candidates: Vec<MacroGoal>,
+    /// The indices of the children of this node.
+    children: Vec<Option<usize>>,
+    /// The number of visits to each child.
+    edge_visits: Vec<f32>,
+    /// The values of each child.
+    edge_values: Vec<f32>,
+    /// EXP_ELO_036b: potential-based edge reward w·(φ(s',g)−φ(s,g)) from the
+    /// EDGE OWNER's perspective; nonzero only on the root player's edges.
+    edge_shape: Vec<f32>,
+    // Number of visits to this node.
+    visits: f32,
+    // Terminal/game over or depth-capped leaf value from this player's perspective.
+    frozen_value: Option<f32>,
+    // Edge that produced this node: (player, directive) or None at root.
+    from: Option<(PlayerId, MacroGoal)>,
+    // Root-only prior over candidates from the macro policy head.
+    edge_prior: Vec<f32>,
+    // Cached rollout_value for frozen edge; None if edge has child or before frozen.
+    edge_frozen: Vec<Option<f32>>,
+    // Per-edge virtual loss charged during wave-batching, removed after backup.
+    edge_virtual_loss: Vec<f32>,
+    // Sum of edge_virtual_loss, mirrors visits for UCT sqrt/exploration term.
+    virtual_visits: f32,
+}
+
+impl Node {
+    /// Create a new node for the given game state, player, and counters.
+    fn new(
+        game: Game,
+        player: PlayerId,
+        counters: [TurnCounters; 2],
+        mut lane_states: [LaneState; 2],
+        root_turn: i32,
+        k: usize,
+        from: Option<(PlayerId, MacroGoal)>,
+        leaf_fn: &dyn Fn(&crate::states::GameState, PlayerId, u32) -> f32,
+        own_last_goal: Option<&MacroGoal>,
+    ) -> Self {
+        let frozen_value = if game.state.settings._game_over {
+            Some(terminal_value(&game.state, player))
+        } else if game.state.settings.turn - root_turn >= TURN_DEPTH_CAP {
+            Some(leaf_fn(
+                &game.state,
+                player,
+                counters[player_id_to_usize(player)].tier3_bought,
+            ))
+        } else {
+            None
+        };
+
+        let mut candidates = Vec::new();
+
+        if frozen_value.is_none() {
+            recompute_playstyle_goal(&game, player, &mut lane_states);
+
+            let seat_idx = player_id_to_usize(player);
+            let tier3_bought = counters[seat_idx].tier3_bought;
+            let macro_goal = compute_macro_goal(&game.state, player, tier3_bought);
+            let mut cands =
+                enumerate_candidates(&game.state, player, macro_goal, counters[seat_idx], k);
+
+            if let Some(last_g) = own_last_goal {
+                // Filter out fogged expand orders.
+                let mut cand = last_g.clone();
+                cand.orders.retain(|(kind, t)| {
+                    *kind != OrderKind::Expand || !fog_order_dead(&game.state, *t, player)
+                });
+                cand.orders.sort();
+
+                if !cands.contains(&cand) {
+                    cands.push(cand);
+                }
+            }
+            candidates = cands;
+        };
+
+        let n = candidates.len();
+        Node {
+            game,
+            player,
+            counters,
+            lane_states,
+            candidates,
+            children: vec![None; n],
+            edge_visits: vec![0.0; n],
+            edge_values: vec![0.0; n],
+            edge_shape: vec![0.0; n],
+            visits: 0.0,
+            frozen_value,
+            from,
+            edge_prior: Vec::new(),
+            edge_frozen: vec![None; n],
+            edge_virtual_loss: vec![0.0; n],
+            virtual_visits: 0.0,
+        }
+    }
+
+    /// UCT over edges on [0,1]-mapped Q; unvisited edges first, in candidate
+    /// order (base first) — ALWAYS, regardless of `edge_prior`. A first
+    /// version let the prior reorder cold-start too, but `argmax(w·p)` picks
+    /// the same edge for every `w > 0` — that reordering was a hard on/off
+    /// switch, not a dial, and with only `sims`=16-64 split across a handful
+    /// of candidates, cold start alone can dominate the whole tree's visit
+    /// budget. Measured: `root_prior_w=0.05` regressed nearly as hard as
+    /// `1.0` (EXP_ELO_067 sweep, Aug 21) — the smoking gun for exactly this.
+    /// Cold start now stays prior-agnostic on principle (byte-identical to
+    /// plain UCT at this stage, prior or not); once every edge has a visit,
+    /// the exploration score gets a PUCT-style `prior/(1+n)` bonus on top of
+    /// the existing UCT term (added, not replacing it), which IS genuinely
+    /// continuous in `root_prior_w` — this is the only place the prior acts.
+    fn select_edge(&self) -> usize {
+        // Cold start checks EFFECTIVE (real + virtual) visits: within one
+        // wave, an edge already claimed by an earlier descent (but not yet
+        // backed up) reads as "visited" here, so the next descent moves on
+        // to the next unvisited edge instead of repeating the same pick.
+        // All-zero virtual loss (always true at leaf_batch==1) makes this
+        // identical to a plain `edge_visits[i] == 0.0` check.
+        if let Some(i) = (0..self.edge_visits.len())
+            .find(|&i| self.edge_visits[i] + self.edge_virtual_loss[i] == 0.0)
+        {
+            return i;
+        }
+        let eff_n = self.visits + self.virtual_visits;
+        let ln_n = eff_n.max(1.0).ln();
+        let sqrt_n = eff_n.max(1.0).sqrt();
+        let mut best = 0;
+        let mut best_score = f32::NEG_INFINITY;
+        for i in 0..self.candidates.len() {
+            // A pending (not-yet-backed-up) visit is scored as a loss --
+            // value -1, the pessimistic end of the [-1,1] negamax range --
+            // same convention as `mcts_common::VIRTUAL_LOSS`. Zero virtual
+            // loss makes `ev`/`q01`/`score` reduce byte-for-byte to the
+            // plain-UCT formula this replaced.
+            let ev = self.edge_visits[i] + self.edge_virtual_loss[i];
+            let q01 = ((self.edge_values[i] - self.edge_virtual_loss[i]) / ev + 1.0) / 2.0;
+            let mut score = q01 + UCT_EXPLORATION_CONSTANT * (ln_n / ev).sqrt();
+            if let Some(&p) = self.edge_prior.get(i) {
+                score += p * sqrt_n / (1.0 + ev);
+            }
+            if score > best_score {
+                best_score = score;
+                best = i;
+            }
+        }
+        best
+    }
+}
+
+/// Recompute the playstyle goal for the given player.
+fn recompute_playstyle_goal(game: &Game, player: PlayerId, lane_states: &mut [LaneState; 2]) {
+    let seat_idx = player_id_to_usize(player);
+    crate::ai::oracle_macro::observe_lane_state(&game.state, player, &mut lane_states[seat_idx]);
+    crate::ai::oracle_macro::select_lane(&game.state, player, &mut lane_states[seat_idx], None);
+}

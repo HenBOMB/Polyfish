@@ -5,13 +5,18 @@
 //! adversarially instead of ghost-scripted. Two-player only; negamax backup
 //! over the antisymmetric heuristic `evaluate_state`.
 
-use crate::ai::macro_agent::{MacroLeaf, MacroParams, enumerate_candidates};
+use crate::ai::macro_agent::{
+    CandidateClass, MacroLeaf, MacroParams, enumerate_candidates, enumerate_candidates_with_belief,
+};
 use crate::ai::macro_exec::{self, TurnCounters};
-use crate::ai::oracle_macro::{LaneState, MacroGoal, OrderKind, Stance, StanceCommit, compute_macro_goal, commit_macro_goal};
+use crate::ai::oracle_macro::{
+    LaneState, MacroGoal, OrderKind, Stance, StanceCommit, commit_macro_goal, compute_macro_goal,
+};
 use crate::ai::search::mcts_common::VIRTUAL_LOSS;
 use crate::game::Game;
 use crate::moves::Move;
 use crate::states::{GameState, PlayerId};
+use super::r#macro;
 
 /// Single-game deep inspection (not a standing feature, not sampled): when
 /// `POLYFISH_PLY_TRACE=<path>` is set, `MacroMctsAgent::select_move` appends
@@ -100,7 +105,11 @@ fn dump_ply_decision(
     });
     if let Ok(s) = serde_json::to_string(&row) {
         use std::io::Write;
-        if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(mut fh) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
             let _ = writeln!(fh, "{s}");
         }
     }
@@ -154,7 +163,11 @@ fn dump_rollout_node(
     });
     if let Ok(s) = serde_json::to_string(&row) {
         use std::io::Write;
-        if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(mut fh) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
             let _ = writeln!(fh, "{s}");
         }
     }
@@ -172,13 +185,20 @@ pub static MICRO_PROBE_SIM_FAILURES: std::sync::atomic::AtomicU64 =
 
 fn micro_probe_sims() -> Option<usize> {
     static SIMS: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
-    *SIMS.get_or_init(|| std::env::var("POLYFISH_MICRO_PROBE_SIMS").ok().and_then(|s| s.parse().ok()))
+    *SIMS.get_or_init(|| {
+        std::env::var("POLYFISH_MICRO_PROBE_SIMS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+    })
 }
 
 fn micro_probe_depth() -> usize {
     static DEPTH: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *DEPTH.get_or_init(|| {
-        std::env::var("POLYFISH_MICRO_PROBE_DEPTH").ok().and_then(|s| s.parse().ok()).unwrap_or(1)
+        std::env::var("POLYFISH_MICRO_PROBE_DEPTH")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1)
     })
 }
 
@@ -208,7 +228,9 @@ fn run_micro_probe(
     eco_plan: Option<&crate::ai::eco_plan_commit::EcoPlanCommit>,
     ranked: &[(f32, Box<dyn Move>)],
 ) {
-    let Some(sims) = micro_probe_sims() else { return };
+    let Some(sims) = micro_probe_sims() else {
+        return;
+    };
     let top_n = ranked.len().min(4);
     if top_n < 2 || matches!(ranked[0].1.move_type(), crate::types::MoveType::EndTurn) {
         return;
@@ -270,9 +292,12 @@ fn run_micro_probe(
         if !ok {
             continue;
         }
-        if let Ok(feats) =
-            crate::ai::features::state_to_cpu_features_goal(&probe_game.state, pov, None, Some(goal))
-        {
+        if let Ok(feats) = crate::ai::features::state_to_cpu_features_goal(
+            &probe_game.state,
+            pov,
+            None,
+            Some(goal),
+        ) {
             let _ = evaluator.evaluate(vec![feats]);
             MICRO_PROBE_EVALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -285,11 +310,11 @@ fn run_micro_probe(
 /// (and even the HeuristicMctsAgent 0.6 precedent) the bonus is 6–30x the
 /// signal and visits stay uniform. 0.05 makes a 0.03 q01 gap decisive within
 /// ~10 visits while genuine ties still split evenly.
-const EXPLORATION: f32 = 0.05;
+pub(crate) const EXPLORATION: f32 = 0.05;
 
 /// Tree depth cap in game turns from the root — beyond it a node is scored by
 /// the leaf evaluator instead of expanded.
-const TURN_DEPTH_CAP: i32 = 8;
+pub(crate) const TURN_DEPTH_CAP: i32 = 8;
 
 fn other(p: PlayerId) -> PlayerId {
     if p == 1 { 2 } else { 1 }
@@ -319,12 +344,15 @@ pub fn derive_counters(state: &GameState, player: PlayerId) -> TurnCounters {
             crate::settings::technology::get_technology_setting(t.tech_type).tier == Some(3)
         })
         .count() as u32;
-    TurnCounters { techs_bought: bought.len() as u32, tier3_bought: tier3 }
+    TurnCounters {
+        techs_bought: bought.len() as u32,
+        tier3_bought: tier3,
+    }
 }
 
 /// Terminal value from `perspective`'s side by score comparison — the same
 /// convention the backup expects of `evaluate_state` at that node.
-fn terminal_value(state: &GameState, perspective: PlayerId) -> f32 {
+pub(crate) fn terminal_value(state: &GameState, perspective: PlayerId) -> f32 {
     let my = state.tribes.get(&perspective).map(|t| t.score).unwrap_or(0);
     let opp = state
         .tribes
@@ -393,6 +421,8 @@ struct Node {
     /// exploration term's `ln_n`/`sqrt_n`. Zero whenever `edge_virtual_loss`
     /// is all-zero.
     virtual_visits: f32,
+    /// Synthetic, FOW-honest world state for branch-local materialization.
+    branch_belief: Option<r#macro::belief::BranchBelief>,
 }
 
 impl Node {
@@ -405,6 +435,14 @@ impl Node {
         k: usize,
         from: Option<(PlayerId, MacroGoal)>,
         leaf_fn: &dyn Fn(&crate::states::GameState, PlayerId, u32) -> f32,
+        // EXP_ELO_170/171: what `player` committed to the last time they
+        // acted in this tree (two plies back) -- `None` at the root and at
+        // every node's first-ever ply, `Some` everywhere `tree_continuation`
+        // is on and `player` has an ancestor edge of their own. See
+        // `expand_execute`'s doc comment for how this gets derived for free
+        // from `Node.from` with zero new persistent state.
+        own_last_goal: Option<&MacroGoal>,
+        branch_belief: Option<r#macro::belief::BranchBelief>,
     ) -> Self {
         let frozen_value = if game.state.settings._game_over {
             Some(terminal_value(&game.state, player))
@@ -429,7 +467,49 @@ impl Node {
             let s = seat(player);
             crate::ai::oracle_macro::observe_lane_state(&game.state, player, &mut lane_states[s]);
             crate::ai::oracle_macro::select_lane(&game.state, player, &mut lane_states[s], None);
-            enumerate_candidates(&game.state, player, base, counters[seat(player)], k)
+            let mut cands = if let Some(belief) = branch_belief
+                .as_ref()
+                .and_then(|branch| branch.candidate_belief_for(player))
+            {
+                let mut tagged = enumerate_candidates_with_belief(
+                    &game.state,
+                    player,
+                    base.clone(),
+                    counters[seat(player)],
+                    usize::MAX,
+                    Some(belief),
+                );
+                tagged.sort_by_key(|(_, class)| match class {
+                    CandidateClass::Base => 0,
+                    CandidateClass::ClaimSafe => 1,
+                    CandidateClass::Contest => 2,
+                    CandidateClass::AttackCapital | CandidateClass::AttackWeakest => 3,
+                    CandidateClass::DefendUrgent => 4,
+                    CandidateClass::RealFilter => 5,
+                    CandidateClass::Stance => 6,
+                    CandidateClass::Continuation => 7,
+                });
+                tagged.truncate(k.max(1));
+                tagged.into_iter().map(|(goal, _)| goal).collect()
+            } else {
+                enumerate_candidates(&game.state, player, base, counters[seat(player)], k)
+            };
+            // EXP_ELO_170/171: re-offer the player's own last in-tree
+            // commitment (mirrors `select_move`'s real-ply Continuation
+            // block, macro_mcts.rs ~1679) so a sustained multi-turn plan is
+            // an explicit candidate at every depth, not just a coincidence
+            // of `compute_macro_goal` re-deriving the same thing.
+            if let Some(last) = own_last_goal {
+                let mut cand = last.clone();
+                cand.orders.retain(|(kind, t)| {
+                    *kind != OrderKind::Expand || !fog_order_dead(&game.state, *t, player)
+                });
+                cand.orders.sort();
+                if !cands.contains(&cand) {
+                    cands.push(cand);
+                }
+            }
+            cands
         };
         let n = candidates.len();
         Node {
@@ -449,6 +529,7 @@ impl Node {
             edge_frozen: vec![None; n],
             edge_virtual_loss: vec![0.0; n],
             virtual_visits: 0.0,
+            branch_belief,
         }
     }
 
@@ -525,7 +606,11 @@ fn decode_macro_prior(
     let mut raw: Vec<f32> = candidates
         .iter()
         .map(|g| {
-            let stance_p = stance_probs.get(g.stance as usize).copied().unwrap_or(0.0).max(1e-6);
+            let stance_p = stance_probs
+                .get(g.stance as usize)
+                .copied()
+                .unwrap_or(0.0)
+                .max(1e-6);
             if g.orders.is_empty() {
                 return stance_p;
             }
@@ -534,7 +619,9 @@ fn decode_macro_prior(
                 .iter()
                 .map(|&(kind, target)| {
                     let idx = kind as usize * board
-                        + usize::try_from(target).unwrap_or(0).min(board.saturating_sub(1));
+                        + usize::try_from(target)
+                            .unwrap_or(0)
+                            .min(board.saturating_sub(1));
                     order_maps.get(idx).copied().unwrap_or(0.0).max(1e-6).ln()
                 })
                 .sum();
@@ -598,7 +685,12 @@ fn net_proposed_candidate(
         orders.push((kind, target));
     }
     orders.sort();
-    let candidate = MacroGoal { orders, stance: net_stance, save_target: None, prepare: base.prepare };
+    let candidate = MacroGoal {
+        orders,
+        stance: net_stance,
+        save_target: None,
+        prepare: base.prepare,
+    };
     if existing.iter().any(|g| *g == candidate) {
         return None;
     }
@@ -610,6 +702,7 @@ fn net_proposed_candidate(
 pub struct MacroMctsStats {
     pub nodes: usize,
     pub max_depth: usize,
+    pub effective_map_particles: u32,
     pub root_visit_max_share: f32,
     /// Mean value of the WINNING root edge, from the root player's
     /// perspective — the turn-level analogue of Gumbel's root value, used as
@@ -635,6 +728,79 @@ pub struct MacroMctsStats {
     /// it seriously) and whether the final `pick` equals `i` (did it win)
     /// without re-deriving the candidate itself.
     pub net_candidate_index: Option<usize>,
+    /// Count of branch-local high-confidence hypotheses materialized while
+    /// expanding this root. Zero is meaningful: the threshold never fired.
+    pub branch_capital_materializations: u32,
+    pub branch_village_materializations: u32,
+    pub branch_revealed_tiles: u32,
+    pub branch_resource_reveals: u32,
+    pub branch_capital_refutations: u32,
+    pub branch_capital_confirmations: u32,
+    pub branch_village_confirmations: u32,
+    pub branch_unit_materializations: u32,
+    pub branch_belief_candidate_nodes: u32,
+    pub branch_belief_candidates: u32,
+}
+
+fn mean_particle_q(rows: &[Vec<Option<f32>>]) -> Vec<Option<f32>> {
+    let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+    (0..width)
+        .map(|idx| {
+            let mut total = 0.0;
+            let mut count = 0usize;
+            for row in rows {
+                if let Some(q) = row.get(idx).and_then(|q| *q) {
+                    total += q;
+                    count += 1;
+                }
+            }
+            (count > 0).then_some(total / count as f32)
+        })
+        .collect()
+}
+
+fn best_particle_q(means: &[Option<f32>]) -> usize {
+    means
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, q)| q.map(|q| (idx, q)))
+        .max_by(|(left_idx, left_q), (right_idx, right_q)| {
+            left_q
+                .total_cmp(right_q)
+                .then_with(|| right_idx.cmp(left_idx))
+        })
+        .map(|(idx, _)| idx)
+        .unwrap_or(0)
+}
+
+fn merge_particle_stats(total: &mut MacroMctsStats, sample: &MacroMctsStats) {
+    total.nodes += sample.nodes;
+    total.max_depth = total.max_depth.max(sample.max_depth);
+    total.effective_map_particles += sample.effective_map_particles;
+    if total.root_candidates.is_empty() {
+        total.root_candidates = sample.root_candidates.clone();
+        total.root_visits = vec![0.0; sample.root_visits.len()];
+        total.net_candidate_index = sample.net_candidate_index;
+    } else {
+        assert_eq!(total.root_candidates, sample.root_candidates);
+        assert_eq!(total.net_candidate_index, sample.net_candidate_index);
+    }
+    if total.root_visits.len() < sample.root_visits.len() {
+        total.root_visits.resize(sample.root_visits.len(), 0.0);
+    }
+    for (dst, src) in total.root_visits.iter_mut().zip(&sample.root_visits) {
+        *dst += src;
+    }
+    total.branch_capital_materializations += sample.branch_capital_materializations;
+    total.branch_village_materializations += sample.branch_village_materializations;
+    total.branch_revealed_tiles += sample.branch_revealed_tiles;
+    total.branch_resource_reveals += sample.branch_resource_reveals;
+    total.branch_capital_refutations += sample.branch_capital_refutations;
+    total.branch_capital_confirmations += sample.branch_capital_confirmations;
+    total.branch_village_confirmations += sample.branch_village_confirmations;
+    total.branch_unit_materializations += sample.branch_unit_materializations;
+    total.branch_belief_candidate_nodes += sample.branch_belief_candidate_nodes;
+    total.branch_belief_candidates += sample.branch_belief_candidates;
 }
 
 pub struct MacroMctsSearch<'a> {
@@ -695,6 +861,7 @@ fn leaf_value(
             }
         }
         MacroLeaf::Heuristic => {}
+        MacroLeaf::HeuristicV2 => return crate::ai::evaluate_state_v2(state, player),
     }
     crate::ai::evaluate_state(state, player)
 }
@@ -734,7 +901,7 @@ impl<'a> MacroMctsSearch<'a> {
         params: &MacroParams,
         evaluator: &crate::ai::eval_server::Evaluator,
     ) -> (usize, MacroMctsStats) {
-        Self::run_with(
+        Self::run_with_branch_belief(
             root_game,
             pov,
             root_candidates,
@@ -742,10 +909,100 @@ impl<'a> MacroMctsSearch<'a> {
             own_lane_state,
             params,
             evaluator,
+            None,
             |_| {},
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_with_belief_world(
+        root_game: &Game,
+        pov: PlayerId,
+        root_candidates: Vec<MacroGoal>,
+        own_counters: TurnCounters,
+        own_lane_state: &LaneState,
+        params: &MacroParams,
+        evaluator: &crate::ai::eval_server::Evaluator,
+        belief: crate::ai::belief::BeliefState,
+    ) -> (usize, MacroMctsStats) {
+        let max_particles = params.map_particles.max(1);
+        let min_sims_per_particle = root_candidates.len().saturating_add(1).max(1);
+        let particle_count = max_particles.min(
+            (params.sims.max(1) / min_sims_per_particle)
+                .max(1),
+        );
+        if !params.tree_belief_materialization || particle_count == 1 {
+            return Self::run_with_branch_belief(
+                root_game,
+                pov,
+                root_candidates,
+                own_counters,
+                own_lane_state,
+                params,
+                evaluator,
+                Some(belief),
+                |_| {},
+            );
+        }
+
+        let total_sims = params.sims.max(1);
+        let base_sims = total_sims / particle_count;
+        let extra_sims = total_sims % particle_count;
+        let mut total = MacroMctsStats::default();
+        let mut q_rows = Vec::with_capacity(particle_count);
+        for particle in 0..particle_count {
+            let mut particle_params = *params;
+            particle_params.sims = base_sims + usize::from(particle < extra_sims);
+            particle_params.map_particles = 1;
+            let mut q_row = Vec::new();
+            let (_, sample) = Self::run_with_branch_belief_particle(
+                root_game,
+                pov,
+                root_candidates.clone(),
+                own_counters,
+                own_lane_state,
+                &particle_params,
+                evaluator,
+                Some(belief.clone()),
+                particle as i32 + 1,
+                |search| {
+                    let root = &search.nodes[0];
+                    q_row = root
+                        .edge_visits
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, visits)| {
+                            (*visits > 0.0).then_some(root.edge_values[idx] / visits)
+                        })
+                        .collect();
+                },
+            );
+            merge_particle_stats(&mut total, &sample);
+            q_rows.push(q_row);
+        }
+
+        let means = mean_particle_q(&q_rows);
+        let best = best_particle_q(&means);
+        total.root_q = means.get(best).and_then(|q| q.map(|q| q.clamp(-1.0, 1.0)));
+        let backed: Vec<f32> = means.iter().filter_map(|q| *q).collect();
+        total.root_q_spread = if backed.len() > 1 {
+            Some(
+                backed.iter().copied().fold(f32::MIN, f32::max)
+                    - backed.iter().copied().fold(f32::MAX, f32::min),
+            )
+        } else {
+            None
+        };
+        let visits: f32 = total.root_visits.iter().sum();
+        total.root_visit_max_share = if visits > 0.0 {
+            total.root_visits.iter().copied().fold(0.0, f32::max) / visits
+        } else {
+            0.0
+        };
+        return (best, total);
+    }
+
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn run_with(
         root_game: &Game,
@@ -757,7 +1014,71 @@ impl<'a> MacroMctsSearch<'a> {
         evaluator: &crate::ai::eval_server::Evaluator,
         inspect: impl FnOnce(&MacroMctsSearch),
     ) -> (usize, MacroMctsStats) {
-        debug_assert_eq!(root_game.state.tribes.len(), 2, "macro MCTS is 2-player only");
+        Self::run_with_branch_belief(
+            root_game,
+            pov,
+            root_candidates,
+            own_counters,
+            own_lane_state,
+            params,
+            evaluator,
+            None,
+            inspect,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_with_branch_belief(
+        root_game: &Game,
+        pov: PlayerId,
+        root_candidates: Vec<MacroGoal>,
+        own_counters: TurnCounters,
+        own_lane_state: &LaneState,
+        params: &MacroParams,
+        evaluator: &crate::ai::eval_server::Evaluator,
+        belief: Option<crate::ai::belief::BeliefState>,
+        inspect: impl FnOnce(&MacroMctsSearch),
+    ) -> (usize, MacroMctsStats) {
+        Self::run_with_branch_belief_particle(
+            root_game,
+            pov,
+            root_candidates,
+            own_counters,
+            own_lane_state,
+            params,
+            evaluator,
+            belief,
+            0,
+            inspect,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_with_branch_belief_particle(
+        root_game: &Game,
+        pov: PlayerId,
+        root_candidates: Vec<MacroGoal>,
+        own_counters: TurnCounters,
+        own_lane_state: &LaneState,
+        params: &MacroParams,
+        evaluator: &crate::ai::eval_server::Evaluator,
+        belief: Option<crate::ai::belief::BeliefState>,
+        particle_salt: i32,
+        inspect: impl FnOnce(&MacroMctsSearch),
+    ) -> (usize, MacroMctsStats) {
+        let mut sanitized_root;
+        let root_game = if params.tree_belief_materialization && belief.is_some() {
+            sanitized_root = root_game.clone();
+            r#macro::belief::BranchBelief::sanitize_fog_view(&mut sanitized_root.state, pov);
+            &sanitized_root
+        } else {
+            root_game
+        };
+        debug_assert_eq!(
+            root_game.state.tribes.len(),
+            2,
+            "macro MCTS is 2-player only"
+        );
         let root_turn = root_game.state.settings.turn;
         let mut counters = [TurnCounters::default(); 2];
         counters[seat(pov)] = own_counters;
@@ -771,9 +1092,34 @@ impl<'a> MacroMctsSearch<'a> {
         let leaf_fn = move |s: &crate::states::GameState, p: PlayerId, t3: u32| {
             leaf_value(evaluator, leaf, s, p, t3, None)
         };
-        let mut root =
-            Node::new(root_game.clone(), pov, counters, lane_states, root_turn, params.k, None, &leaf_fn);
+        // `own_last_goal: None` -- the root has no in-tree ancestor to
+        // continue from, and its candidate list is unconditionally
+        // overwritten by `root.candidates = root_candidates` immediately
+        // below, so computing a real continuation candidate here would be
+        // pure waste even if it had one.
+        let mut root = Node::new(
+            root_game.clone(),
+            pov,
+            counters,
+            lane_states,
+            root_turn,
+            params.k,
+            None,
+            &leaf_fn,
+            None,
+            None,
+        );
         root.candidates = root_candidates;
+        let has_branch_belief = params.tree_belief_materialization && belief.is_some();
+        if has_branch_belief {
+            root.branch_belief = belief.map(|belief| {
+                r#macro::belief::BranchBelief::new_with_salt(
+                    belief,
+                    &root.game.state,
+                    particle_salt,
+                )
+            });
+        }
 
         // War-room item 3 + EXP_ELO_165: one shared eval call for both root
         // PUCT-prior injection and net-candidate synthesis — either wanting
@@ -791,14 +1137,12 @@ impl<'a> MacroMctsSearch<'a> {
         // the SAME way for the two to agree once retrained. Both weights at
         // 0.0 skips the eval call entirely, byte-identical to plain UCT.
         let mut net_eval: Option<(Vec<f32>, Vec<f32>)> = None;
-        if (params.root_prior_w > 0.0 || params.net_candidates_w > 0.0) && !root.candidates.is_empty()
+        if (params.root_prior_w > 0.0 || params.net_candidates_w > 0.0)
+            && !root.candidates.is_empty()
         {
-            if let Ok(feats) = crate::ai::features::state_to_cpu_features_goal(
-                &root_game.state,
-                pov,
-                None,
-                None,
-            ) {
+            if let Ok(feats) =
+                crate::ai::features::state_to_cpu_features_goal(&root_game.state, pov, None, None)
+            {
                 if let Some(result) = evaluator.evaluate(vec![feats]).into_iter().next() {
                     if let (Some(stance), Some(order)) =
                         (result.2.macro_stance.clone(), result.2.macro_order.clone())
@@ -848,7 +1192,11 @@ impl<'a> MacroMctsSearch<'a> {
             pov,
             eval: evaluator,
             leaf,
-            stats: MacroMctsStats { net_candidate_index, ..MacroMctsStats::default() },
+            stats: MacroMctsStats {
+                net_candidate_index,
+                effective_map_particles: u32::from(has_branch_belief),
+                ..MacroMctsStats::default()
+            },
         };
         // leaf_batch=1 (the default) makes this identical to a plain
         // `for _ in 0..sims { search.simulate(...) }` loop, one wave per
@@ -918,20 +1266,29 @@ impl<'a> MacroMctsSearch<'a> {
             .iter()
             .map(|c| format!("{:?}/{}ord", c.stance, c.orders.len()))
             .collect();
-        let (best, stats) = Self::run_with(root_game, pov, root_candidates, own_counters, own_lane_state, params, evaluator, |s| {
-            let root = &s.nodes[0];
-            for i in 0..root.candidates.len() {
-                let q = if root.edge_visits[i] > 0.0 {
-                    root.edge_values[i] / root.edge_visits[i]
-                } else {
-                    f32::NAN
-                };
-                println!(
-                    "    edge {i} [{}]: visits={} q={q:+.4} shape={:+.4}",
-                    cands_dbg[i], root.edge_visits[i], root.edge_shape[i]
-                );
-            }
-        });
+        let (best, stats) = Self::run_with(
+            root_game,
+            pov,
+            root_candidates,
+            own_counters,
+            own_lane_state,
+            params,
+            evaluator,
+            |s| {
+                let root = &s.nodes[0];
+                for i in 0..root.candidates.len() {
+                    let q = if root.edge_visits[i] > 0.0 {
+                        root.edge_values[i] / root.edge_visits[i]
+                    } else {
+                        f32::NAN
+                    };
+                    println!(
+                        "    edge {i} [{}]: visits={} q={q:+.4} shape={:+.4}",
+                        cands_dbg[i], root.edge_visits[i], root.edge_shape[i]
+                    );
+                }
+            },
+        );
         (best, stats)
     }
 
@@ -1032,7 +1389,13 @@ impl<'a> MacroMctsSearch<'a> {
                 let offset = features.len();
                 features.push(feat);
                 dedup.insert((idx, e), pending.len());
-                pending.push(PendingLeaf { parent: idx, edge: e, path: path.clone(), feat_offset: offset, count: 1 });
+                pending.push(PendingLeaf {
+                    parent: idx,
+                    edge: e,
+                    path: path.clone(),
+                    feat_offset: offset,
+                    count: 1,
+                });
                 return (path, DescendOutcome::Deferred);
             }
             let child = self.expand_execute(idx, e, root_turn, params);
@@ -1068,14 +1431,21 @@ impl<'a> MacroMctsSearch<'a> {
         let mut immediate = 0u32;
         let mut pending: Vec<PendingLeaf> = Vec::new();
         let mut features: Vec<crate::ai::features::RawFeatures> = Vec::new();
-        let mut dedup: std::collections::HashMap<(usize, usize), usize> = std::collections::HashMap::new();
+        let mut dedup: std::collections::HashMap<(usize, usize), usize> =
+            std::collections::HashMap::new();
         loop {
             let done = immediate as usize + pending.iter().map(|p| p.count as usize).sum::<usize>();
             if done >= budget {
                 break;
             }
-            let (path, outcome) =
-                self.descend_once(root_idx, root_turn, params, &mut dedup, &mut pending, &mut features);
+            let (path, outcome) = self.descend_once(
+                root_idx,
+                root_turn,
+                params,
+                &mut dedup,
+                &mut pending,
+                &mut features,
+            );
             if let DescendOutcome::Resolved(v) = outcome {
                 self.backup(&path, v, 1);
                 immediate += 1;
@@ -1100,7 +1470,10 @@ impl<'a> MacroMctsSearch<'a> {
     ) {
         let results = self.eval.evaluate(features);
         for leaf in pending {
-            match results.get(leaf.feat_offset).and_then(|r| r.2.rollout_value) {
+            match results
+                .get(leaf.feat_offset)
+                .and_then(|r| r.2.rollout_value)
+            {
                 Some(raw_value) => {
                     let v = -raw_value;
                     self.nodes[leaf.parent].edge_frozen[leaf.edge] = Some(v);
@@ -1159,8 +1532,14 @@ impl<'a> MacroMctsSearch<'a> {
     /// state, creating and linking in a real child `Node`. This is Path C
     /// (untouched by wave-batching) -- runs whenever `try_freeze_rollout`
     /// didn't apply or its eval call came back empty.
-    fn expand_execute(&mut self, parent: usize, edge: usize, root_turn: i32, params: &MacroParams) -> usize {
-        let (mut game, player, mut counters, mut lane_states, goal) = {
+    fn expand_execute(
+        &mut self,
+        parent: usize,
+        edge: usize,
+        root_turn: i32,
+        params: &MacroParams,
+    ) -> usize {
+        let (mut game, player, mut counters, mut lane_states, goal, parent_from, mut branch_belief) = {
             let p = &self.nodes[parent];
             (
                 p.game.clone(),
@@ -1168,7 +1547,27 @@ impl<'a> MacroMctsSearch<'a> {
                 p.counters,
                 p.lane_states.clone(),
                 p.candidates[edge].clone(),
+                p.from.clone(),
+                p.branch_belief.as_ref().map(|branch| {
+                    branch.fork(
+                        &p.game.state,
+                        (parent as i32).wrapping_mul(31).wrapping_add(edge as i32),
+                    )
+                }),
             )
+        };
+        // EXP_ELO_170/171: `parent.from` already records (who acted, what
+        // they committed) for the edge that produced `parent`. `Node.player`
+        // strictly alternates by construction (`other(player)`, independent
+        // of game state — see `Node`'s own doc comment), so the child about
+        // to be created here (`other(player)`) is exactly the player named
+        // in `parent_from`, whenever `parent_from` is `Some` -- i.e. this IS
+        // "what did the child's own player commit to two plies back", for
+        // free, with zero new persistent state or parent pointer.
+        let child_own_last_goal: Option<&MacroGoal> = if params.tree_continuation {
+            parent_from.as_ref().map(|(_, g)| g)
+        } else {
+            None
         };
         let s = seat(player);
         // EXP_ELO_036b: pre-move potential of THIS edge's directive, with one
@@ -1184,7 +1583,10 @@ impl<'a> MacroMctsSearch<'a> {
                 counters[s].tier3_bought,
                 Some(&lane_states[s]),
             );
-            Some((crate::ai::reward::goal_potential(&game.state, player, &goal, Some(&aux)), aux))
+            Some((
+                crate::ai::reward::goal_potential(&game.state, player, &goal, Some(&aux)),
+                aux,
+            ))
         } else {
             None
         };
@@ -1206,10 +1608,20 @@ impl<'a> MacroMctsSearch<'a> {
             &mut counters[s],
             self.eval,
         );
+        if let Some(branch) = &mut branch_belief {
+            let (stats, observations) = branch.materialize_child(&mut game);
+            self.stats.branch_capital_materializations += stats.capital as u32;
+            self.stats.branch_village_materializations += stats.village as u32;
+            self.stats.branch_revealed_tiles += observations.revealed;
+            self.stats.branch_resource_reveals += observations.resource_revealed;
+            self.stats.branch_capital_refutations += observations.capital_refuted;
+            self.stats.branch_capital_confirmations += observations.capital_confirmed;
+            self.stats.branch_village_confirmations += observations.village_confirmed;
+            self.stats.branch_unit_materializations += observations.unit_materialized;
+        }
         let shape = match &shape_pre {
             Some((pre, aux)) => {
-                let post =
-                    crate::ai::reward::goal_potential(&game.state, player, &goal, Some(aux));
+                let post = crate::ai::reward::goal_potential(&game.state, player, &goal, Some(aux));
                 params.shape_w * (post - pre)
             }
             None => 0.0,
@@ -1231,7 +1643,13 @@ impl<'a> MacroMctsSearch<'a> {
             params.k,
             Some((player, goal.clone())),
             &leaf_fn,
+            child_own_last_goal,
+            branch_belief,
         );
+        if child.branch_belief.is_some() && child.player == self.pov {
+            self.stats.branch_belief_candidate_nodes += 1;
+            self.stats.branch_belief_candidates += child.candidates.len() as u32;
+        }
         let child_idx = self.nodes.len();
         self.nodes.push(child);
         self.nodes[parent].children[edge] = Some(child_idx);
@@ -1278,6 +1696,16 @@ pub struct MacroMctsAgent<'a> {
     pub belief: Option<crate::ai::belief::BeliefState>,
     pub mat_capital_turns: u32,
     pub mat_units: u32,
+    pub branch_revealed_tiles: u32,
+    pub branch_resource_reveals: u32,
+    pub branch_capital_refutations: u32,
+    pub branch_capital_confirmations: u32,
+    pub branch_village_confirmations: u32,
+    pub branch_capital_materializations: u32,
+    pub branch_village_materializations: u32,
+    pub branch_unit_materializations: u32,
+    pub branch_belief_candidate_nodes: u32,
+    pub branch_belief_candidates: u32,
     /// EXP_ELO_036/038: winning candidate class per planned turn, indexed by
     /// `CandidateClass as usize` (base/stance/real/attack/claim/contest/
     /// continuation).
@@ -1334,8 +1762,10 @@ const RECENT_GOALS: usize = 3;
 /// A fog-expansion order the observer's own vision has disconfirmed:
 /// explored, not ours-with-city (achieved orders keep paying by 028's
 /// achieved-holds-cap semantics), not capturable, not retakeable.
-fn fog_order_dead(state: &crate::states::GameState, t: i32, pov: PlayerId) -> bool {
-    let Some(tile) = state.tiles.get(&t) else { return true };
+pub(crate) fn fog_order_dead(state: &crate::states::GameState, t: i32, pov: PlayerId) -> bool {
+    let Some(tile) = state.tiles.get(&t) else {
+        return true;
+    };
     if !tile.explorers.contains(&pov) {
         return false;
     }
@@ -1395,7 +1825,11 @@ fn paint_probe(
         f(stats.root_q),
     );
     use std::io::Write;
-    if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    if let Ok(mut fh) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         let _ = fh.write_all(row.as_bytes());
     }
 }
@@ -1422,7 +1856,15 @@ fn tier_probe(
         let mut a = lane_state.clone();
         let mut c = counters;
         let mut rec = Vec::new();
-        macro_exec::execute_turn_recorded(&mut g, pov, goal, &mut a, &mut c, lambda, Some(&mut rec));
+        macro_exec::execute_turn_recorded(
+            &mut g,
+            pov,
+            goal,
+            &mut a,
+            &mut c,
+            lambda,
+            Some(&mut rec),
+        );
         (rec, g)
     };
     let (a, after_pick) = run(picked);
@@ -1431,18 +1873,23 @@ fn tier_probe(
     // Multiset overlap on serialized moves: order-insensitive, so a reordered
     // but identical set of plies still reads as "the directive changed
     // nothing", which is the conservative direction for this question.
-    let overlap = |x: &[crate::ai::macro_exec::PlyRec], y: &[crate::ai::macro_exec::PlyRec]| -> f32 {
-        let mut pool: Vec<&String> = y.iter().map(|p| &p.mv).collect();
-        let mut hit = 0usize;
-        for p in x {
-            if let Some(i) = pool.iter().position(|q| **q == p.mv) {
-                pool.remove(i);
-                hit += 1;
+    let overlap =
+        |x: &[crate::ai::macro_exec::PlyRec], y: &[crate::ai::macro_exec::PlyRec]| -> f32 {
+            let mut pool: Vec<&String> = y.iter().map(|p| &p.mv).collect();
+            let mut hit = 0usize;
+            for p in x {
+                if let Some(i) = pool.iter().position(|q| **q == p.mv) {
+                    pool.remove(i);
+                    hit += 1;
+                }
             }
-        }
-        let denom = x.len().max(y.len());
-        if denom == 0 { 1.0 } else { hit as f32 / denom as f32 }
-    };
+            let denom = x.len().max(y.len());
+            if denom == 0 {
+                1.0
+            } else {
+                hit as f32 / denom as f32
+            }
+        };
     // Star-spending plies only: Steps shuffle cheaply, but Research/Build/
     // Summon are where a turn's stars are actually committed — and the star
     // gate is the one intervention that ever moved wins (EXP_ELO_026).
@@ -1512,7 +1959,11 @@ fn tier_probe(
         orders.join(","),
     );
     use std::io::Write;
-    if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    if let Ok(mut fh) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         let _ = fh.write_all(row.as_bytes());
     }
 }
@@ -1534,6 +1985,16 @@ impl<'a> MacroMctsAgent<'a> {
             belief: None,
             mat_capital_turns: 0,
             mat_units: 0,
+            branch_revealed_tiles: 0,
+            branch_resource_reveals: 0,
+            branch_capital_refutations: 0,
+            branch_capital_confirmations: 0,
+            branch_village_confirmations: 0,
+            branch_capital_materializations: 0,
+            branch_village_materializations: 0,
+            branch_unit_materializations: 0,
+            branch_belief_candidate_nodes: 0,
+            branch_belief_candidates: 0,
             class_picks: [0; crate::ai::macro_agent::CANDIDATE_CLASSES],
             belief_repicks: 0,
             last_belief_target: None,
@@ -1572,10 +2033,8 @@ impl<'a> MacroMctsAgent<'a> {
     /// would train the head toward the evaluator it is supposed to beat.
     pub fn last_root_value(&self) -> Option<f32> {
         match self.params.leaf {
-            MacroLeaf::Net | MacroLeaf::NetAsym | MacroLeaf::NetAsymPaint => {
-                self.last_stats.root_q
-            }
-            MacroLeaf::Heuristic => None,
+            MacroLeaf::Net | MacroLeaf::NetAsym | MacroLeaf::NetAsymPaint => self.last_stats.root_q,
+            MacroLeaf::Heuristic | MacroLeaf::HeuristicV2 => None,
         }
     }
 
@@ -1623,7 +2082,10 @@ impl<'a> MacroMctsAgent<'a> {
     /// distribution is real search output regardless of what scored the
     /// leaves. Empty before the first search of the run.
     pub fn last_root_ballot(&self) -> (&[MacroGoal], &[f32]) {
-        (&self.last_stats.root_candidates, &self.last_stats.root_visits)
+        (
+            &self.last_stats.root_candidates,
+            &self.last_stats.root_visits,
+        )
     }
 
     pub fn select_move(&mut self, game: &mut Game) -> Option<Box<dyn Move>> {
@@ -1635,10 +2097,22 @@ impl<'a> MacroMctsAgent<'a> {
             self.micro_carry = None;
             use crate::ai::macro_agent::{BeliefMode, CandidateClass};
             let mut view0 = game.clone_for_mcts(pov);
-            let use_world =
-                matches!(self.params.belief_mode, BeliefMode::World | BeliefMode::Both);
-            let use_cand =
-                matches!(self.params.belief_mode, BeliefMode::Candidates | BeliefMode::Both);
+            if self.params.tree_belief_materialization && self.belief.is_some() {
+                r#macro::belief::BranchBelief::sanitize_fog_view(&mut view0.state, pov);
+            }
+            let use_world = matches!(
+                self.params.belief_mode,
+                BeliefMode::World | BeliefMode::Both
+            );
+            let use_cand = matches!(
+                self.params.belief_mode,
+                BeliefMode::Candidates | BeliefMode::Both
+            );
+            if self.params.tree_belief_materialization && !use_world {
+                if let Some(belief) = &self.belief {
+                    let _ = crate::ai::belief::materialize_branch_units(&mut view0, belief);
+                }
+            }
             if use_world {
                 if let Some(b) = &self.belief {
                     let st = crate::ai::belief::materialize_into(&mut view0, b);
@@ -1648,8 +2122,12 @@ impl<'a> MacroMctsAgent<'a> {
                     self.mat_units += st.ghost_units + st.residual_units;
                 }
             }
-            let base =
-                commit_macro_goal(&view0.state, pov, &mut self.stance_commit, self.counters.tier3_bought);
+            let base = commit_macro_goal(
+                &view0.state,
+                pov,
+                &mut self.stance_commit,
+                self.counters.tier3_bought,
+            );
             // EXP_ELO_100: once per real turn, same gate as everything else
             // here — the Mine-lane scoring signal `rank_view` reads below
             // (real ply AND every simulated rollout that reuses this same
@@ -1686,18 +2164,45 @@ impl<'a> MacroMctsAgent<'a> {
                     tagged.push((cand, CandidateClass::Continuation));
                 }
             }
-            let candidates: Vec<MacroGoal> =
-                tagged.iter().map(|(g, _)| g.clone()).collect();
-            let (pick, stats) = MacroMctsSearch::run(
-                &view0,
-                pov,
-                candidates.clone(),
-                self.counters,
-                &self.lane_state,
-                &self.params,
-                self.evaluator,
-            );
+            let candidates: Vec<MacroGoal> = tagged.iter().map(|(g, _)| g.clone()).collect();
+            let (pick, stats) = if self.params.tree_belief_materialization {
+                self.belief.as_ref().map(|belief| {
+                    MacroMctsSearch::run_with_belief_world(
+                        &view0,
+                        pov,
+                        candidates.clone(),
+                        self.counters,
+                        &self.lane_state,
+                        &self.params,
+                        self.evaluator,
+                        belief.clone(),
+                    )
+                })
+            } else {
+                None
+            }
+            .unwrap_or_else(|| {
+                MacroMctsSearch::run(
+                    &view0,
+                    pov,
+                    candidates.clone(),
+                    self.counters,
+                    &self.lane_state,
+                    &self.params,
+                    self.evaluator,
+                )
+            });
             self.last_stats = stats;
+            self.branch_revealed_tiles += self.last_stats.branch_revealed_tiles;
+            self.branch_resource_reveals += self.last_stats.branch_resource_reveals;
+            self.branch_capital_refutations += self.last_stats.branch_capital_refutations;
+            self.branch_capital_confirmations += self.last_stats.branch_capital_confirmations;
+            self.branch_village_confirmations += self.last_stats.branch_village_confirmations;
+            self.branch_capital_materializations += self.last_stats.branch_capital_materializations;
+            self.branch_village_materializations += self.last_stats.branch_village_materializations;
+            self.branch_unit_materializations += self.last_stats.branch_unit_materializations;
+            self.branch_belief_candidate_nodes += self.last_stats.branch_belief_candidate_nodes;
+            self.branch_belief_candidates += self.last_stats.branch_belief_candidates;
             self.planned_turns += 1;
             if pick != 0 {
                 self.divergent_turns += 1;
@@ -1719,14 +2224,14 @@ impl<'a> MacroMctsAgent<'a> {
             // Plan-stability: the same belief fog-target winning consecutive
             // planned turns means units aren't being yanked mid-approach.
             let belief_target = match picked_class {
-                Some(CandidateClass::ClaimSafe) | Some(CandidateClass::Contest) => tagged
-                    .get(pick)
-                    .and_then(|(g, _)| {
+                Some(CandidateClass::ClaimSafe) | Some(CandidateClass::Contest) => {
+                    tagged.get(pick).and_then(|(g, _)| {
                         g.orders
                             .iter()
                             .find(|o| !base.orders.contains(o))
                             .map(|(_, t)| *t)
-                    }),
+                    })
+                }
                 _ => None,
             };
             if belief_target.is_some() && belief_target == self.last_belief_target {
@@ -1806,11 +2311,21 @@ impl<'a> MacroMctsAgent<'a> {
             .then(|| {
                 crate::ai::features::state_to_cpu_features_goal(&view.state, pov, None, Some(&goal))
                     .ok()
-                    .and_then(|f| self.evaluator.evaluate(vec![f]).into_iter().next().map(|r| r.0))
+                    .and_then(|f| {
+                        self.evaluator
+                            .evaluate(vec![f])
+                            .into_iter()
+                            .next()
+                            .map(|r| r.0)
+                    })
             })
             .flatten();
-        let unit_status =
-            crate::ai::search::unit_goals::reconcile_unit_goals(&view.state, pov, &goal, &mut self.unit_goals);
+        let unit_status = crate::ai::search::unit_goals::reconcile_unit_goals(
+            &view.state,
+            pov,
+            &goal,
+            &mut self.unit_goals,
+        );
         let (mut ranked, net_derived) = crate::ai::search::net_root::rank_view_net_or_cpu(
             &mut view,
             pov,
@@ -1838,7 +2353,8 @@ impl<'a> MacroMctsAgent<'a> {
                 game.state.settings.turn,
                 micro_params.c_puct,
             );
-            let star_gate = crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
+            let star_gate =
+                crate::ai::oracle_macro::tech_discipline_active(&view.state, pov, &goal);
             let aux = crate::ai::search::goal_aux::compute_goal_aux(
                 &view.state,
                 pov,
@@ -1847,18 +2363,19 @@ impl<'a> MacroMctsAgent<'a> {
                 self.counters.tier3_bought,
                 Some(&self.lane_state),
             );
-            let (pick, next_carry, picked_q, child_trace, visit_dist) = crate::ai::search::micro_mcts::micro_search_pick(
-                &view,
-                pov,
-                &goal,
-                &ranked,
-                &aux,
-                star_gate,
-                self.evaluator,
-                &micro_params,
-                self.micro_carry.take(),
-                net_derived,
-            );
+            let (pick, next_carry, picked_q, child_trace, visit_dist) =
+                crate::ai::search::micro_mcts::micro_search_pick(
+                    &view,
+                    pov,
+                    &goal,
+                    &ranked,
+                    &aux,
+                    star_gate,
+                    self.evaluator,
+                    &micro_params,
+                    self.micro_carry.take(),
+                    net_derived,
+                );
             self.last_micro_root_q = picked_q;
             self.last_micro_visits = visit_dist;
             micro_child_trace = child_trace;
@@ -1921,7 +2438,16 @@ impl<'a> MacroMctsAgent<'a> {
             self.micro_carry = pending_micro_carry
                 .filter(|(key, _)| *key == m.serialize())
                 .map(|(_, carry)| carry);
-            dump_ply_decision(path, turn, pov, &goal, candidates, unit_goals_trace, m.as_ref(), &micro_child_trace);
+            dump_ply_decision(
+                path,
+                turn,
+                pov,
+                &goal,
+                candidates,
+                unit_goals_trace,
+                m.as_ref(),
+                &micro_child_trace,
+            );
             self.counters.count(m.as_ref());
             return Some(m);
         }
@@ -1945,12 +2471,28 @@ mod tests {
         game.state = crate::mapgen::generate(crate::mapgen::MapGenSettings {
             size: crate::types::MapSize::Tiny,
             map_type: crate::types::MapType::Drylands,
-            tribes: vec![crate::types::TribeType::Imperius, crate::types::TribeType::Bardur],
+            tribes: vec![
+                crate::types::TribeType::Imperius,
+                crate::types::TribeType::Bardur,
+            ],
             seed,
             version: 115,
         });
         game.post_load();
         game
+    }
+
+    #[test]
+    fn particle_mean_prices_a_rare_payoff_by_its_frequency() {
+        let means = mean_particle_q(&[
+            vec![Some(1.0), Some(0.3)],
+            vec![Some(0.0), Some(0.3)],
+            vec![Some(0.0), Some(0.3)],
+            vec![Some(0.0), Some(0.3)],
+            vec![Some(0.0), Some(0.3)],
+        ]);
+        assert!((means[0].unwrap() - 0.2).abs() < 1e-6);
+        assert_eq!(best_particle_q(&means), 1);
     }
 
     /// EXP_ELO_036b: the negamax-with-edge-rewards backup, checked against a
@@ -1965,9 +2507,8 @@ mod tests {
         let root_turn = game.state.settings.turn;
         let params = MacroParams::default();
         let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-        let heur = |s: &crate::states::GameState, p: PlayerId, _t3: u32| {
-            crate::ai::evaluate_state(s, p)
-        };
+        let heur =
+            |s: &crate::states::GameState, p: PlayerId, _t3: u32| crate::ai::evaluate_state(s, p);
         let mk = |player: PlayerId, shape: f32, frozen: Option<f32>| {
             let mut n = Node::new(
                 game.clone(),
@@ -1978,6 +2519,8 @@ mod tests {
                 1,
                 None,
                 &heur,
+                None,
+                None,
             );
             n.candidates = vec![MacroGoal::default()];
             n.children = vec![None];
@@ -2010,13 +2553,378 @@ mod tests {
             search.nodes[1].children[0] = Some(2);
             search.nodes[2].children[0] = Some(3);
             search.simulate(0, root_turn, &params);
-            assert!((search.nodes[0].edge_values[0] - expect_root).abs() < 1e-6,
-                "root Q {} != {expect_root}", search.nodes[0].edge_values[0]);
-            assert!((search.nodes[1].edge_values[0] - expect_n1).abs() < 1e-6,
-                "n1 Q {} != {expect_n1}", search.nodes[1].edge_values[0]);
-            assert!((search.nodes[2].edge_values[0] - expect_n2).abs() < 1e-6,
-                "n2 Q {} != {expect_n2}", search.nodes[2].edge_values[0]);
+            assert!(
+                (search.nodes[0].edge_values[0] - expect_root).abs() < 1e-6,
+                "root Q {} != {expect_root}",
+                search.nodes[0].edge_values[0]
+            );
+            assert!(
+                (search.nodes[1].edge_values[0] - expect_n1).abs() < 1e-6,
+                "n1 Q {} != {expect_n1}",
+                search.nodes[1].edge_values[0]
+            );
+            assert!(
+                (search.nodes[2].edge_values[0] - expect_n2).abs() < 1e-6,
+                "n2 Q {} != {expect_n2}",
+                search.nodes[2].edge_values[0]
+            );
         }
+    }
+
+    /// EXP_ELO_170/171: `own_last_goal: Some` must add exactly one new
+    /// candidate (the re-offered goal), never more, never fewer.
+    #[test]
+    fn node_new_offers_continuation_when_own_last_goal_present() {
+        let game = generated_game(11);
+        let root_turn = game.state.settings.turn;
+        let heur =
+            |s: &crate::states::GameState, p: PlayerId, _t3: u32| crate::ai::evaluate_state(s, p);
+        let pov = game.state.settings.current_player_turn_id;
+        let without = Node::new(
+            game.clone(),
+            pov,
+            [TurnCounters::default(); 2],
+            Default::default(),
+            root_turn,
+            4,
+            None,
+            &heur,
+            None,
+            None,
+        );
+        let synthetic = MacroGoal {
+            orders: vec![(OrderKind::Attack, 999_999)],
+            stance: Stance::Arm,
+            save_target: None,
+            prepare: None,
+        };
+        assert!(
+            !without.candidates.contains(&synthetic),
+            "test setup: synthetic goal must be novel against the real ballot"
+        );
+        let with = Node::new(
+            game.clone(),
+            pov,
+            [TurnCounters::default(); 2],
+            Default::default(),
+            root_turn,
+            4,
+            None,
+            &heur,
+            Some(&synthetic),
+            None,
+        );
+        assert_eq!(with.candidates.len(), without.candidates.len() + 1);
+        assert!(with.candidates.contains(&synthetic));
+    }
+
+    /// `own_last_goal: None` must be a fully inert no-op -- two `None` calls
+    /// on the same state produce byte-identical candidate lists.
+    #[test]
+    fn node_new_continuation_absent_when_own_last_goal_none() {
+        let game = generated_game(11);
+        let root_turn = game.state.settings.turn;
+        let heur =
+            |s: &crate::states::GameState, p: PlayerId, _t3: u32| crate::ai::evaluate_state(s, p);
+        let pov = game.state.settings.current_player_turn_id;
+        let n1 = Node::new(
+            game.clone(),
+            pov,
+            [TurnCounters::default(); 2],
+            Default::default(),
+            root_turn,
+            4,
+            None,
+            &heur,
+            None,
+            None,
+        );
+        let n2 = Node::new(
+            game.clone(),
+            pov,
+            [TurnCounters::default(); 2],
+            Default::default(),
+            root_turn,
+            4,
+            None,
+            &heur,
+            None,
+            None,
+        );
+        assert_eq!(n1.candidates, n2.candidates);
+    }
+
+    /// Re-offering a goal already on the ballot must not duplicate it.
+    #[test]
+    fn node_new_continuation_dedupes_against_existing() {
+        let game = generated_game(11);
+        let root_turn = game.state.settings.turn;
+        let heur =
+            |s: &crate::states::GameState, p: PlayerId, _t3: u32| crate::ai::evaluate_state(s, p);
+        let pov = game.state.settings.current_player_turn_id;
+        let without = Node::new(
+            game.clone(),
+            pov,
+            [TurnCounters::default(); 2],
+            Default::default(),
+            root_turn,
+            4,
+            None,
+            &heur,
+            None,
+            None,
+        );
+        let dup = without.candidates[0].clone();
+        let with = Node::new(
+            game.clone(),
+            pov,
+            [TurnCounters::default(); 2],
+            Default::default(),
+            root_turn,
+            4,
+            None,
+            &heur,
+            Some(&dup),
+            None,
+        );
+        assert_eq!(
+            with.candidates.len(),
+            without.candidates.len(),
+            "re-offering an existing candidate must not duplicate it"
+        );
+    }
+
+    /// EXP_ELO_170/171 end-to-end: `MacroParams::default()` keeps
+    /// `tree_continuation` off, and a real 64-sim search with it off must
+    /// match a search built from the bare struct default exactly -- the
+    /// "off = byte-identical" contract every pre-existing test implicitly
+    /// relies on. Enabling it must visibly grow at least one node's own
+    /// candidate/edge count somewhere in the tree (cold start guarantees
+    /// every edge gets >=1 visit, so a real added candidate anywhere
+    /// strictly grows that node's total edge count).
+    #[test]
+    fn tree_continuation_default_off_is_byte_identical() {
+        let game = generated_game(11);
+        let root_turn = game.state.settings.turn;
+        let pov = game.state.settings.current_player_turn_id;
+        let view = game.clone_for_mcts(pov);
+        let base = compute_macro_goal(&view.state, pov, 0);
+        let cands = enumerate_candidates(&view.state, pov, base, TurnCounters::default(), 4);
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+
+        assert!(!MacroParams::default().tree_continuation);
+
+        let params_default = MacroParams {
+            k: 4,
+            sims: 64,
+            leaf: crate::ai::macro_agent::MacroLeaf::Heuristic,
+            ..MacroParams::default()
+        };
+        let total_edges = |params: &MacroParams| -> usize {
+            let mut total = 0;
+            let _ = MacroMctsSearch::run_with(
+                &view,
+                pov,
+                cands.clone(),
+                TurnCounters::default(),
+                &LaneState::default(),
+                params,
+                &evaluator,
+                |s| total = s.nodes.iter().map(|n| n.candidates.len()).sum(),
+            );
+            total
+        };
+        let off = total_edges(&params_default);
+        let explicit_off = total_edges(&MacroParams {
+            tree_continuation: false,
+            ..params_default
+        });
+        assert_eq!(
+            off, explicit_off,
+            "explicit false must match the struct default exactly"
+        );
+
+        let on = total_edges(&MacroParams {
+            tree_continuation: true,
+            ..params_default
+        });
+        assert!(
+            on > off,
+            "enabling tree_continuation should grow total candidate count somewhere in a real rollout (off={off}, on={on})"
+        );
+    }
+
+    #[test]
+    fn tree_belief_materialization_is_opt_in_and_branch_local() {
+        let game = generated_game(12);
+        let pov = game.state.settings.current_player_turn_id;
+        let own = game.state.tribes.get(&pov).unwrap().cities[0].idx;
+        let view = game.clone_for_mcts(pov);
+        let base = compute_macro_goal(&view.state, pov, 0);
+        let cands = enumerate_candidates(&view.state, pov, base, TurnCounters::default(), 4);
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+        let params = MacroParams {
+            sims: 16,
+            tree_belief_materialization: true,
+            ..MacroParams::default()
+        };
+        let belief = crate::ai::belief::BeliefState::new(11, 2, own, pov, other(pov));
+        let mut branch_nodes = 0usize;
+        let _ = MacroMctsSearch::run_with_branch_belief(
+            &view,
+            pov,
+            cands,
+            TurnCounters::default(),
+            &LaneState::default(),
+            &params,
+            &evaluator,
+            Some(belief),
+            |search| {
+                branch_nodes = search
+                    .nodes
+                    .iter()
+                    .filter(|node| node.branch_belief.is_some())
+                    .count();
+            },
+        );
+        assert!(
+            branch_nodes > 1,
+            "root and simulated children must retain a branch belief world"
+        );
+    }
+
+    #[test]
+    fn belief_particle_ensemble_splits_the_fixed_search_budget() {
+        let game = generated_game(12_005);
+        let pov = game.state.settings.current_player_turn_id;
+        let own = game.state.tribes.get(&pov).unwrap().cities[0].idx;
+        let view = game.clone_for_mcts(pov);
+        let base = compute_macro_goal(&view.state, pov, 0);
+        let candidates = enumerate_candidates(&view.state, pov, base, TurnCounters::default(), 4);
+        let params = MacroParams {
+            sims: 16,
+            tree_belief_materialization: true,
+            map_particles: 3,
+            ..MacroParams::default()
+        };
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+        let belief = crate::ai::belief::BeliefState::new(11, 2, own, pov, other(pov));
+        let (pick, stats) = MacroMctsSearch::run_with_belief_world(
+            &view,
+            pov,
+            candidates,
+            TurnCounters::default(),
+            &LaneState::default(),
+            &params,
+            &evaluator,
+            belief,
+        );
+        assert_eq!(stats.effective_map_particles, 3);
+        assert_eq!(stats.root_visits.iter().sum::<f32>(), 16.0);
+        assert!(pick < stats.root_candidates.len());
+    }
+
+    #[test]
+    fn branch_belief_promotes_only_synthetic_observations() {
+        let game = generated_game(12_003);
+        let pov = game.state.settings.current_player_turn_id;
+        let own = game.state.tribes.get(&pov).unwrap().cities[0].idx;
+        let mut view = game.clone_for_mcts(pov);
+        r#macro::belief::BranchBelief::sanitize_fog_view(&mut view.state, pov);
+        let mut branch = r#macro::belief::BranchBelief::new(
+            crate::ai::belief::BeliefState::new(11, 2, own, pov, other(pov)),
+            &view.state,
+        );
+        let support: Vec<i32> = branch
+            .capital_posterior()
+            .iter()
+            .map(|(idx, _)| *idx)
+            .filter(|idx| !view.state.tiles.get(idx).unwrap().explorers.contains(&pov))
+            .collect();
+        assert!(support.len() >= 3);
+        let target = *support.last().unwrap();
+        branch.force_particle_capital(target);
+
+        for &idx in support.iter().take(support.len() - 1) {
+            view.state.settings._sim_explored.entry(pov).or_default().insert(idx);
+        }
+        let (placed, observed) = branch.materialize_child(&mut view);
+        assert_eq!(observed.capital_refuted as usize, support.len() - 1);
+        assert!(!placed.capital, "a particle stays hidden until the branch reveals it");
+
+        view.state.settings._sim_explored.entry(pov).or_default().insert(target);
+        let (placed, observed) = branch.materialize_child(&mut view);
+        assert_eq!(placed.capital_idx, Some(target));
+        assert_eq!(observed.capital_confirmed, 1);
+        assert!(view.state.tiles.get(&target).unwrap().explorers.contains(&pov));
+    }
+
+    #[test]
+    fn branch_belief_sanitizer_removes_fogged_capital_and_climate() {
+        let game = generated_game(12_004);
+        let pov = game.state.settings.current_player_turn_id;
+        let mut view = game.clone_for_mcts(pov);
+        let fog = view
+            .state
+            .tiles
+            .iter()
+            .find(|(_, tile)| !tile.explorers.contains(&pov))
+            .map(|(idx, _)| idx)
+            .unwrap();
+        let tile = view.state.tiles.get_mut(&fog).unwrap();
+        tile.capital_of = other(pov);
+        tile.climate = 7;
+        r#macro::belief::BranchBelief::sanitize_fog_view(&mut view.state, pov);
+        let tile = view.state.tiles.get(&fog).unwrap();
+        assert_eq!(tile.capital_of, 0);
+        assert_eq!(tile.climate, 0);
+    }
+
+    #[test]
+    fn deep_node_uses_its_branch_belief_before_enumerating_candidates() {
+        let game = generated_game(12_003);
+        let pov = game.state.settings.current_player_turn_id;
+        let own = game.state.tribes.get(&pov).unwrap().cities[0].idx;
+        let mut view = game.clone_for_mcts(pov);
+        r#macro::belief::BranchBelief::sanitize_fog_view(&mut view.state, pov);
+        let branch = r#macro::belief::BranchBelief::new(
+            crate::ai::belief::BeliefState::new(11, 2, own, pov, other(pov)),
+            &view.state,
+        );
+        let root_turn = view.state.settings.turn;
+        let heur =
+            |s: &crate::states::GameState, p: PlayerId, _t3: u32| crate::ai::evaluate_state(s, p);
+        let plain = Node::new(
+            view.clone(),
+            pov,
+            [TurnCounters::default(); 2],
+            Default::default(),
+            root_turn,
+            6,
+            None,
+            &heur,
+            None,
+            None,
+        );
+        let belief_aware = Node::new(
+            view,
+            pov,
+            [TurnCounters::default(); 2],
+            Default::default(),
+            root_turn,
+            6,
+            None,
+            &heur,
+            None,
+            Some(branch),
+        );
+        assert!(
+            belief_aware
+                .candidates
+                .iter()
+                .any(|candidate| !plain.candidates.contains(candidate)),
+            "a branch-local posterior must introduce a deep-node directive"
+        );
     }
 
     /// EXP_ELO_036b w-dial (q-gap method): root q spread vs shaped-edge
@@ -2039,8 +2947,14 @@ mod tests {
                 }
                 let player = game.state.settings.current_player_turn_id;
                 let goal = compute_macro_goal(&game.state, player, 0);
-                if !macro_exec::execute_turn(&mut game, player, &goal, &mut lane_state, &mut counters, 1.0)
-                {
+                if !macro_exec::execute_turn(
+                    &mut game,
+                    player,
+                    &goal,
+                    &mut lane_state,
+                    &mut counters,
+                    1.0,
+                ) {
                     break;
                 }
             }
@@ -2066,8 +2980,7 @@ mod tests {
                 Some(&b),
             );
             let cands: Vec<MacroGoal> = tagged.iter().map(|(g, _)| g.clone()).collect();
-            let classes: Vec<String> =
-                tagged.iter().map(|(_, c)| format!("{c:?}")).collect();
+            let classes: Vec<String> = tagged.iter().map(|(_, c)| format!("{c:?}")).collect();
             for w in [0.0f32, 1e-4, 3e-4, 1e-3] {
                 let params = MacroParams {
                     k: 7,
@@ -2075,7 +2988,10 @@ mod tests {
                     shape_w: w,
                     ..MacroParams::default()
                 };
-                println!("  seed {seed} t{} w={w}: classes={classes:?}", view.state.settings.turn);
+                println!(
+                    "  seed {seed} t{} w={w}: classes={classes:?}",
+                    view.state.settings.turn
+                );
                 let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
                 let (pick, _) = MacroMctsSearch::run_probed(
                     &view,
@@ -2086,8 +3002,876 @@ mod tests {
                     &params,
                     &evaluator,
                 );
-                println!("    -> pick={pick} [{}]", classes.get(pick).cloned().unwrap_or_default());
+                println!(
+                    "    -> pick={pick} [{}]",
+                    classes.get(pick).cloned().unwrap_or_default()
+                );
             }
+        }
+    }
+
+    fn spread(v: &[f32]) -> f32 {
+        let hi = v.iter().cloned().fold(f32::MIN, f32::max);
+        let lo = v.iter().cloned().fold(f32::MAX, f32::min);
+        hi - lo
+    }
+
+    fn argmax(v: &[f32]) -> usize {
+        let mut best = 0;
+        for i in 1..v.len() {
+            if v[i] > v[best] {
+                best = i;
+            }
+        }
+        best
+    }
+
+    /// Competition ranking (ties get the average rank), 1-indexed.
+    fn ranks(values: &[f32]) -> Vec<f32> {
+        let n = values.len();
+        let mut idx: Vec<usize> = (0..n).collect();
+        idx.sort_by(|&a, &b| values[a].partial_cmp(&values[b]).unwrap());
+        let mut out = vec![0.0f32; n];
+        let mut i = 0;
+        while i < n {
+            let mut j = i;
+            while j + 1 < n && (values[idx[j + 1]] - values[idx[i]]).abs() < 1e-9 {
+                j += 1;
+            }
+            let avg_rank = ((i + j) as f32 / 2.0) + 1.0;
+            for &k in &idx[i..=j] {
+                out[k] = avg_rank;
+            }
+            i = j + 1;
+        }
+        out
+    }
+
+    /// `NaN` when either side has zero rank-variance (every candidate tied) --
+    /// undefined, not zero; callers must branch on `is_finite()`.
+    fn spearman(a: &[f32], b: &[f32]) -> f32 {
+        let n = a.len();
+        if n < 2 {
+            return f32::NAN;
+        }
+        let ra = ranks(a);
+        let rb = ranks(b);
+        let mean_a: f32 = ra.iter().sum::<f32>() / n as f32;
+        let mean_b: f32 = rb.iter().sum::<f32>() / n as f32;
+        let mut cov = 0.0f32;
+        let mut var_a = 0.0f32;
+        let mut var_b = 0.0f32;
+        for i in 0..n {
+            let da = ra[i] - mean_a;
+            let db = rb[i] - mean_b;
+            cov += da * db;
+            var_a += da * da;
+            var_b += db * db;
+        }
+        if var_a <= 1e-9 || var_b <= 1e-9 {
+            return f32::NAN;
+        }
+        cov / (var_a.sqrt() * var_b.sqrt())
+    }
+
+    /// EXP_ELO_167: does `evaluate_state_v2` actually reorder root candidates
+    /// differently from `evaluate_state`, or does EXP_ELO_166's flat arena
+    /// result trace to a discrimination ceiling -- siblings that differ by
+    /// one turn's directive read as near-identical under both evaluators, so
+    /// no leaf rewrite of this shape can move the tree's pick? Pure dump, no
+    /// training, no arena run: layer (a) evaluates each candidate's one-turn
+    /// successor state directly (no search at all); layer (b) reads the same
+    /// comparison after a full 64-sim search at EXP_ELO_166's own config
+    /// (shape_w=0, root_prior_w=0 -- `MacroParams::default()`). A separate
+    /// shape_w=1 pass reads `Node::edge_shape` (deterministic, set once per
+    /// edge -- see `expand_execute`) to size Δφ against the leaf-driven
+    /// spread. See `hypothesis_driven_improvements.md` for the registered
+    /// entry and decision rule.
+    ///
+    /// Run manually:
+    ///   cargo test --lib ai::macro_mcts -- --ignored leaf_v2_discrimination_probe --nocapture
+    #[test]
+    #[ignore]
+    fn leaf_v2_discrimination_probe() {
+        use crate::ai::evaluator::oracle_v2::eco_potential;
+
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+        let seeds: [i64; 20] = [
+            201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217,
+            218, 219, 220,
+        ];
+        let checkpoint_turns: [i32; 5] = [5, 10, 15, 20, 25];
+
+        let mut n_states = 0usize;
+        let mut n_skipped_lt2_cands = 0usize;
+
+        let mut spearman_a = Vec::new();
+        let mut top1_agree_a = 0usize;
+        let mut exact_agree_a = 0usize;
+        let mut degenerate_v1_a = 0usize;
+        let mut eco_spreads = Vec::new();
+        let mut v1_spreads_a = Vec::new();
+        let mut v2_spreads_a = Vec::new();
+
+        let mut spearman_b = Vec::new();
+        let mut top1_agree_b = 0usize;
+        let mut exact_agree_b = 0usize;
+        let mut q_spreads_b = Vec::new();
+        let mut max_depths = Vec::new();
+
+        let mut shape_spreads = Vec::new();
+
+        for &seed in &seeds {
+            let mut game = generated_game(seed);
+            let mut lane_state = LaneState::default();
+            let mut counters = TurnCounters::default();
+            let mut sampled_turns: std::collections::HashSet<i32> = Default::default();
+            for _ in 0..80 {
+                if game.state.settings._game_over {
+                    break;
+                }
+                let turn = game.state.settings.turn;
+                let player = game.state.settings.current_player_turn_id;
+
+                if checkpoint_turns.contains(&turn) && sampled_turns.insert(turn) {
+                    let pov = player;
+                    let view = game.clone_for_mcts(pov);
+                    let base = compute_macro_goal(&view.state, pov, 0);
+                    let cands =
+                        enumerate_candidates(&view.state, pov, base, TurnCounters::default(), 4);
+
+                    if cands.len() < 2 {
+                        n_skipped_lt2_cands += 1;
+                    } else {
+                        n_states += 1;
+
+                        // Layer (a): one ply per candidate, no search.
+                        let mut v1a = Vec::new();
+                        let mut v2a = Vec::new();
+                        let mut ecoa = Vec::new();
+                        for cand in &cands {
+                            let mut sim = view.clone();
+                            let mut ls = LaneState::default();
+                            let mut ct = TurnCounters::default();
+                            if macro_exec::execute_turn(&mut sim, pov, cand, &mut ls, &mut ct, 1.0)
+                            {
+                                v1a.push(crate::ai::evaluate_state(&sim.state, pov));
+                                v2a.push(crate::ai::evaluate_state_v2(&sim.state, pov));
+                                ecoa.push(eco_potential(&sim.state, pov));
+                            }
+                        }
+                        if v1a.len() >= 2 {
+                            let rho = spearman(&v1a, &v2a);
+                            if rho.is_finite() {
+                                spearman_a.push(rho);
+                            } else {
+                                degenerate_v1_a += 1;
+                            }
+                            if argmax(&v1a) == argmax(&v2a) {
+                                top1_agree_a += 1;
+                            }
+                            if ranks(&v1a) == ranks(&v2a) {
+                                exact_agree_a += 1;
+                            }
+                            eco_spreads.push(spread(&ecoa));
+                            v1_spreads_a.push(spread(&v1a));
+                            v2_spreads_a.push(spread(&v2a));
+                        }
+
+                        // Layer (b): full 64-sim search, EXP_ELO_166's own
+                        // config (shape_w=0, root_prior_w=0).
+                        let mut qb: [Vec<f32>; 2] = [Vec::new(), Vec::new()];
+                        for (li, leaf) in [MacroLeaf::Heuristic, MacroLeaf::HeuristicV2]
+                            .into_iter()
+                            .enumerate()
+                        {
+                            let params = MacroParams {
+                                k: 4,
+                                sims: 64,
+                                shape_w: 0.0,
+                                leaf,
+                                ..MacroParams::default()
+                            };
+                            let mut per_edge = Vec::new();
+                            let (_pick, stats) = MacroMctsSearch::run_with(
+                                &view,
+                                pov,
+                                cands.clone(),
+                                TurnCounters::default(),
+                                &LaneState::default(),
+                                &params,
+                                &evaluator,
+                                |s| {
+                                    let root = &s.nodes[0];
+                                    for i in 0..root.candidates.len() {
+                                        let q = if root.edge_visits[i] > 0.0 {
+                                            root.edge_values[i] / root.edge_visits[i]
+                                        } else {
+                                            f32::NAN
+                                        };
+                                        per_edge.push(q);
+                                    }
+                                },
+                            );
+                            max_depths.push(stats.max_depth);
+                            qb[li] = per_edge;
+                        }
+                        if qb[0].len() >= 2
+                            && qb[0].iter().all(|v| v.is_finite())
+                            && qb[1].iter().all(|v| v.is_finite())
+                        {
+                            let rho = spearman(&qb[0], &qb[1]);
+                            if rho.is_finite() {
+                                spearman_b.push(rho);
+                            }
+                            if argmax(&qb[0]) == argmax(&qb[1]) {
+                                top1_agree_b += 1;
+                            }
+                            if ranks(&qb[0]) == ranks(&qb[1]) {
+                                exact_agree_b += 1;
+                            }
+                            q_spreads_b.push(spread(&qb[0]));
+                            q_spreads_b.push(spread(&qb[1]));
+                        }
+
+                        // Diagnostic #2: Δφ spread at shape_w=1 (production
+                        // GOAL_W_TREE), leaf-independent.
+                        {
+                            let params = MacroParams {
+                                k: 4,
+                                sims: 64,
+                                shape_w: 1.0,
+                                leaf: MacroLeaf::Heuristic,
+                                ..MacroParams::default()
+                            };
+                            let mut shapes = Vec::new();
+                            let _ = MacroMctsSearch::run_with(
+                                &view,
+                                pov,
+                                cands.clone(),
+                                TurnCounters::default(),
+                                &LaneState::default(),
+                                &params,
+                                &evaluator,
+                                |s| {
+                                    let root = &s.nodes[0];
+                                    shapes.extend_from_slice(&root.edge_shape);
+                                },
+                            );
+                            shape_spreads.push(spread(&shapes));
+                        }
+                    }
+                }
+
+                let goal = compute_macro_goal(&game.state, player, 0);
+                if !macro_exec::execute_turn(
+                    &mut game,
+                    player,
+                    &goal,
+                    &mut lane_state,
+                    &mut counters,
+                    1.0,
+                ) {
+                    break;
+                }
+            }
+        }
+
+        fn mean(v: &[f32]) -> f32 {
+            if v.is_empty() {
+                f32::NAN
+            } else {
+                v.iter().sum::<f32>() / v.len() as f32
+            }
+        }
+        fn median(v: &[f32]) -> f32 {
+            if v.is_empty() {
+                return f32::NAN;
+            }
+            let mut s = v.to_vec();
+            s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            s[s.len() / 2]
+        }
+
+        println!("=== EXP_ELO_167 leaf discrimination probe ===");
+        println!("states sampled: {n_states} (skipped <2 candidates: {n_skipped_lt2_cands})");
+        println!(
+            "layer (a) direct, no search -- n={}, degenerate v1 (zero rank-variance): {}",
+            spearman_a.len() + degenerate_v1_a,
+            degenerate_v1_a
+        );
+        println!(
+            "  spearman(v1,v2): mean={:.4} median={:.4}",
+            mean(&spearman_a),
+            median(&spearman_a)
+        );
+        println!(
+            "  top-1 agreement: {}/{} ({:.1}%)  exact-ordering agreement: {}/{} ({:.1}%)",
+            top1_agree_a,
+            n_states,
+            100.0 * top1_agree_a as f32 / n_states.max(1) as f32,
+            exact_agree_a,
+            n_states,
+            100.0 * exact_agree_a as f32 / n_states.max(1) as f32
+        );
+        println!(
+            "  sibling spread (max-min): v1={:.5} v2={:.5} eco_potential={:.5} (mean across states)",
+            mean(&v1_spreads_a),
+            mean(&v2_spreads_a),
+            mean(&eco_spreads)
+        );
+
+        println!(
+            "layer (b) after 64-sim search, shape_w=0 -- n={}",
+            spearman_b.len()
+        );
+        println!(
+            "  spearman(v1,v2) backed-up Q: mean={:.4} median={:.4}",
+            mean(&spearman_b),
+            median(&spearman_b)
+        );
+        println!(
+            "  top-1 agreement: {}/{} ({:.1}%)  exact-ordering agreement: {}/{} ({:.1}%)",
+            top1_agree_b,
+            n_states,
+            100.0 * top1_agree_b as f32 / n_states.max(1) as f32,
+            exact_agree_b,
+            n_states,
+            100.0 * exact_agree_b as f32 / n_states.max(1) as f32
+        );
+        println!(
+            "  backed-up Q spread (max-min), mean across (state,leaf): {:.5}",
+            mean(&q_spreads_b)
+        );
+        println!(
+            "  max_depth reached: mean={:.2} median={:.2}",
+            mean(&max_depths.iter().map(|&d| d as f32).collect::<Vec<_>>()),
+            median(&max_depths.iter().map(|&d| d as f32).collect::<Vec<_>>())
+        );
+
+        println!(
+            "diagnostic #2: Δφ spread at shape_w=1, mean across states = {:.5}  (vs layer-b Q spread mean = {:.5})",
+            mean(&shape_spreads),
+            mean(&q_spreads_b)
+        );
+    }
+
+    /// EXP_ELO_167 follow-up (Verdi's "double click" on why siblings tie):
+    /// are root candidates mostly stance-only relabelings of the SAME
+    /// `orders` (per `enumerate_candidates_with_belief`'s own construction --
+    /// the Grow/Arm/Save variants clone `base.orders` verbatim, only
+    /// `prepare`/belief-conditioned candidates ever add a different order),
+    /// or genuinely different target-tile plans? Classifies every root
+    /// candidate PAIR by whether their (sorted) `orders` are identical, then
+    /// reports v1's tie rate separately for same-orders pairs vs
+    /// different-orders pairs -- no search, direct one-ply evaluation only
+    /// (same layer-(a) methodology as `leaf_v2_discrimination_probe`, which
+    /// that entry's own correction confirmed is unaffected by the
+    /// `Evaluator::Dummy` caveat). See `hypothesis_driven_improvements.md`.
+    ///
+    /// Run manually:
+    ///   cargo test --lib ai::macro_mcts -- --ignored root_candidate_orthogonality_probe --nocapture
+    #[test]
+    #[ignore]
+    fn root_candidate_orthogonality_probe() {
+        let seeds: [i64; 20] = [
+            201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217,
+            218, 219, 220,
+        ];
+        let checkpoint_turns: [i32; 5] = [5, 10, 15, 20, 25];
+        const TIE_EPS: f32 = 1e-6;
+
+        let mut n_states = 0usize;
+        let mut same_orders_candidates = 0usize; // candidates whose orders == base's
+        let mut diff_orders_candidates = 0usize;
+        let mut total_candidates = 0usize;
+
+        let mut same_pairs = 0usize;
+        let mut same_pairs_tied = 0usize;
+        let mut diff_pairs = 0usize;
+        let mut diff_pairs_tied = 0usize;
+        let mut diff_pair_gaps: Vec<f32> = Vec::new(); // |Δv1| for different-orders pairs only
+
+        for &seed in &seeds {
+            let mut game = generated_game(seed);
+            let mut lane_state = LaneState::default();
+            let mut counters = TurnCounters::default();
+            let mut sampled_turns: std::collections::HashSet<i32> = Default::default();
+            for _ in 0..80 {
+                if game.state.settings._game_over {
+                    break;
+                }
+                let turn = game.state.settings.turn;
+                let player = game.state.settings.current_player_turn_id;
+
+                if checkpoint_turns.contains(&turn) && sampled_turns.insert(turn) {
+                    let pov = player;
+                    let view = game.clone_for_mcts(pov);
+                    let base = compute_macro_goal(&view.state, pov, 0);
+                    let mut base_orders = base.orders.clone();
+                    base_orders.sort();
+                    let cands =
+                        enumerate_candidates(&view.state, pov, base, TurnCounters::default(), 6);
+
+                    if cands.len() >= 2 {
+                        n_states += 1;
+                        total_candidates += cands.len();
+
+                        if n_states <= 3 {
+                            println!(
+                                "--- example state {n_states}: seed {seed} turn {turn} pov {pov} ---"
+                            );
+                            println!(
+                                "  base: stance={:?} orders={:?}",
+                                cands[0].stance, cands[0].orders
+                            );
+                            for (i, c) in cands.iter().enumerate().skip(1) {
+                                println!(
+                                    "  cand[{i}]: stance={:?} orders={:?}",
+                                    c.stance, c.orders
+                                );
+                            }
+                        }
+
+                        let mut orders_v1: Vec<(Vec<(OrderKind, i32)>, f32)> = Vec::new();
+                        for cand in &cands {
+                            let mut ord = cand.orders.clone();
+                            ord.sort();
+                            if ord == base_orders {
+                                same_orders_candidates += 1;
+                            } else {
+                                diff_orders_candidates += 1;
+                            }
+                            let mut sim = view.clone();
+                            let mut ls = LaneState::default();
+                            let mut ct = TurnCounters::default();
+                            if macro_exec::execute_turn(&mut sim, pov, cand, &mut ls, &mut ct, 1.0)
+                            {
+                                let v1 = crate::ai::evaluate_state(&sim.state, pov);
+                                orders_v1.push((ord, v1));
+                            }
+                        }
+
+                        for i in 0..orders_v1.len() {
+                            for j in (i + 1)..orders_v1.len() {
+                                let gap = (orders_v1[i].1 - orders_v1[j].1).abs();
+                                if orders_v1[i].0 == orders_v1[j].0 {
+                                    same_pairs += 1;
+                                    if gap < TIE_EPS {
+                                        same_pairs_tied += 1;
+                                    }
+                                } else {
+                                    diff_pairs += 1;
+                                    diff_pair_gaps.push(gap);
+                                    if gap < TIE_EPS {
+                                        diff_pairs_tied += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let goal = compute_macro_goal(&game.state, player, 0);
+                if !macro_exec::execute_turn(
+                    &mut game,
+                    player,
+                    &goal,
+                    &mut lane_state,
+                    &mut counters,
+                    1.0,
+                ) {
+                    break;
+                }
+            }
+        }
+
+        fn mean(v: &[f32]) -> f32 {
+            if v.is_empty() {
+                f32::NAN
+            } else {
+                v.iter().sum::<f32>() / v.len() as f32
+            }
+        }
+        fn median(v: &[f32]) -> f32 {
+            if v.is_empty() {
+                return f32::NAN;
+            }
+            let mut s = v.to_vec();
+            s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            s[s.len() / 2]
+        }
+
+        println!("=== root candidate orthogonality probe ===");
+        println!(
+            "states sampled: {n_states}, total candidates: {total_candidates} (avg {:.2}/state)",
+            total_candidates as f32 / n_states.max(1) as f32
+        );
+        println!(
+            "candidates with orders == base's orders (stance-only relabel): {same_orders_candidates}/{total_candidates} ({:.1}%)",
+            100.0 * same_orders_candidates as f32 / total_candidates.max(1) as f32
+        );
+        println!(
+            "candidates with genuinely different orders: {diff_orders_candidates}/{total_candidates} ({:.1}%)",
+            100.0 * diff_orders_candidates as f32 / total_candidates.max(1) as f32
+        );
+        println!(
+            "same-orders pairs (stance-only vs stance-only or vs base): {same_pairs}, tied (|Δv1|<{TIE_EPS}): {same_pairs_tied} ({:.1}%)",
+            100.0 * same_pairs_tied as f32 / same_pairs.max(1) as f32
+        );
+        println!(
+            "different-orders pairs (genuinely different plans): {diff_pairs}, tied (|Δv1|<{TIE_EPS}): {diff_pairs_tied} ({:.1}%)",
+            100.0 * diff_pairs_tied as f32 / diff_pairs.max(1) as f32
+        );
+        println!(
+            "different-orders pair |Δv1|: mean={:.5} median={:.5}",
+            mean(&diff_pair_gaps),
+            median(&diff_pair_gaps)
+        );
+    }
+
+    /// EXP_ELO_168 follow-up (Verdi, in chat): (a) for same-orders (stance-
+    /// only) pairs that tie at one ply, are the underlying resulting states
+    /// actually IDENTICAL (stance had literally nothing to bite on this
+    /// turn) or just coincidentally evaluator-equal? (b) does that tie rate
+    /// survive going 2 full rounds deep -- matching 167's own measured
+    /// search depth (max_depth mean 3.33/median 4 turn-boundaries) -- or
+    /// does the divergence show up once the opponent responds and the root
+    /// player gets a second turn? Opponent response and the root's own
+    /// second turn both use the SAME scripted default goal in every
+    /// candidate's branch, so any divergence between branches is
+    /// attributable only to the root candidate's own first-turn choice, not
+    /// to extra branching. No search, no evaluator dependency (same
+    /// deterministic `macro_exec::execute_turn` path as layer (a)).
+    ///
+    /// Run manually:
+    ///   cargo test --lib ai::macro_mcts -- --ignored same_orders_tie_persistence_probe --nocapture
+    #[test]
+    #[ignore]
+    fn same_orders_tie_persistence_probe() {
+        let seeds: [i64; 20] = [
+            201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217,
+            218, 219, 220,
+        ];
+        let checkpoint_turns: [i32; 5] = [5, 10, 15, 20, 25];
+        const TIE_EPS: f32 = 1e-6;
+
+        let mut same_pairs_1ply = 0usize;
+        let mut same_pairs_1ply_tied = 0usize;
+        let mut same_pairs_1ply_tied_identical_state = 0usize; // stars/units/cities all match too
+
+        let mut same_pairs_4deep = 0usize;
+        let mut same_pairs_4deep_tied = 0usize;
+        let mut same_pair_4deep_gaps: Vec<f32> = Vec::new();
+
+        for &seed in &seeds {
+            let mut game = generated_game(seed);
+            let mut lane_state = LaneState::default();
+            let mut counters = TurnCounters::default();
+            let mut sampled_turns: std::collections::HashSet<i32> = Default::default();
+            for _ in 0..80 {
+                if game.state.settings._game_over {
+                    break;
+                }
+                let turn = game.state.settings.turn;
+                let player = game.state.settings.current_player_turn_id;
+
+                if checkpoint_turns.contains(&turn) && sampled_turns.insert(turn) {
+                    let pov = player;
+                    let view = game.clone_for_mcts(pov);
+                    let base = compute_macro_goal(&view.state, pov, 0);
+                    let mut base_orders = base.orders.clone();
+                    base_orders.sort();
+                    let cands =
+                        enumerate_candidates(&view.state, pov, base, TurnCounters::default(), 6);
+
+                    // Same-orders candidates only (stance-only relabels of the base).
+                    let same_orders_cands: Vec<&MacroGoal> = cands
+                        .iter()
+                        .filter(|c| {
+                            let mut o = c.orders.clone();
+                            o.sort();
+                            o == base_orders
+                        })
+                        .collect();
+
+                    if same_orders_cands.len() >= 2 {
+                        // One ply (layer a, as before) + state fingerprint.
+                        let mut one_ply: Vec<(f32, i32, usize, usize)> = Vec::new(); // (v1, stars, units, cities)
+                        for cand in &same_orders_cands {
+                            let mut sim = view.clone();
+                            let mut ls = LaneState::default();
+                            let mut ct = TurnCounters::default();
+                            if macro_exec::execute_turn(&mut sim, pov, cand, &mut ls, &mut ct, 1.0)
+                            {
+                                let v1 = crate::ai::evaluate_state(&sim.state, pov);
+                                let t = sim.state.tribes.get(&pov);
+                                let stars = t.map(|t| t.stars).unwrap_or(-1);
+                                let units = t.map(|t| t.units.len()).unwrap_or(0);
+                                let cities = t.map(|t| t.cities.len()).unwrap_or(0);
+                                one_ply.push((v1, stars, units, cities));
+                            }
+                        }
+                        for i in 0..one_ply.len() {
+                            for j in (i + 1)..one_ply.len() {
+                                same_pairs_1ply += 1;
+                                let (v1i, si, ui, ci) = one_ply[i];
+                                let (v1j, sj, uj, cj) = one_ply[j];
+                                if (v1i - v1j).abs() < TIE_EPS {
+                                    same_pairs_1ply_tied += 1;
+                                    if si == sj && ui == uj && ci == cj {
+                                        same_pairs_1ply_tied_identical_state += 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        // 4 turn-boundaries deep: candidate turn -> opponent
+                        // response -> root's own 2nd turn -> opponent's 2nd
+                        // response, opponent/2nd-turn always scripted-default.
+                        let opp = other(pov);
+                        let mut deep_v1: Vec<f32> = Vec::new();
+                        for cand in &same_orders_cands {
+                            let mut sim = view.clone();
+                            let mut ls = LaneState::default();
+                            let mut ct = TurnCounters::default();
+                            let mut ok = macro_exec::execute_turn(
+                                &mut sim, pov, cand, &mut ls, &mut ct, 1.0,
+                            );
+                            if ok && !sim.state.settings._game_over {
+                                let og = compute_macro_goal(&sim.state, opp, 0);
+                                let mut ols = LaneState::default();
+                                let mut oct = TurnCounters::default();
+                                ok = macro_exec::execute_turn(
+                                    &mut sim, opp, &og, &mut ols, &mut oct, 1.0,
+                                );
+                            }
+                            if ok && !sim.state.settings._game_over {
+                                let g2 = compute_macro_goal(&sim.state, pov, ct.tier3_bought);
+                                ok = macro_exec::execute_turn(
+                                    &mut sim, pov, &g2, &mut ls, &mut ct, 1.0,
+                                );
+                            }
+                            if ok && !sim.state.settings._game_over {
+                                let og2 = compute_macro_goal(&sim.state, opp, 0);
+                                let mut ols2 = LaneState::default();
+                                let mut oct2 = TurnCounters::default();
+                                ok = macro_exec::execute_turn(
+                                    &mut sim, opp, &og2, &mut ols2, &mut oct2, 1.0,
+                                );
+                            }
+                            if ok {
+                                deep_v1.push(crate::ai::evaluate_state(&sim.state, pov));
+                            }
+                        }
+                        for i in 0..deep_v1.len() {
+                            for j in (i + 1)..deep_v1.len() {
+                                same_pairs_4deep += 1;
+                                let gap = (deep_v1[i] - deep_v1[j]).abs();
+                                same_pair_4deep_gaps.push(gap);
+                                if gap < TIE_EPS {
+                                    same_pairs_4deep_tied += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let goal = compute_macro_goal(&game.state, player, 0);
+                if !macro_exec::execute_turn(
+                    &mut game,
+                    player,
+                    &goal,
+                    &mut lane_state,
+                    &mut counters,
+                    1.0,
+                ) {
+                    break;
+                }
+            }
+        }
+
+        fn mean(v: &[f32]) -> f32 {
+            if v.is_empty() {
+                f32::NAN
+            } else {
+                v.iter().sum::<f32>() / v.len() as f32
+            }
+        }
+        fn median(v: &[f32]) -> f32 {
+            if v.is_empty() {
+                return f32::NAN;
+            }
+            let mut s = v.to_vec();
+            s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            s[s.len() / 2]
+        }
+
+        println!("=== same-orders tie persistence probe ===");
+        println!(
+            "1-ply: {same_pairs_1ply} same-orders pairs, tied={same_pairs_1ply_tied} ({:.1}%), of those ALSO stars/units/cities-identical={same_pairs_1ply_tied_identical_state} ({:.1}% of tied)",
+            100.0 * same_pairs_1ply_tied as f32 / same_pairs_1ply.max(1) as f32,
+            100.0 * same_pairs_1ply_tied_identical_state as f32
+                / same_pairs_1ply_tied.max(1) as f32
+        );
+        println!(
+            "4-turn-boundaries deep (2 full rounds): {same_pairs_4deep} same-orders pairs, tied={same_pairs_4deep_tied} ({:.1}%)",
+            100.0 * same_pairs_4deep_tied as f32 / same_pairs_4deep.max(1) as f32
+        );
+        println!(
+            "4-deep |Δv1|: mean={:.5} median={:.5}",
+            mean(&same_pair_4deep_gaps),
+            median(&same_pair_4deep_gaps)
+        );
+    }
+
+    /// EXP_ELO_169 follow-up (Verdi, in chat): does going a 3rd full round
+    /// deep (6 turn-boundaries) -- still same-scripted-opponent methodology,
+    /// same caveat as 169 (opponent reacts to each branch's OWN state via a
+    /// fresh `compute_macro_goal` call, but it's one deterministic pick, not
+    /// real adversarial search) -- show the tie rate "definitively" resolve?
+    /// Tracks the SAME same-orders candidate pairs across one continuous
+    /// trajectory, reading the tie status at 1 ply, 2, 4, 6, and 8
+    /// turn-boundaries (8 = `TURN_DEPTH_CAP`, the real ceiling this backend
+    /// ever freezes a leaf at), instead of three separate re-simulated
+    /// depths, so the trend is directly comparable point to point.
+    ///
+    /// Run manually:
+    ///   cargo test --lib ai::macro_mcts -- --ignored same_orders_tie_depth_sweep_probe --nocapture
+    #[test]
+    #[ignore]
+    fn same_orders_tie_depth_sweep_probe() {
+        let seeds: [i64; 20] = [
+            201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217,
+            218, 219, 220,
+        ];
+        let checkpoint_turns: [i32; 5] = [5, 10, 15, 20, 25];
+        const TIE_EPS: f32 = 1e-6;
+        const READ_AT: [usize; 5] = [1, 2, 4, 6, 8]; // turn-boundaries
+
+        // Per read-depth: (pairs, tied, gaps).
+        let mut pairs = [0usize; 5];
+        let mut tied = [0usize; 5];
+        let mut gaps: [Vec<f32>; 5] = Default::default();
+
+        for &seed in &seeds {
+            let mut game = generated_game(seed);
+            let mut lane_state = LaneState::default();
+            let mut counters = TurnCounters::default();
+            let mut sampled_turns: std::collections::HashSet<i32> = Default::default();
+            for _ in 0..80 {
+                if game.state.settings._game_over {
+                    break;
+                }
+                let turn = game.state.settings.turn;
+                let player = game.state.settings.current_player_turn_id;
+
+                if checkpoint_turns.contains(&turn) && sampled_turns.insert(turn) {
+                    let pov = player;
+                    let view = game.clone_for_mcts(pov);
+                    let base = compute_macro_goal(&view.state, pov, 0);
+                    let mut base_orders = base.orders.clone();
+                    base_orders.sort();
+                    let cands =
+                        enumerate_candidates(&view.state, pov, base, TurnCounters::default(), 6);
+                    let same_orders_cands: Vec<&MacroGoal> = cands
+                        .iter()
+                        .filter(|c| {
+                            let mut o = c.orders.clone();
+                            o.sort();
+                            o == base_orders
+                        })
+                        .collect();
+
+                    if same_orders_cands.len() >= 2 {
+                        let opp = other(pov);
+                        // v1_at[k] = per-candidate v1 read at READ_AT[k] boundaries.
+                        let mut v1_at: [Vec<f32>; 5] = Default::default();
+
+                        for cand in &same_orders_cands {
+                            let mut sim = view.clone();
+                            let mut ls = LaneState::default();
+                            let mut ct = TurnCounters::default();
+                            // boundary 1: the candidate's own turn.
+                            let mut alive = macro_exec::execute_turn(
+                                &mut sim, pov, cand, &mut ls, &mut ct, 1.0,
+                            );
+                            let mut boundary = 1usize;
+                            if let Some(k) = READ_AT.iter().position(|&r| r == boundary) {
+                                v1_at[k].push(crate::ai::evaluate_state(&sim.state, pov));
+                            }
+                            while alive && boundary < 8 && !sim.state.settings._game_over {
+                                let next_boundary = boundary + 1;
+                                // odd boundaries = pov's turn, even = opp's response
+                                // (boundary 1 was pov's, so boundary 2 is opp's next).
+                                let acting_is_pov = next_boundary % 2 == 1;
+                                if acting_is_pov {
+                                    let g = compute_macro_goal(&sim.state, pov, ct.tier3_bought);
+                                    alive = macro_exec::execute_turn(
+                                        &mut sim, pov, &g, &mut ls, &mut ct, 1.0,
+                                    );
+                                } else {
+                                    let g = compute_macro_goal(&sim.state, opp, 0);
+                                    let mut ols = LaneState::default();
+                                    let mut oct = TurnCounters::default();
+                                    alive = macro_exec::execute_turn(
+                                        &mut sim, opp, &g, &mut ols, &mut oct, 1.0,
+                                    );
+                                }
+                                boundary = next_boundary;
+                                if let Some(k) = READ_AT.iter().position(|&r| r == boundary) {
+                                    v1_at[k].push(crate::ai::evaluate_state(&sim.state, pov));
+                                }
+                            }
+                        }
+
+                        for (k, vs) in v1_at.iter().enumerate() {
+                            for i in 0..vs.len() {
+                                for j in (i + 1)..vs.len() {
+                                    pairs[k] += 1;
+                                    let gap = (vs[i] - vs[j]).abs();
+                                    gaps[k].push(gap);
+                                    if gap < TIE_EPS {
+                                        tied[k] += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let goal = compute_macro_goal(&game.state, player, 0);
+                if !macro_exec::execute_turn(
+                    &mut game,
+                    player,
+                    &goal,
+                    &mut lane_state,
+                    &mut counters,
+                    1.0,
+                ) {
+                    break;
+                }
+            }
+        }
+
+        fn mean(v: &[f32]) -> f32 {
+            if v.is_empty() {
+                f32::NAN
+            } else {
+                v.iter().sum::<f32>() / v.len() as f32
+            }
+        }
+
+        println!("=== same-orders tie depth sweep (TURN_DEPTH_CAP=8 is the real ceiling) ===");
+        for (k, &depth) in READ_AT.iter().enumerate() {
+            println!(
+                "  {depth} boundaries ({:.1} rounds): pairs={} tied={} ({:.1}%) mean|Δv1|={:.5}",
+                depth as f32 / 2.0,
+                pairs[k],
+                tied[k],
+                100.0 * tied[k] as f32 / pairs[k].max(1) as f32,
+                mean(&gaps[k])
+            );
         }
     }
 
@@ -2110,8 +3894,14 @@ mod tests {
                 let goal = compute_macro_goal(&sim.state, player, 0);
                 let mut lane_state = LaneState::default();
                 let mut counters = TurnCounters::default();
-                if !macro_exec::execute_turn(&mut sim, player, &goal, &mut lane_state, &mut counters, 1.0)
-                {
+                if !macro_exec::execute_turn(
+                    &mut sim,
+                    player,
+                    &goal,
+                    &mut lane_state,
+                    &mut counters,
+                    1.0,
+                ) {
                     break;
                 }
             }
@@ -2121,6 +3911,18 @@ mod tests {
     fn evaluate_asym(state: &GameState) -> f32 {
         (crate::ai::evaluate_state(state, 1) + crate::ai::evaluate_state(state, 2)).abs()
     }
+
+    // NOTE (Phase A of the value-target rework): `evaluate_gamestate` is
+    // NOT antisymmetric across an elimination -- the dead POV reads -1.0
+    // but the survivor reads their own absolute `evaluate_player` score,
+    // not +1.0. Confirmed this is not a fixable oversight but an inherent
+    // ambiguity: `GameState.tribes` missing an entry means "this player was
+    // eliminated" in a real 2-player game AND "no such player was ever
+    // created" in a single-tribe sandbox evaluation (see
+    // tests/preview_evaluator.rs, which depends on the latter reading and
+    // broke under an attempted fix that assumed the former). Not resolved
+    // here -- `evaluate_state_v2` inherits the identical structure and the
+    // identical limitation, so this is not a regression relative to v1.
 
     #[test]
     fn tree_goes_deeper_than_the_root() {
@@ -2138,7 +3940,10 @@ mod tests {
                 cands,
                 TurnCounters::default(),
                 &LaneState::default(),
-                &MacroParams { sims: 32, ..Default::default() },
+                &MacroParams {
+                    sims: 32,
+                    ..Default::default()
+                },
                 &evaluator,
             );
             assert!(
@@ -2146,7 +3951,11 @@ mod tests {
                 "seed {seed}: only {} nodes for k={k} at 32 sims — no second-level expansion",
                 stats.nodes
             );
-            assert!(stats.max_depth >= 2, "seed {seed}: max depth {} < 2", stats.max_depth);
+            assert!(
+                stats.max_depth >= 2,
+                "seed {seed}: max depth {} < 2",
+                stats.max_depth
+            );
         }
     }
 
@@ -2166,9 +3975,15 @@ mod tests {
             },
         );
         let m = agent.select_move(&mut game).unwrap();
-        let legal: Vec<String> =
-            game.legal_moves().iter().map(|x| x.serialize().to_string()).collect();
-        assert!(legal.contains(&m.serialize().to_string()), "net-leaf true-illegal move");
+        let legal: Vec<String> = game
+            .legal_moves()
+            .iter()
+            .map(|x| x.serialize().to_string())
+            .collect();
+        assert!(
+            legal.contains(&m.serialize().to_string()),
+            "net-leaf true-illegal move"
+        );
     }
 
     /// EXP_ELO_047: negamax negates a child's value to get the parent's, so a
@@ -2221,7 +4036,10 @@ mod tests {
             for _ in 0..2 {
                 let mut game = base.clone();
                 let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-                let params = MacroParams { sims: 8, ..Default::default() };
+                let params = MacroParams {
+                    sims: 8,
+                    ..Default::default()
+                };
                 let mut agent1 = MacroMctsAgent::new(&evaluator, params.clone());
                 let mut agent2 = MacroMctsAgent::new(&evaluator, params);
                 for _ in 0..40 {
@@ -2230,7 +4048,9 @@ mod tests {
                     }
                     let pid = game.state.settings.current_player_turn_id;
                     let agent = if pid == 1 { &mut agent1 } else { &mut agent2 };
-                    let Some(m) = agent.select_move(&mut game) else { break };
+                    let Some(m) = agent.select_move(&mut game) else {
+                        break;
+                    };
                     game.play_move(m.as_ref());
                 }
                 histories.push(game.state._history.clone());
@@ -2247,12 +4067,23 @@ mod tests {
         for seed in 0..2i64 {
             let mut game = generated_game(seed);
             let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
-            let mut agent =
-                MacroMctsAgent::new(&evaluator, MacroParams { sims: 16, ..Default::default() });
+            let mut agent = MacroMctsAgent::new(
+                &evaluator,
+                MacroParams {
+                    sims: 16,
+                    ..Default::default()
+                },
+            );
             let m = agent.select_move(&mut game).unwrap();
-            let legal: Vec<String> =
-                game.legal_moves().iter().map(|x| x.serialize().to_string()).collect();
-            assert!(legal.contains(&m.serialize().to_string()), "seed {seed}: true-illegal move");
+            let legal: Vec<String> = game
+                .legal_moves()
+                .iter()
+                .map(|x| x.serialize().to_string())
+                .collect();
+            assert!(
+                legal.contains(&m.serialize().to_string()),
+                "seed {seed}: true-illegal move"
+            );
         }
     }
 
@@ -2267,18 +4098,31 @@ mod tests {
         let mut game = generated_game(0);
         let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
         let mut brain = Brain::with_backend(&evaluator, 8, SearchBackend::MacroMcts)
-            .with_macro_params(MacroParams { sims: 5, leaf: MacroLeaf::Net, ..Default::default() });
+            .with_macro_params(MacroParams {
+                sims: 5,
+                leaf: MacroLeaf::Net,
+                ..Default::default()
+            });
         let (mv, _) = brain.think_decomposed(&game, 0);
         assert!(mv.is_some());
         // A net leaf reports a root value; the heuristic leaf must not (its Q
         // is an evaluate_state number and would train the head toward the
         // evaluator it exists to beat).
-        assert!(brain.last_root_value().is_some(), "net leaf must expose a root value");
+        assert!(
+            brain.last_root_value().is_some(),
+            "net leaf must expose a root value"
+        );
 
         let mut heur = Brain::with_backend(&evaluator, 8, SearchBackend::MacroMcts)
-            .with_macro_params(MacroParams { sims: 5, ..Default::default() });
+            .with_macro_params(MacroParams {
+                sims: 5,
+                ..Default::default()
+            });
         let _ = heur.think_decomposed(&game, 0);
-        assert!(heur.last_root_value().is_none(), "heuristic leaf must report no root value");
+        assert!(
+            heur.last_root_value().is_none(),
+            "heuristic leaf must report no root value"
+        );
         let _ = &mut game;
     }
 
@@ -2353,8 +4197,7 @@ mod tests {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(4);
-            let cands =
-                enumerate_candidates(&sim.state, pov, base, counters[seat(pov)], probe_k);
+            let cands = enumerate_candidates(&sim.state, pov, base, counters[seat(pov)], probe_k);
             let k = cands.len();
             let sims = std::env::var("PROBE_SIMS")
                 .ok()
@@ -2380,7 +4223,13 @@ mod tests {
                 cands,
                 counters[seat(pov)],
                 &lane_states[seat(pov)],
-                &MacroParams { sims, rollout_nn_w, rollout_nn_min_depth, k: probe_k, ..Default::default() },
+                &MacroParams {
+                    sims,
+                    rollout_nn_w,
+                    rollout_nn_min_depth,
+                    k: probe_k,
+                    ..Default::default()
+                },
                 &evaluator,
             );
             println!(
@@ -2419,12 +4268,14 @@ mod tests {
         let matching = MacroGoal {
             orders: vec![(OrderKind::Attack, 4)],
             stance: Stance::Arm,
-            save_target: None, prepare: None,
+            save_target: None,
+            prepare: None,
         };
         let mismatched = MacroGoal {
             orders: vec![(OrderKind::Defend, 0)],
             stance: Stance::Grow,
-            save_target: None, prepare: None,
+            save_target: None,
+            prepare: None,
         };
         let candidates = vec![matching, mismatched];
 
@@ -2449,7 +4300,11 @@ mod tests {
         let board = map_size * map_size;
         let stance_probs = vec![0.0f32; 4];
         let order_maps = vec![0.0f32; 3 * board];
-        let candidates = vec![MacroGoal::default(), MacroGoal::default(), MacroGoal::default()];
+        let candidates = vec![
+            MacroGoal::default(),
+            MacroGoal::default(),
+            MacroGoal::default(),
+        ];
         let prior = decode_macro_prior(&stance_probs, &order_maps, &candidates, map_size);
         for p in prior {
             assert!((p - 1.0 / 3.0).abs() < 1e-6, "expected ~1/3, got {p}");
@@ -2475,7 +4330,11 @@ mod tests {
 
         let candidate = net_proposed_candidate(&stance_probs, &order_maps, &existing, map_size)
             .expect("should synthesize a candidate");
-        assert_eq!(candidate.stance, Stance::Arm, "should adopt the net's top-1 stance");
+        assert_eq!(
+            candidate.stance,
+            Stance::Arm,
+            "should adopt the net's top-1 stance"
+        );
         assert_eq!(
             candidate.orders,
             vec![(OrderKind::Expand, 7)],
@@ -2494,7 +4353,12 @@ mod tests {
         stance_probs[Stance::Save as usize] = 0.9;
         stance_probs[Stance::Unlock as usize] = 0.5; // best of the eligible three
         let order_maps = vec![0.1f32; 3 * board];
-        let existing = vec![MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None, prepare: None }];
+        let existing = vec![MacroGoal {
+            orders: vec![],
+            stance: Stance::Grow,
+            save_target: None,
+            prepare: None,
+        }];
 
         let candidate = net_proposed_candidate(&stance_probs, &order_maps, &existing, map_size)
             .expect("should synthesize a candidate");
@@ -2531,7 +4395,8 @@ mod tests {
     }
 
     fn bare_node(game: &Game, root_turn: i32, candidates: usize) -> Node {
-        let heur = |s: &crate::states::GameState, p: PlayerId, _t3: u32| crate::ai::evaluate_state(s, p);
+        let heur =
+            |s: &crate::states::GameState, p: PlayerId, _t3: u32| crate::ai::evaluate_state(s, p);
         let mut n = Node::new(
             game.clone(),
             1,
@@ -2541,6 +4406,8 @@ mod tests {
             candidates,
             None,
             &heur,
+            None,
+            None,
         );
         n.candidates = vec![MacroGoal::default(); candidates];
         n.children = vec![None; candidates];
@@ -2566,7 +4433,11 @@ mod tests {
         n.edge_visits = vec![5.0, 5.0, 5.0];
         n.edge_values = vec![1.0, 3.0, 2.0]; // edge 1 has the best mean Q
         n.visits = 15.0;
-        assert_eq!(n.select_edge(), 1, "highest-Q edge once all are visited, prior absent");
+        assert_eq!(
+            n.select_edge(),
+            1,
+            "highest-Q edge once all are visited, prior absent"
+        );
     }
 
     /// Cold-start stays list-order even with `edge_prior` populated — the
@@ -2580,7 +4451,11 @@ mod tests {
         let root_turn = game.state.settings.turn;
         let mut n = bare_node(&game, root_turn, 3);
         n.edge_prior = vec![0.1, 0.7, 0.2]; // edge 1 is the prior's clear favorite
-        assert_eq!(n.select_edge(), 0, "cold-start picks list order regardless of prior");
+        assert_eq!(
+            n.select_edge(),
+            0,
+            "cold-start picks list order regardless of prior"
+        );
     }
 
     /// Once every edge has visits, a strong prior on a mediocre-Q edge
@@ -2598,7 +4473,11 @@ mod tests {
         assert_eq!(n.select_edge(), 0, "sanity: edge 0 wins without a prior");
 
         n.edge_prior = vec![0.0, 5.0]; // large weight, all on edge 1
-        assert_eq!(n.select_edge(), 1, "a strong prior should be able to flip the pick");
+        assert_eq!(
+            n.select_edge(),
+            1,
+            "a strong prior should be able to flip the pick"
+        );
     }
 
     /// EXP_ELO_125 (piece 4): the frozen-edge sign convention. The new head
@@ -2617,8 +4496,7 @@ mod tests {
         params.rollout_nn_w = 1.0;
         params.rollout_nn_min_depth = 0; // freeze fires at depth 1 (root's own edges)
         let rollout_value = 0.7f32;
-        let evaluator =
-            Evaluator::Dummy(DummyEvalHandle::new().with_rollout_value(rollout_value));
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new().with_rollout_value(rollout_value));
 
         let root = bare_node(&game, root_turn, 1);
         let mut search = MacroMctsSearch {
@@ -2634,7 +4512,10 @@ mod tests {
         // expanded, and the cached value must be reusable on a second visit
         // without changing (proves the cache actually fires, not just that
         // the sign is right on the first pass).
-        assert!(search.nodes[0].children[0].is_none(), "a frozen edge must not get a real child Node");
+        assert!(
+            search.nodes[0].children[0].is_none(),
+            "a frozen edge must not get a real child Node"
+        );
         assert_eq!(search.nodes[0].edge_frozen[0], Some(-rollout_value));
 
         // The unwind's own negation must exactly cancel the one `expand`
@@ -2679,7 +4560,10 @@ mod tests {
             stats: MacroMctsStats::default(),
         };
         let (immediate, pending, features) = search.collect_wave(0, root_turn, &params, 4);
-        assert_eq!(immediate, 0, "all 4 are Path-B eligible -- none should resolve immediately");
+        assert_eq!(
+            immediate, 0,
+            "all 4 are Path-B eligible -- none should resolve immediately"
+        );
         assert_eq!(pending.len(), 4, "4 distinct edges, not duplicates");
         assert_eq!(features.len(), 4);
         let mut edges: Vec<usize> = pending.iter().map(|p| p.edge).collect();
@@ -2712,7 +4596,11 @@ mod tests {
         let (immediate, pending, features) = search.collect_wave(0, root_turn, &params, 5);
         assert_eq!(immediate, 0);
         assert!(pending.len() <= 2, "at most 2 distinct edges exist");
-        assert_eq!(features.len(), pending.len(), "one feature row per DISTINCT leaf, not per repeat");
+        assert_eq!(
+            features.len(),
+            pending.len(),
+            "one feature row per DISTINCT leaf, not per repeat"
+        );
         let total: u32 = pending.iter().map(|p| p.count).sum();
         assert_eq!(total, 5, "counts must sum to the full requested budget");
     }
@@ -2751,9 +4639,15 @@ mod tests {
         }
         for n in &search.nodes {
             for &vl in &n.edge_virtual_loss {
-                assert_eq!(vl, 0.0, "edge_virtual_loss must be fully removed after a complete search");
+                assert_eq!(
+                    vl, 0.0,
+                    "edge_virtual_loss must be fully removed after a complete search"
+                );
             }
-            assert_eq!(n.virtual_visits, 0.0, "virtual_visits must be fully removed after a complete search");
+            assert_eq!(
+                n.virtual_visits, 0.0,
+                "virtual_visits must be fully removed after a complete search"
+            );
         }
     }
 
@@ -2781,7 +4675,10 @@ mod tests {
             vec![0.0, VIRTUAL_LOSS],
             "only edge 0's virtual loss must clear"
         );
-        assert_eq!(search.nodes[0].virtual_visits, VIRTUAL_LOSS, "drops by exactly one charge");
+        assert_eq!(
+            search.nodes[0].virtual_visits, VIRTUAL_LOSS,
+            "drops by exactly one charge"
+        );
     }
 
     /// A checkpoint predating the rollout-value head (or one where the
@@ -2805,8 +4702,14 @@ mod tests {
             stats: MacroMctsStats::default(),
         };
         search.simulate(0, root_turn, &params);
-        assert!(search.nodes[0].children[0].is_some(), "Path-B miss must fall through to a real child");
-        assert!(search.nodes[0].edge_frozen[0].is_none(), "must not be frozen when the head is absent");
+        assert!(
+            search.nodes[0].children[0].is_some(),
+            "Path-B miss must fall through to a real child"
+        );
+        assert!(
+            search.nodes[0].edge_frozen[0].is_none(),
+            "must not be frozen when the head is absent"
+        );
     }
 
     /// Same fallback, but deferred through a real wave (`leaf_batch > 1`):
@@ -2831,11 +4734,17 @@ mod tests {
             stats: MacroMctsStats::default(),
         };
         let (immediate, pending, features) = search.collect_wave(0, root_turn, &params, 3);
-        assert_eq!(immediate, 0, "still deferred -- eligibility doesn't require the head to actually respond");
+        assert_eq!(
+            immediate, 0,
+            "still deferred -- eligibility doesn't require the head to actually respond"
+        );
         assert_eq!(pending.len(), 3);
         search.resolve_wave(pending, features, root_turn, &params);
         for i in 0..3 {
-            assert!(search.nodes[0].children[i].is_some(), "edge {i}: Path-B miss must fall through to a real child");
+            assert!(
+                search.nodes[0].children[i].is_some(),
+                "edge {i}: Path-B miss must fall through to a real child"
+            );
         }
     }
 }

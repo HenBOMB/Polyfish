@@ -11,6 +11,7 @@ pub mod gumbel_mcts;
 pub mod gumbel_qtransform;
 pub mod heuristic_mcts;
 pub mod macro_agent;
+mod r#macro;
 pub mod macro_exec;
 pub mod macro_mcts;
 pub mod mcts;

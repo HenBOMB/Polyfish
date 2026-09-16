@@ -156,6 +156,105 @@ impl BeliefState {
         }
     }
 
+    /// EXP_ELO_170/171: a minimal, capital-only belief for one simulated
+    /// tree node -- the ROOT's own (real-game) posterior, pruned further
+    /// against tiles this node's own rollout branch has discovered so far.
+    /// Every other field is a throwaway default; the only consumer this
+    /// feeds (macro-mcts's re-materialization trigger) never reads them.
+    ///
+    /// Anti-cheat/honesty note: `capital_seen_at` is hardcoded `None`, not a
+    /// placeholder. The input this is meant to be called with -- `_sim_
+    /// explored` (`states.rs`, populated by `actions::discovery::
+    /// discover_tiles`) -- tells the search only THAT a simulated move
+    /// revealed some tile indices, never WHAT is under them (an existing
+    /// anti-cheat design, already used elsewhere for score-crediting
+    /// exploration without peeking at ground truth). Confirming a capital
+    /// sighting here would mean reading real `GameState` content the
+    /// simulation is supposed to be honest about not knowing. So this
+    /// update is a pure PRUNE (mass removed from now-eliminated cells,
+    /// renormalized), never a promotion to confirmed -- and NOT a neutral
+    /// Bayesian update (a true "scouted and found nothing" update is closer
+    /// to no-change): it will systematically nudge the posterior peak away
+    /// from wherever a branch scouted. Isolated here specifically so the
+    /// update rule is swappable if a drift probe shows it's net-unhelpful.
+    pub fn seeded_for_node(
+        observer: PlayerId,
+        opponent: PlayerId,
+        root_posterior: &[(i32, f32)],
+        root_confirmed: Option<i32>,
+        sim_newly_explored: &[i32],
+    ) -> BeliefState {
+        let mut posterior = root_posterior.to_vec();
+        if root_confirmed.is_none() {
+            // EXP_ELO_171 follow-up: a SOFT discount, deliberately NOT
+            // `on_explored`'s hard prune-to-zero -- and deliberately a
+            // separate code path from `on_explored` rather than a shared
+            // parameter, since the two callers have genuinely different
+            // epistemics. `on_explored`'s real caller (`CalibHarness`) CAN
+            // confirm a sighting (`capital_seen_at`), so eliminating a
+            // ruled-out cell there is exactly correct. This caller never
+            // can (see the module doc above) -- it only knows a tile was
+            // explored, never what was (or wasn't) there, so a full prune
+            // would claim certainty the anti-cheat design doesn't have, and
+            // punishes a branch that happens to explore the TRUE cell
+            // exactly as hard as one that doesn't (the drift probe's
+            // measured failure mode). A discount lets repeated,
+            // consistently-uninformative touches still erode a cell over
+            // many turns, without ever fully zeroing -- and never
+            // eliminating truth outright off one lucky/unlucky visit.
+            const EXPLORED_DISCOUNT: f32 = 0.4;
+            for (c, p) in posterior.iter_mut() {
+                if sim_newly_explored.contains(c) {
+                    *p *= EXPLORED_DISCOUNT;
+                }
+            }
+            let total: f32 = posterior.iter().map(|(_, p)| *p).sum();
+            if total > 0.0 {
+                for (_, p) in posterior.iter_mut() {
+                    *p /= total;
+                }
+            }
+        }
+        BeliefState {
+            observer,
+            opponent,
+            capital_posterior: posterior,
+            capital_confirmed: root_confirmed,
+            residual_army_stars: 0.0,
+            hidden_cities: 0.0,
+            hidden_techs: 0.0,
+            build_signals: 0.0,
+            last_signal_turn: 0,
+            events: Vec::new(),
+        }
+    }
+
+    /// A branch-local concrete world may treat simulated discoveries as empty
+    /// unless that world has already placed its capital at the discovered cell.
+    /// This never reads the hidden game's contents.
+    pub fn determinized_for_node(
+        root: &BeliefState,
+        sim_explored: &[i32],
+        materialized_capital: Option<i32>,
+    ) -> BeliefState {
+        let mut node = root.clone();
+        if node.capital_confirmed.is_some() {
+            return node;
+        }
+        if let Some(cell) = materialized_capital {
+            node.capital_posterior = vec![(cell, 1.0)];
+            return node;
+        }
+        node.capital_posterior.retain(|(cell, _)| !sim_explored.contains(cell));
+        let total: f32 = node.capital_posterior.iter().map(|(_, p)| *p).sum();
+        if total > 0.0 {
+            for (_, p) in &mut node.capital_posterior {
+                *p /= total;
+            }
+        }
+        node
+    }
+
     /// An opponent score change. Witnessed deltas are recorded but carry no
     /// hidden information. Unwitnessed deltas are attributed by signature:
     /// exploration (+5k, esp. with a co-occurring ghost departure — a scout
@@ -264,6 +363,9 @@ impl BeliefState {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MaterializeStats {
     pub capital: bool,
+    pub capital_idx: Option<i32>,
+    pub village: bool,
+    pub village_idx: Option<i32>,
     pub ghost_units: u32,
     pub residual_units: u32,
 }
@@ -301,28 +403,35 @@ fn land_spawnable(state: &GameState, idx: i32, ty: crate::types::UnitType) -> bo
 /// capital hypothesis. Also REPLACES the opponent's star bank with a crude
 /// public-info ramp: `obscure_fog` leaks the true bank, and a materialized
 /// spend site would otherwise let rollouts consume hidden information.
-pub fn materialize_into(view: &mut crate::game::Game, belief: &BeliefState) -> MaterializeStats {
+fn materialize_into_with_confidence(
+    view: &mut crate::game::Game,
+    belief: &BeliefState,
+    min_capital_confidence: f32,
+    prepare_world: bool,
+) -> MaterializeStats {
     let pov = belief.observer;
     let opp = belief.opponent;
     let mut stats = MaterializeStats::default();
     let turn = view.state.settings.turn;
 
-    if let Some(t) = view.state.tribes.get_mut(&opp) {
-        t.stars = (2 + turn / 2).min(20);
+    if prepare_world {
+        if let Some(t) = view.state.tribes.get_mut(&opp) {
+            t.stars = (2 + turn / 2).min(20);
+        }
     }
 
     // Believed capital: engine-native creation via capture_city Case 2 with
     // the current player temporarily swapped to the opponent.
     let mut anchor: Option<i32> = belief.capital_confirmed;
     if anchor.is_none() {
-        if let Some(&(cell, _)) = belief.capital_top(1).first() {
+        if let Some(&(cell, confidence)) = belief.capital_top(1).first() {
             let has_city = view
                 .state
                 .tribes
                 .get(&opp)
                 .map(|t| t.cities.iter().any(|c| c.idx == cell))
                 .unwrap_or(false);
-            if !explored_by(&view.state, cell, pov) && !has_city {
+            if confidence >= min_capital_confidence && !explored_by(&view.state, cell, pov) && !has_city {
                 if let Some(tile) = view.state.tiles.get_mut(&cell) {
                     // Generator invariant: support cells are Field capitals.
                     tile.terrain_type = crate::types::TerrainType::Field;
@@ -368,6 +477,7 @@ pub fn materialize_into(view: &mut crate::game::Game, belief: &BeliefState) -> M
                         }
                     }
                     stats.capital = true;
+                    stats.capital_idx = Some(cell);
                     anchor = Some(cell);
                 }
             }
@@ -376,7 +486,7 @@ pub fn materialize_into(view: &mut crate::game::Game, belief: &BeliefState) -> M
 
     // Ghost units: known enemies last seen entering fog, at their tiles.
     // Naval ghosts are skipped (land guard) — v1 scope cut, in the ledger.
-    let ghosts: Vec<(i32, crate::types::UnitType)> = view
+    let ghosts: Vec<(i32, crate::types::UnitType)> = if prepare_world { view
         .state
         .tribes
         .get(&pov)
@@ -387,7 +497,7 @@ pub fn materialize_into(view: &mut crate::game::Game, belief: &BeliefState) -> M
                 .map(|(&i, g)| (i, g.unit_type))
                 .collect()
         })
-        .unwrap_or_default();
+        .unwrap_or_default() } else { Vec::new() };
     for (idx, ty) in ghosts {
         if !explored_by(&view.state, idx, pov) && land_spawnable(&view.state, idx, ty) {
             let _ = crate::actions::units::spawn_unit(&mut view.state, opp, ty, idx, false);
@@ -398,6 +508,7 @@ pub fn materialize_into(view: &mut crate::game::Game, belief: &BeliefState) -> M
     // Residual army: inferred never-seen production, as warriors ringed
     // around the capital hypothesis (they know where home is; we don't know
     // where they stand).
+    if prepare_world {
     if let Some(a) = anchor {
         let n = ((belief.residual_army_stars / 2.0).floor() as i32).clamp(0, 4);
         if n > 0 {
@@ -433,7 +544,72 @@ pub fn materialize_into(view: &mut crate::game::Game, belief: &BeliefState) -> M
             stats.residual_units = placed;
         }
     }
+    }
     stats
+}
+
+/// Existing root-world behavior: materialize the MAP capital regardless of
+/// posterior concentration.
+pub fn materialize_into(view: &mut crate::game::Game, belief: &BeliefState) -> MaterializeStats {
+    materialize_into_with_confidence(view, belief, 0.0, true)
+}
+
+/// Materialize only a capital hypothesis whose posterior clears the caller's
+/// confidence gate. Unlike the root-world function, this does not reset
+/// stars or add inferred units, so it is safe for branch-local use.
+pub fn materialize_confident_into(
+    view: &mut crate::game::Game,
+    belief: &BeliefState,
+    min_capital_confidence: f32,
+) -> MaterializeStats {
+    materialize_into_with_confidence(view, belief, min_capital_confidence, false)
+}
+
+/// Populate the persistent, non-map part of a branch world once: public star
+/// estimate plus legally observed ghost/residual enemy units. A capital is
+/// inserted only when it was already genuinely confirmed.
+pub fn materialize_branch_units(
+    view: &mut crate::game::Game,
+    belief: &BeliefState,
+) -> MaterializeStats {
+    materialize_into_with_confidence(view, belief, f32::INFINITY, true)
+}
+
+/// Writes one high-confidence neutral village hypothesis into a fogged
+/// planning world. The posterior is derived only from the observer's visible
+/// tiles; ties are stable by tile index.
+pub fn materialize_confident_village_into(
+    view: &mut crate::game::Game,
+    pov: PlayerId,
+    min_confidence: f32,
+) -> Option<i32> {
+    let belief = map::MapBelief::observe(&view.state, pov);
+    let size = view.state.settings.size;
+    let candidate = (0..size * size)
+        .filter(|&idx| !explored_by(&view.state, idx, pov))
+        .filter(|&idx| view.state.structures.get(&idx).and_then(|s| s.as_ref()).is_none())
+        .filter(|&idx| crate::functions::get_city_at(&view.state, idx).is_none())
+        .max_by(|&a, &b| {
+            belief
+                .p_village(a)
+                .total_cmp(&belief.p_village(b))
+                .then_with(|| b.cmp(&a))
+        })?;
+    if belief.p_village(candidate) < min_confidence {
+        return None;
+    }
+    if let Some(tile) = view.state.tiles.get_mut(&candidate) {
+        tile.terrain_type = crate::types::TerrainType::Field;
+        tile.owner = 0;
+        tile._unit_owner_id = None;
+    }
+    let _ = crate::actions::structure::create_structure(
+        &mut view.state,
+        candidate,
+        crate::types::StructureType::Village,
+        1,
+    );
+    Some(candidate)
 }
 
 /// Tile indices a move touches, from its serialized form (`src`/`target`).
@@ -955,6 +1131,95 @@ mod tests {
         assert!((b.capital_confidence() - 1.0).abs() < 1e-5);
     }
 
+    /// EXP_ELO_171 follow-up: `seeded_for_node` discounts an explored cell's
+    /// mass by `EXPLORED_DISCOUNT` (0.4) and renormalizes -- it must NEVER
+    /// fully zero a cell (the fix for the drift probe's measured failure
+    /// mode: a hard prune eliminates the truth outright if a branch happens
+    /// to explore it, since the anti-cheat design can't distinguish that
+    /// from a genuine miss).
+    #[test]
+    fn belief_state_seeded_for_node_discounts_not_eliminates() {
+        let root = BeliefState::new(11, 2, 24, 1, 2);
+        assert_eq!(root.capital_posterior.len(), 3, "test assumes the Tiny/2p 3-cell support");
+        let touched = root.capital_posterior[0].0;
+        let untouched: Vec<i32> = root.capital_posterior[1..].iter().map(|(c, _)| *c).collect();
+
+        let node_belief = BeliefState::seeded_for_node(1, 2, &root.capital_posterior, None, &[touched]);
+
+        // Still 3 cells -- nothing eliminated.
+        assert_eq!(node_belief.capital_posterior.len(), 3);
+        let touched_p = node_belief
+            .capital_posterior
+            .iter()
+            .find(|(c, _)| *c == touched)
+            .map(|(_, p)| *p)
+            .unwrap();
+        assert!(touched_p > 0.0, "touched cell must never be fully eliminated, got {touched_p}");
+        // Pre-renormalize: touched=1/3*0.4, untouched=1/3 each -> touched
+        // share = 0.4/(0.4+1+1) = 0.4/2.4 ~= 0.1667.
+        assert!((touched_p - 0.1667).abs() < 1e-3, "touched cell mass {touched_p}, expected ~0.1667");
+        for &c in &untouched {
+            let p = node_belief.capital_posterior.iter().find(|(cc, _)| *cc == c).unwrap().1;
+            assert!((p - 0.4167).abs() < 1e-3, "untouched cell {c} mass {p}, expected ~0.4167");
+        }
+        let total: f32 = node_belief.capital_posterior.iter().map(|(_, p)| p).sum();
+        assert!((total - 1.0).abs() < 1e-5, "renormalized mass {total}");
+        assert!(node_belief.capital_confirmed.is_none());
+    }
+
+    /// Repeated exploration of the same already-discounted cell keeps
+    /// eroding it (never re-inflates), and it still never hits exactly zero.
+    #[test]
+    fn belief_state_seeded_for_node_repeated_exploration_keeps_eroding_never_zeros() {
+        let root = BeliefState::new(11, 2, 24, 1, 2);
+        let touched = root.capital_posterior[0].0;
+
+        let once = BeliefState::seeded_for_node(1, 2, &root.capital_posterior, None, &[touched]);
+        let once_p = once.capital_posterior.iter().find(|(c, _)| *c == touched).unwrap().1;
+
+        // Simulate a second round by feeding `once`'s own posterior back in
+        // as the "root" for a further-discounted read -- mirrors how a
+        // deeper node in the same branch would re-derive from an already
+        // eroded ancestor state.
+        let twice = BeliefState::seeded_for_node(1, 2, &once.capital_posterior, None, &[touched]);
+        let twice_p = twice.capital_posterior.iter().find(|(c, _)| *c == touched).unwrap().1;
+
+        assert!(twice_p < once_p, "repeated touches should keep eroding: once={once_p} twice={twice_p}");
+        assert!(twice_p > 0.0, "must never reach exactly zero, got {twice_p}");
+    }
+
+    #[test]
+    fn determinized_node_uses_only_its_synthetic_exploration() {
+        let root = BeliefState::new(11, 2, 24, 1, 2);
+        let removed = root.capital_posterior[0].0;
+        let node = BeliefState::determinized_for_node(&root, &[removed], None);
+        assert_eq!(node.capital_posterior.len(), root.capital_posterior.len() - 1);
+        assert!(!node.capital_posterior.iter().any(|(cell, _)| *cell == removed));
+        assert!((node.capital_confidence() - 0.5).abs() < 1e-5);
+
+        let placed = node.capital_top(1)[0].0;
+        let confirmed = BeliefState::determinized_for_node(&root, &[placed], Some(placed));
+        assert_eq!(confirmed.capital_confirmed, None);
+        assert_eq!(confirmed.capital_posterior, vec![(placed, 1.0)]);
+    }
+
+    #[test]
+    fn confident_materialization_waits_for_the_threshold() {
+        let game = generated_game(9_201_001);
+        let own = own_capital(&game.state, 1);
+        let root = BeliefState::new(11, 2, own, 1, 2);
+        let mut low = game.clone_for_mcts(1);
+        assert!(!materialize_confident_into(&mut low, &root, 0.85).capital);
+
+        let eliminated = [root.capital_posterior[0].0, root.capital_posterior[1].0];
+        let confident = BeliefState::determinized_for_node(&root, &eliminated, None);
+        let expected = confident.capital_top(1)[0].0;
+        let mut high = game.clone_for_mcts(1);
+        let stats = materialize_confident_into(&mut high, &confident, 0.85);
+        assert!(stats.capital);
+        assert_eq!(stats.capital_idx, Some(expected));
+    }
+
     #[test]
     fn tileless_tech_delta_is_attributed_not_dropped() {
         let mut b = BeliefState::new(11, 2, 24, 1, 2);
@@ -1024,6 +1289,123 @@ mod tests {
             .find(|(_, t)| t.capital_of == pid)
             .map(|(i, _)| i)
             .unwrap()
+    }
+
+    /// EXP_ELO_170/171, build-order step 4 (load-bearing -- read before
+    /// wiring `seeded_for_node` into production): does evolving the capital
+    /// posterior via `_sim_explored` during a real simulated rollout
+    /// actually track TOWARD the true capital more often than the frozen
+    /// root posterior's own argmax, or does the prune-only anti-cheat rule
+    /// (see `seeded_for_node`'s doc comment) just drift arbitrarily -- or
+    /// even actively worse, prune the true cell out entirely when a branch
+    /// happens to scout onto it?
+    ///
+    /// Run manually:
+    ///   cargo test --lib ai::belief -- --ignored capital_posterior_evolution_argmax_drift_probe --nocapture
+    #[test]
+    #[ignore]
+    fn capital_posterior_evolution_argmax_drift_probe() {
+        use crate::ai::macro_exec;
+        use crate::ai::oracle_macro::{compute_macro_goal, LaneState};
+
+        const CHECKPOINTS: [usize; 2] = [6, 12]; // executed plies (both players)
+        // Verdi's threshold-gating proposal: only materialize when
+        // confidence clears a bar, stay fogged otherwise. Buckets by the
+        // EVOLVED posterior's own confidence (mass on its top cell) at each
+        // checkpoint, pooled across both checkpoints and many more seeds
+        // than the base probe (this part is cheap -- no per-checkpoint
+        // eliminated-truth bookkeeping needed).
+        const CONF_BUCKETS: [f32; 4] = [0.5, 0.7, 0.85, 1.01]; // upper edges, last catches 100%
+
+        let mut frozen_hits = [0usize; 2];
+        let mut evolved_hits = [0usize; 2];
+        let mut evolved_eliminated_truth = [0usize; 2];
+        let mut n_seeds = 0usize;
+        let mut bucket_n = [0usize; CONF_BUCKETS.len()];
+        let mut bucket_hits = [0usize; CONF_BUCKETS.len()];
+
+        for seed in 0..150i64 {
+            let game = generated_game(9_400_000 + seed);
+            let own = own_capital(&game.state, 1);
+            let truth = own_capital(&game.state, 2);
+            let b = BeliefState::new(11, 2, own, 1, 2);
+            if !b.capital_posterior.iter().any(|(c, _)| *c == truth) {
+                // Generator placed the true capital outside this prior's own
+                // support box -- not this mechanism's failure mode, skip.
+                continue;
+            }
+            n_seeds += 1;
+            let frozen_argmax = b.capital_top(1).first().map(|(c, _)| *c);
+
+            let mut sim = game.clone_for_mcts(1);
+            let mut lane_state = LaneState::default();
+            let mut counters = macro_exec::TurnCounters::default();
+            for ply in 0..CHECKPOINTS[CHECKPOINTS.len() - 1] {
+                if sim.state.settings._game_over {
+                    break;
+                }
+                let player = sim.state.settings.current_player_turn_id;
+                let goal = compute_macro_goal(&sim.state, player, 0);
+                if !macro_exec::execute_turn(&mut sim, player, &goal, &mut lane_state, &mut counters, 1.0) {
+                    break;
+                }
+                if let Some(k) = CHECKPOINTS.iter().position(|&c| c == ply + 1) {
+                    let sim_new: Vec<i32> = sim
+                        .state
+                        .settings
+                        ._sim_explored
+                        .get(&1)
+                        .map(|s| s.iter().copied().collect())
+                        .unwrap_or_default();
+                    let evolved = BeliefState::seeded_for_node(
+                        1, 2, &b.capital_posterior, b.capital_confirmed, &sim_new,
+                    );
+                    let evolved_argmax = evolved.capital_top(1).first().map(|(c, _)| *c);
+                    if frozen_argmax == Some(truth) {
+                        frozen_hits[k] += 1;
+                    }
+                    if evolved_argmax == Some(truth) {
+                        evolved_hits[k] += 1;
+                    }
+                    if !evolved.capital_posterior.iter().any(|(c, _)| *c == truth) {
+                        evolved_eliminated_truth[k] += 1;
+                    }
+                    let conf = evolved.capital_confidence();
+                    let hit = evolved_argmax == Some(truth);
+                    for (bi, &edge) in CONF_BUCKETS.iter().enumerate() {
+                        if conf < edge {
+                            bucket_n[bi] += 1;
+                            if hit {
+                                bucket_hits[bi] += 1;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        println!("=== capital posterior evolution drift probe: n_seeds={n_seeds} ===");
+        for (k, &checkpoint) in CHECKPOINTS.iter().enumerate() {
+            println!(
+                "  after {checkpoint} plies: frozen argmax=truth {}/{n_seeds} ({:.1}%), evolved argmax=truth {}/{n_seeds} ({:.1}%), evolved ELIMINATED truth cell {}/{n_seeds} ({:.1}%)",
+                frozen_hits[k], 100.0 * frozen_hits[k] as f32 / n_seeds.max(1) as f32,
+                evolved_hits[k], 100.0 * evolved_hits[k] as f32 / n_seeds.max(1) as f32,
+                evolved_eliminated_truth[k], 100.0 * evolved_eliminated_truth[k] as f32 / n_seeds.max(1) as f32,
+            );
+        }
+
+        println!("--- confidence-bucketed argmax accuracy (evolved posterior, pooled across both checkpoints) ---");
+        let mut lo = 0.0f32;
+        for (bi, &hi) in CONF_BUCKETS.iter().enumerate() {
+            let hi_label = if hi > 1.0 { 1.0 } else { hi };
+            println!(
+                "  confidence [{lo:.2},{hi_label:.2}): n={} hits={} ({:.1}%)",
+                bucket_n[bi], bucket_hits[bi],
+                100.0 * bucket_hits[bi] as f32 / bucket_n[bi].max(1) as f32,
+            );
+            lo = hi_label;
+        }
     }
 
     #[test]

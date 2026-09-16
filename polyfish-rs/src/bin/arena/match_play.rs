@@ -36,6 +36,10 @@ pub(crate) struct MatchResult {
     /// EXP_ELO_035, config1 belief-enabled macro-mcts only:
     /// (capital-materialized turns, units materialized, planned turns).
     pub(crate) belief_mat: Option<(u32, u32, u32)>,
+    /// Branch-local belief loop: (reveals, resources, capital misses,
+    /// capital sightings, village sightings, capital placements, village placements,
+    /// sampled enemy units, belief-aware deep nodes, and their candidate count).
+    pub(crate) branch_belief: Option<(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32)>,
     /// EXP_ELO_036/038, config1 macro-mcts: winning-candidate class counts
     /// (base/stance/real/attackCapital/claim/contest/continuation/
     /// attackWeakest/defendUrgent), belief-target re-picks, mid-turn
@@ -171,7 +175,9 @@ pub(crate) fn play_match(
     // solely to stream each observer its legal observables (and, for
     // --belief-calib, to log truth rows). Belief-enabled macro seats consume
     // clones per turn, per their MacroParams::belief_mode.
-    let feed_on = |p: &MacroParams| p.belief_mode != polyfish::ai::macro_agent::BeliefMode::Off;
+    let feed_on = |p: &MacroParams| {
+        p.belief_mode != polyfish::ai::macro_agent::BeliefMode::Off || p.tree_belief_materialization
+    };
     let mut calib: Option<polyfish::ai::belief::CalibHarness> =
         if belief_calib || feed_on(&macro_params1) || feed_on(&macro_params2) {
             Some(polyfish::ai::belief::CalibHarness::new(&game.state))
@@ -621,6 +627,24 @@ pub(crate) fn play_match(
             _ => None,
         }
     };
+    let branch_belief = {
+        let model_agent = if swap { &agent_p2 } else { &agent_p1 };
+        match model_agent {
+            SearchAgent::MacroMcts(a) if a.belief.is_some() => Some((
+                a.branch_revealed_tiles,
+                a.branch_resource_reveals,
+                a.branch_capital_refutations,
+                a.branch_capital_confirmations,
+                a.branch_village_confirmations,
+                a.branch_capital_materializations,
+                a.branch_village_materializations,
+                a.branch_unit_materializations,
+                a.branch_belief_candidate_nodes,
+                a.branch_belief_candidates,
+            )),
+            _ => None,
+        }
+    };
     // EXP_ELO_036: which candidate class won each planned turn for config1,
     // plus consecutive-turn re-picks of the same belief fog target.
     let belief_gen = {
@@ -634,6 +658,22 @@ pub(crate) fn play_match(
     };
 
     if let Some(dir) = dump_stats_dir {
+        let branch_belief_json = branch_belief.map(
+            |(reveals, resources, misses, cap_seen, village_seen, cap_mat, village_mat, units, candidate_nodes, candidates)| {
+                let mut fields = serde_json::Map::new();
+                fields.insert("reveals".into(), reveals.into());
+                fields.insert("resources".into(), resources.into());
+                fields.insert("capital_misses".into(), misses.into());
+                fields.insert("capital_sightings".into(), cap_seen.into());
+                fields.insert("village_sightings".into(), village_seen.into());
+                fields.insert("capital_materializations".into(), cap_mat.into());
+                fields.insert("village_materializations".into(), village_mat.into());
+                fields.insert("enemy_unit_materializations".into(), units.into());
+                fields.insert("belief_candidate_nodes".into(), candidate_nodes.into());
+                fields.insert("belief_candidates".into(), candidates.into());
+                serde_json::Value::Object(fields)
+            },
+        );
         samples.push(sample_turn(&game.state, swap)); // final post-game state
         // End-state build-out for the model seat: what it actually put on the
         // board and at what level, so a game can be held against eco_plan's
@@ -751,6 +791,7 @@ pub(crate) fn play_match(
             "belief_calib": calib.as_ref().map(|c| c.rows.clone()),
             "mat_capital_turns": belief_mat.map(|(c, _, _)| c),
             "mat_units": belief_mat.map(|(_, u, _)| u),
+            "branch_belief": branch_belief_json,
             "class_picks": belief_gen.map(|(c, _, _)| c.to_vec()),
             "belief_repicks": belief_gen.map(|(_, r, _)| r),
             "intra_strips": belief_gen.map(|(_, _, s)| s),
@@ -798,6 +839,7 @@ pub(crate) fn play_match(
         depth_config1,
         macro_divergence,
         belief_mat,
+        branch_belief,
         belief_gen,
     }
 }

@@ -294,6 +294,34 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = 0.0)]
     pub(crate) macro_net_candidates_w2: f32,
 
+    /// EXP_ELO_170/171: config 1, offer "continue the directive this player
+    /// already committed to two plies back" as an explicit candidate at
+    /// every non-root node in the macro tree (off by default).
+    #[arg(long)]
+    pub(crate) macro_tree_continuation1: bool,
+
+    /// Same as --macro-tree-continuation1, for config 2.
+    #[arg(long)]
+    pub(crate) macro_tree_continuation2: bool,
+
+    /// Config 1: sample a generator-grounded branch-local fog world. Sampled
+    /// resources, capitals, and villages stay latent until the rollout explores them.
+    #[arg(long)]
+    pub(crate) macro_tree_belief_materialization1: bool,
+
+    /// Same as --macro-tree-belief-materialization1, for config 2.
+    #[arg(long)]
+    pub(crate) macro_tree_belief_materialization2: bool,
+
+    /// Independent latent map worlds for config 1's belief tree. Their root
+    /// candidate Q values are averaged; 1 keeps the original single world.
+    #[arg(long, default_value_t = 1)]
+    pub(crate) macro_map_particles1: usize,
+
+    /// Same as --macro-map-particles1, for config 2.
+    #[arg(long, default_value_t = 1)]
+    pub(crate) macro_map_particles2: usize,
+
     /// EXP_ELO_125 (piece 4): weight on the cheap `pi_rollout_value` NN
     /// estimator, config 1 (0 = off, the default).
     #[arg(long, default_value_t = 0.0)]

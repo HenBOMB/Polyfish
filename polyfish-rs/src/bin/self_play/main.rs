@@ -158,6 +158,7 @@ fn main() -> anyhow::Result<()> {
         rollout_nn_w: args.macro_rollout_nn_w,
         rollout_nn_min_depth: args.macro_rollout_nn_min_depth,
         leaf_batch: args.macro_leaf_batch,
+        tree_continuation: args.macro_tree_continuation,
         ..MacroParams::default()
     };
 
@@ -952,4 +953,3 @@ fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
-

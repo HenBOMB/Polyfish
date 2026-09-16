@@ -129,6 +129,9 @@ fn main() -> anyhow::Result<()> {
         rollout_nn_w: 0.0,
         rollout_nn_min_depth: usize::MAX,
         leaf_batch: 1,
+        tree_continuation: false,
+        tree_belief_materialization: false,
+        map_particles: 1,
     };
     let macro_params1 = MacroParams {
         sims: args.macro_sims1.unwrap_or(args.macro_sims),
@@ -141,6 +144,9 @@ fn main() -> anyhow::Result<()> {
         rollout_nn_min_depth: args.macro_rollout_nn_min_depth1,
         leaf: args.macro_leaf1.unwrap_or(args.macro_leaf),
         leaf_batch: args.macro_leaf_batch1,
+        tree_continuation: args.macro_tree_continuation1,
+        tree_belief_materialization: args.macro_tree_belief_materialization1,
+        map_particles: args.macro_map_particles1,
         ..base_params
     };
     let macro_params2 = MacroParams {
@@ -154,6 +160,9 @@ fn main() -> anyhow::Result<()> {
         rollout_nn_min_depth: args.macro_rollout_nn_min_depth2,
         leaf: args.macro_leaf2.unwrap_or(args.macro_leaf),
         leaf_batch: args.macro_leaf_batch2,
+        tree_continuation: args.macro_tree_continuation2,
+        tree_belief_materialization: args.macro_tree_belief_materialization2,
+        map_particles: args.macro_map_particles2,
         ..base_params
     };
     if is_macro(args.backend1) || is_macro(args.backend2) {
@@ -626,6 +635,38 @@ fn main() -> anyhow::Result<()> {
             mat_planned,
             100.0 * mat_cap as f64 / mat_planned as f64,
             mat_units as f64 / mat_planned as f64,
+        );
+    }
+    let branch_belief = results.iter().filter_map(|r| r.branch_belief).fold(
+        (0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u64),
+        |(r, resource, m, cs, vs, cm, vm, u, cn, c), (rr, resources, mm, ccs, vvs, ccm, vvm, uu, cnn, cc)| {
+            (
+                r + rr as u64,
+                resource + resources as u64,
+                m + mm as u64,
+                cs + ccs as u64,
+                vs + vvs as u64,
+                cm + ccm as u64,
+                vm + vvm as u64,
+                u + uu as u64,
+                cn + cnn as u64,
+                c + cc as u64,
+            )
+        },
+    );
+    if branch_belief.0 > 0 {
+        println!(
+            "BRANCH BELIEF Config 1: {} synthetic reveals; {} sampled resources; {} capital misses; {} capital sightings; {} village sightings; {} capital placements; {} village placements; {} enemy units; {} belief-aware nodes / {} candidates",
+            branch_belief.0,
+            branch_belief.1,
+            branch_belief.2,
+            branch_belief.3,
+            branch_belief.4,
+            branch_belief.5,
+            branch_belief.6,
+            branch_belief.7,
+            branch_belief.8,
+            branch_belief.9,
         );
     }
     let (class_sum, repick_sum, strip_sum) = results.iter().filter_map(|r| r.belief_gen).fold(

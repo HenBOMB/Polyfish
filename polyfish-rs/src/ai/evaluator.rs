@@ -3,6 +3,7 @@ pub mod economy;
 pub mod expansion;
 pub mod exploration;
 pub mod gamestate;
+pub mod oracle_v2;
 pub mod player;
 pub mod research;
 
