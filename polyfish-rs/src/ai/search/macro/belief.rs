@@ -235,7 +235,6 @@ pub struct BranchBelief {
     belief: BeliefState,
     processed_sim_explored: BTreeSet<i32>,
     particle: MapParticle,
-    particle_salt: i32,
     materialized_capital: Option<i32>,
     materialized_village: Option<i32>,
     materialized_units: BTreeSet<i32>,
@@ -251,21 +250,14 @@ impl BranchBelief {
             particle: MapParticle::sample(state, &root, salt),
             belief: root,
             processed_sim_explored: BTreeSet::new(),
-            particle_salt: salt,
             materialized_capital: None,
             materialized_village: None,
             materialized_units: BTreeSet::new(),
         }
     }
 
-    pub fn fork(&self, state: &GameState, salt: i32) -> Self {
-        let mut branch = self.clone();
-        let scoped_salt = self
-            .particle_salt
-            .wrapping_mul(1_000_003)
-            .wrapping_add(salt);
-        branch.particle = MapParticle::sample(state, &branch.belief, scoped_salt);
-        branch
+    pub fn fork(&self) -> Self {
+        self.clone()
     }
 
     pub fn sanitize_fog_view(state: &mut GameState, pov: PlayerId) {
@@ -649,5 +641,23 @@ mod tests {
             .units
             .iter()
             .any(|unit| unit.coords.idx == target && unit.unit_type == UnitType::Warrior));
+    }
+
+    #[test]
+    fn fork_keeps_one_particle_world_consistent_across_rollout_turns() {
+        let game = generated_game(19_004);
+        let pov = game.state.settings.current_player_turn_id;
+        let mut view = game.clone_for_mcts(pov);
+        BranchBelief::sanitize_fog_view(&mut view.state, pov);
+        let target = view
+            .state
+            .tiles
+            .iter()
+            .find_map(|(idx, tile)| (!tile.explorers.contains(&pov)).then_some(idx))
+            .expect("a fogged tile");
+        let mut branch = BranchBelief::new_with_salt(root_belief(&view, pov), &view.state, 7);
+        branch.force_particle_unit(target);
+        let child = branch.fork();
+        assert_eq!(child.particle, branch.particle);
     }
 }

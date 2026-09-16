@@ -1548,12 +1548,7 @@ impl<'a> MacroMctsSearch<'a> {
                 p.lane_states.clone(),
                 p.candidates[edge].clone(),
                 p.from.clone(),
-                p.branch_belief.as_ref().map(|branch| {
-                    branch.fork(
-                        &p.game.state,
-                        (parent as i32).wrapping_mul(31).wrapping_add(edge as i32),
-                    )
-                }),
+                p.branch_belief.as_ref().map(r#macro::belief::BranchBelief::fork),
             )
         };
         // EXP_ELO_170/171: `parent.from` already records (who acted, what
