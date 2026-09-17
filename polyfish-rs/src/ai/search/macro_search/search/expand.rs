@@ -2,11 +2,12 @@ use super::super::belief::BranchBelief;
 use super::super::config::MacroParams;
 use super::super::node::Node;
 use super::MacroMctsSearch;
+use super::edge_shaper::{EdgeShaper, EdgeShaperSnapshot};
 use super::wave::{DescendOutcome, PendingLeaf};
 use crate::ai::features::RawFeatures;
 use crate::ai::macro_exec::TurnCounters;
 use crate::ai::oracle_macro::{LaneState, MacroGoal, compute_macro_goal};
-use crate::ai::search::macro_mcts::MacroMctsStats;
+use crate::ai::search::macro_mcts::{dump_rollout_node, macro_rollout_trace_path};
 use crate::game::Game;
 use crate::states::PlayerId;
 use crate::utils::converter::{opponent_player_id, player_id_to_usize};
@@ -219,69 +220,42 @@ impl<'a> MacroMctsSearch<'a> {
         .ok()
     }
 
-    /// Full `execute_turn_net_greedy` simulation of `edge` off `parent`'s
-    /// state, creating and linking in a real child `Node`. This is Path C
-    /// (untouched by wave-batching) -- runs whenever `try_freeze_rollout`
-    /// didn't apply or its eval call came back empty.
-    fn expand_execute(
+    fn snapshot_parent_edge(&self, node_idx: usize, edge: usize) -> EdgeShaperSnapshot {
+        let node = &self.nodes[node_idx];
+        EdgeShaperSnapshot {
+            game: node.game().clone(),
+            player: node.player(),
+            counters: node.counters().clone(),
+            lane_states: node.lane_states().clone(),
+            goal: node.candidate_for_edge(edge).clone(),
+            parent_from: node.from().map(|(p, g)| (p, g.clone())),
+            branch_belief: node.branch_belief().map(BranchBelief::fork),
+        }
+    }
+
+    /// Executes the turn and materializes the child.
+    fn execute_and_materialize(
         &mut self,
-        parent: usize,
-        edge: usize,
-        root_turn: i32,
-        params: &MacroParams,
-    ) -> usize {
-        let (mut game, player, mut counters, mut lane_states, goal, parent_from, mut branch_belief) = {
-            let node = &self.nodes[parent];
-            (
-                node.game().clone(),
-                node.player(),
-                node.counters().clone(),
-                node.lane_states().clone(),
-                node.candidate_for_edge(edge).clone(),
-                node.from().clone(),
-                node.branch_belief().map(BranchBelief::fork),
-            )
-        };
-
-        // EXP_ELO_170/171: `parent.from` gives the child's own player’s last committed goal (two plies back), with no extra state.
-        // Achieved via strict alternation: `Node.player` is always `other(parent.player)`.
-        let child_own_last_goal: Option<&MacroGoal> = if params.tree_continuation {
-            parent_from.as_ref().map(|(_, g)| *g)
-        } else {
-            None
-        };
-
-        // EXP_ELO_036b: pre-move potential for this edge's directive via GoalAux diff
-        let seat_idx = player_id_to_usize(player);
-        let shape_pre = if params.shape_w != 0.0 && player == self.pov {
-            let aux = crate::ai::oracle_macro::compute_goal_aux(
-                &game.state,
-                player,
-                &goal,
-                counters[seat_idx].techs_bought,
-                counters[seat_idx].tier3_bought,
-                Some(&lane_states[seat_idx]),
-            );
-            Some((
-                crate::ai::reward::goal_potential(&game.state, player, &goal, Some(&aux)),
-                aux,
-            ))
-        } else {
-            None
-        };
-
+        game: &mut Game,
+        player: PlayerId,
+        goal: &MacroGoal,
+        lane_states: &mut [LaneState; 2],
+        counters: &mut [TurnCounters; 2],
+        branch_belief: &mut Option<BranchBelief>,
+    ) {
         // Node is always scoreable here; execute_turn_net_greedy is now used unconditionally.
         // Legacy rank_plies paths remain only for belief rollouts and MacroLookaheadAgent::replan.
+        let seat_idx = player_id_to_usize(player);
         let _ = crate::ai::search::net_root::execute_turn_net_greedy(
-            &mut game,
+            game,
             player,
             &goal,
             &mut lane_states[seat_idx],
             &mut counters[seat_idx],
             self.eval,
         );
-        if let Some(branch) = &mut branch_belief {
-            let (stats, observations) = branch.materialize_child(&mut game);
+        if let Some(branch) = branch_belief {
+            let (stats, observations) = branch.materialize_child(game);
             self.stats.branch_capital_materializations += stats.capital as u32;
             self.stats.branch_village_materializations += stats.village as u32;
             self.stats.branch_revealed_tiles += observations.revealed;
@@ -291,33 +265,73 @@ impl<'a> MacroMctsSearch<'a> {
             self.stats.branch_village_confirmations += observations.village_confirmed;
             self.stats.branch_unit_materializations += observations.unit_materialized;
         }
-        let shape = match &shape_pre {
-            Some((pre, aux)) => {
-                let post = crate::ai::reward::goal_potential(&game.state, player, &goal, Some(aux));
-                params.shape_w * (post - pre)
-            }
-            None => 0.0,
+    }
+
+    /// Runs `execute_turn_net_greedy` for `edge` off `parent`, creating a new child `Node`.
+    fn expand_execute(
+        &mut self,
+        parent: usize,
+        edge: usize,
+        root_turn: i32,
+        params: &MacroParams,
+    ) -> usize {
+        let mut snapshot = self.snapshot_parent_edge(parent, edge);
+
+        let shaper = EdgeShaper::start(&params, &snapshot, self.pov);
+        self.execute_and_materialize(
+            &mut snapshot.game,
+            snapshot.player,
+            &snapshot.goal,
+            &mut snapshot.lane_states,
+            &mut snapshot.counters,
+            &mut snapshot.branch_belief,
+        );
+        let shape = shaper.finish(&snapshot.game.state);
+        self.build_and_link_child(parent, edge, snapshot, root_turn, params, shape)
+    }
+
+    /// Builds the child `Node` from the post-execution snapshot, links it
+    /// into the tree under `parent`/`edge` with `shape`, folds the
+    /// belief-candidate stats, and dumps a trace row if tracing is on.
+    fn build_and_link_child(
+        &mut self,
+        parent: usize,
+        edge: usize,
+        snapshot: EdgeShaperSnapshot,
+        root_turn: i32,
+        params: &MacroParams,
+        shape: f32,
+    ) -> usize {
+        // EXP_ELO_170/171: `parent.from` gives the child's own player's last
+        // committed goal (two plies back), with no extra state — strict
+        // alternation makes `Node.player` always `other(parent.player)`.
+        let child_own_last_goal: Option<&MacroGoal> = if params.tree_continuation {
+            snapshot.parent_from.as_ref().map(|(_, g)| g)
+        } else {
+            None
         };
-        let leaf = self.leaf;
-        let eval = self.eval;
+
+        let (leaf, eval) = (self.leaf, self.eval);
         // The child's depth-capped value (computed inside `Node::new`) gets the
         // same edge context every other leaf read of this node will get.
-        let from = (player, goal.clone());
+        let from = (snapshot.player, snapshot.goal.clone());
         let leaf_fn = move |s: &crate::states::GameState, p: PlayerId, t3: u32| {
             compute_leaf_value(eval, leaf, s, p, t3, Some((from.0, &from.1)))
         };
+
         let child = Node::new(
-            game,
-            opponent_player_id(player),
-            counters,
-            lane_states,
+            snapshot.game,
+            opponent_player_id(snapshot.player),
+            snapshot.counters,
+            snapshot.lane_states,
             root_turn,
             params.k,
-            Some((player, goal.clone())),
+            Some((snapshot.player, snapshot.goal.clone())),
             &leaf_fn,
             child_own_last_goal,
-            branch_belief,
+            snapshot.branch_belief,
         );
+
         if child.branch_belief().is_some() && child.player() == self.pov {
             self.stats.branch_belief_candidate_nodes += 1;
             self.stats.branch_belief_candidates += child.candidates().len() as u32;
@@ -325,9 +339,13 @@ impl<'a> MacroMctsSearch<'a> {
 
         let child_idx = self.nodes.len();
         self.nodes.push(child);
-        let parent = &mut self.nodes[parent];
-        parent.set_child_by_edge(edge, Some(child_idx));
-        parent.set_edge_shape(edge, shape);
+        {
+            let parent_node = &mut self.nodes[parent];
+            parent_node.set_child_by_edge(edge, Some(child_idx));
+            parent_node.set_edge_shape(edge, shape);
+        }
+
+        // For debugging purposes
         if let Some(path) = macro_rollout_trace_path() {
             let child_state = &self.nodes[child_idx].game_state();
             dump_rollout_node(
@@ -335,12 +353,13 @@ impl<'a> MacroMctsSearch<'a> {
                 child_idx,
                 parent,
                 child_state.settings.turn,
-                player,
-                &goal,
+                snapshot.player,
+                &snapshot.goal,
                 self.pov,
                 child_state,
             );
         }
+
         child_idx
     }
 }
