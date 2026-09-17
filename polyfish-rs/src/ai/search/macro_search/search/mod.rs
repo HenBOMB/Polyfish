@@ -1,3 +1,4 @@
+mod edge_shaper;
 mod expand;
 mod root;
 mod stats;

@@ -1,10 +1,11 @@
-use crate::ai::macro_agent::enumerate_candidates;
+use super::belief::BranchBelief;
+use crate::ai::macro_agent::enumerate_candidates_with_belief;
 use crate::ai::macro_exec::TurnCounters;
 use crate::ai::oracle_macro::{LaneState, MacroGoal, OrderKind, compute_macro_goal};
 use crate::ai::search::macro_mcts::{TURN_DEPTH_CAP, fog_order_dead, terminal_value};
 use crate::ai::search::mcts_common::VIRTUAL_LOSS;
 use crate::game::Game;
-use crate::states::PlayerId;
+use crate::states::{GameState, PlayerId};
 use crate::utils::converter::player_id_to_usize;
 
 /// UCT exploration constant, tuned so a 0.03 q01 gap is decisive (~10 visits); ties split evenly.
@@ -45,6 +46,8 @@ pub(super) struct Node {
     edge_virtual_loss: Vec<f32>,
     /// Sum of edge_virtual_loss, mirrors visits for UCT sqrt/exploration term.
     virtual_visits: f32,
+    /// Synthetic, FOW-honest world state for branch-local materialization.
+    branch_belief: Option<BranchBelief>,
 }
 
 /// Node implementation for the macro search tree.
@@ -60,6 +63,7 @@ impl Node {
         from: Option<(PlayerId, MacroGoal)>,
         leaf_fn: &dyn Fn(&crate::states::GameState, PlayerId, u32) -> f32,
         own_last_goal: Option<&MacroGoal>,
+        branch_belief: Option<BranchBelief>,
     ) -> Self {
         let frozen_value = if game.state.settings._game_over {
             Some(terminal_value(&game.state, player))
@@ -81,8 +85,20 @@ impl Node {
             let seat_idx = player_id_to_usize(player);
             let tier3_bought = counters[seat_idx].tier3_bought;
             let macro_goal = compute_macro_goal(&game.state, player, tier3_bought);
-            let mut cands =
-                enumerate_candidates(&game.state, player, macro_goal, counters[seat_idx], k);
+            let belief = branch_belief
+                .as_ref()
+                .and_then(|b| b.candidate_belief_for(player));
+            let mut cands: Vec<MacroGoal> = enumerate_candidates_with_belief(
+                &game.state,
+                player,
+                macro_goal,
+                counters[seat_idx],
+                k,
+                belief,
+            )
+            .into_iter()
+            .map(|(g, _)| g)
+            .collect();
 
             if let Some(last_g) = own_last_goal {
                 // Filter out fogged expand orders.
@@ -117,6 +133,7 @@ impl Node {
             edge_frozen: vec![None; n],
             edge_virtual_loss: vec![0.0; n],
             virtual_visits: 0.0,
+            branch_belief: None,
         }
     }
     /// UCT: cold start ignores prior; picks unvisited edge in base order.
@@ -162,6 +179,12 @@ impl Node {
             .collect()
     }
 
+    /// Charge virtual loss to an edge.
+    pub(super) fn charge_virtual_loss(&mut self, edge: usize) {
+        self.edge_virtual_loss[edge] += VIRTUAL_LOSS;
+        self.virtual_visits += VIRTUAL_LOSS;
+    }
+
     /// Converts the value from the child's POV to this node's POV and records it.
     pub(super) fn backup(&mut self, edge: usize, mut value: f32, times: f32) -> f32 {
         value = self.edge_shape[edge] - value;
@@ -174,6 +197,79 @@ impl Node {
         self.virtual_visits -= VIRTUAL_LOSS * times;
 
         value
+    }
+
+    pub(super) fn tier_3_bought(&self) -> u32 {
+        let seat_idx = player_id_to_usize(self.player);
+        self.counters[seat_idx].tier3_bought
+    }
+
+    pub(super) fn game_state(&self) -> &GameState {
+        &self.game.state
+    }
+
+    pub(super) fn player(&self) -> PlayerId {
+        self.player
+    }
+
+    pub(super) fn counters(&self) -> &[TurnCounters; 2] {
+        &self.counters
+    }
+
+    pub(super) fn game(&self) -> &Game {
+        &self.game
+    }
+
+    pub(super) fn lane_states(&self) -> &[LaneState; 2] {
+        &self.lane_states
+    }
+
+    pub(super) fn candidates(&self) -> &[MacroGoal] {
+        &self.candidates
+    }
+
+    pub(super) fn frozen_value(&self) -> Option<f32> {
+        self.frozen_value
+    }
+
+    pub(super) fn from(&self) -> Option<(PlayerId, &MacroGoal)> {
+        self.from.as_ref().map(|(p, g)| (*p, g))
+    }
+
+    pub(super) fn candidate_for_edge(&self, edge: usize) -> &MacroGoal {
+        &self.candidates[edge]
+    }
+
+    pub(super) fn branch_belief(&self) -> Option<&BranchBelief> {
+        self.branch_belief.as_ref()
+    }
+
+    /// Get the index of the child by edge.
+    pub(super) fn get_child_by_edge(&self, edge: usize) -> Option<usize> {
+        self.children[edge]
+    }
+
+    pub(super) fn get_edge_frozen(&self, edge: usize) -> Option<f32> {
+        self.edge_frozen[edge]
+    }
+
+    pub(super) fn set_edge_frozen(&mut self, edge: usize, value: f32) {
+        self.edge_frozen[edge] = Some(value);
+    }
+
+    pub(super) fn set_child_by_edge(&mut self, edge: usize, child: Option<usize>) {
+        self.children[edge] = child;
+    }
+
+    pub(super) fn set_edge_shape(&mut self, edge: usize, value: f32) {
+        self.edge_shape[edge] = value;
+    }
+
+    /// Selects the next edge and charges its virtual loss.
+    pub(super) fn prepare_next_for_descend(&mut self) -> usize {
+        let edge = self.select_edge();
+        self.charge_virtual_loss(edge);
+        edge
     }
 }
 

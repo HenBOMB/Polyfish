@@ -209,6 +209,23 @@ pub enum CandidateClass {
     DefendUrgent = 8,
 }
 
+impl CandidateClass {
+    /// Truncation priority for belief-conditioned candidate sets: claims and
+    /// attacks outrank stances so a tight `k` keeps actionable directives.
+    pub fn priority(self) -> u8 {
+        match self {
+            CandidateClass::Base => 0,
+            CandidateClass::ClaimSafe => 1,
+            CandidateClass::Contest => 2,
+            CandidateClass::AttackCapital | CandidateClass::AttackWeakest => 3,
+            CandidateClass::DefendUrgent => 4,
+            CandidateClass::RealFilter => 5,
+            CandidateClass::Stance => 6,
+            CandidateClass::Continuation => 7,
+        }
+    }
+}
+
 /// Number of CandidateClass variants (telemetry array size).
 pub const CANDIDATE_CLASSES: usize = 9;
 
@@ -546,6 +563,11 @@ pub fn enumerate_candidates_with_belief(
                 &mut out,
             );
         }
+    }
+    // Belief sets rank by class priority before truncation (claims/attacks
+    // over stances); unconditioned enumeration keeps insertion order.
+    if belief.is_some() {
+        out.sort_by_key(|(_, c)| c.priority());
     }
     out.truncate(k.max(1));
     out

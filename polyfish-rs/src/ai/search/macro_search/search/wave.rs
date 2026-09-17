@@ -2,15 +2,15 @@
 // `count` tracks repeated picks of the same (parent, edge) for correct backup.
 pub(super) struct PendingLeaf {
     // parent node index
-    parent: usize,
+    pub(super) parent: usize,
     // edge index
-    edge: usize,
+    pub(super) edge: usize,
     // path of nodes visited so far
-    path: Vec<(usize, usize)>,
+    pub(super) path: Vec<(usize, usize)>,
     // offset into the feature vector
-    feat_offset: usize,
+    pub(super) feat_offset: usize,
     // count of how many times this leaf has been picked
-    count: u32,
+    pub(super) count: u32,
 }
 
 /// Outcome of one `descend_once` call.
