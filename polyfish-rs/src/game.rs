@@ -55,6 +55,61 @@ pub fn set_adversarial_search(on: bool) {
     );
 }
 
+/// Tri-state (0 = not yet resolved, 1 = off, 2 = on) for teacher `EndTurn`
+/// retention; mirrors `ADVERSARIAL_SEARCH`. Off by default so every historical
+/// training run's move distribution is preserved byte-for-byte.
+static TEACHER_KEEP_END_TURN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Whether the teacher/search backends keep `EndTurn` in their root candidate
+/// set when other moves exist. Off by default (legacy behaviour: strip it to
+/// prevent passive play). Enable with `POLYFISH_TEACHER_KEEP_END_TURN=1` or
+/// `set_teacher_keep_end_turn(true)` for entity-schema corpus generation, where
+/// the cloned policy must be supervised on the stop decision.
+///
+/// WARNING: only meaningful together with `adversarial_search()`. With
+/// adversarial search off, `simulate_move`'s `EndTurn` deletes the opponent's
+/// whole turn and hands control straight back to the mover
+/// (see `simulate_move`), so an in-tree `EndTurn` is valued as "go again" and
+/// the teacher would demonstrate permanent turn-chaining. `end_turn_retained`
+/// asserts this pairing in debug builds.
+pub fn teacher_keep_end_turn() -> bool {
+    use std::sync::atomic::Ordering;
+    match TEACHER_KEEP_END_TURN.load(Ordering::Relaxed) {
+        2 => true,
+        1 => false,
+        _ => {
+            let on = std::env::var("POLYFISH_TEACHER_KEEP_END_TURN")
+                .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "on"))
+                .unwrap_or(false);
+            TEACHER_KEEP_END_TURN.store(if on { 2 } else { 1 }, Ordering::Relaxed);
+            on
+        }
+    }
+}
+
+/// Override the teacher `EndTurn`-retention switch for this process. Set it
+/// before any search starts.
+pub fn set_teacher_keep_end_turn(on: bool) {
+    TEACHER_KEEP_END_TURN.store(
+        if on { 2 } else { 1 },
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// The single gate every backend consults before stripping root `EndTurn`.
+/// Returns true when `EndTurn` should be *retained* (teacher corpus mode).
+#[inline]
+pub fn end_turn_retained() -> bool {
+    let keep = teacher_keep_end_turn();
+    debug_assert!(
+        !keep || adversarial_search(),
+        "teacher_keep_end_turn requires adversarial_search: with it off, an \
+         in-tree EndTurn deletes the opponent's turn and is valued as 'go again' \
+         (game.rs simulate_move), so the teacher would demonstrate turn-chaining"
+    );
+    keep
+}
+
 /// The main game controller
 ///
 /// Provides the interface for loading game states, playing moves, and managing turns.

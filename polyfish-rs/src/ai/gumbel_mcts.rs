@@ -479,7 +479,7 @@ impl<'a> GumbelMctsAgent<'a> {
                 .as_ref()
                 .map_or(false, |m| m.move_type() != MoveType::EndTurn)
         });
-        if has_other {
+        if has_other && !crate::game::end_turn_retained() {
             new_root.children.retain(|c| {
                 c.move_to_here
                     .as_ref()
@@ -531,11 +531,13 @@ impl<'a> GumbelMctsAgent<'a> {
         }
 
         // Suppress EndTurn at the root when any other move exists to prevent
-        // passive play.
+        // passive play. Skipped in teacher-corpus mode
+        // (`game::end_turn_retained`), where the cloned policy must be
+        // supervised on the stop decision.
         let has_other = legal_moves
             .iter()
             .any(|m| m.move_type() != MoveType::EndTurn);
-        if has_other {
+        if has_other && !crate::game::end_turn_retained() {
             legal_moves.retain(|m| m.move_type() != MoveType::EndTurn);
         }
 
@@ -1247,15 +1249,19 @@ fn blend_heuristic_prior(game: &Game, children: &mut [GumbelNode], weight: f32) 
 /// state's legal moves. Any mismatch means the sim-built cache is stale.
 fn reused_children_match_legal(game: &Game, children: &[GumbelNode]) -> bool {
     let mut legal = game.legal_moves();
+    // Must mirror the root build exactly, including teacher-corpus mode: if the
+    // fresh/reused root retained EndTurn, the cached children still carry it and
+    // filtering here would mismatch on every reuse.
     let has_other = legal.iter().any(|m| m.move_type() != MoveType::EndTurn);
-    if has_other {
+    let strip = has_other && !crate::game::end_turn_retained();
+    if strip {
         legal.retain(|m| m.move_type() != MoveType::EndTurn);
     }
 
     // Mirror the EndTurn suppression applied to `legal`: interior expansion
     // keeps EndTurn children, but `finish_reused_root` strips them after this
     // check runs, so we must exclude them here too to avoid a count mismatch.
-    let filtered_children: Vec<&GumbelNode> = if has_other {
+    let filtered_children: Vec<&GumbelNode> = if strip {
         children
             .iter()
             .filter(|c| {

@@ -138,9 +138,10 @@ impl GreedyHeuristicAgent {
         use crate::ai::mcts_types::MoveVisit;
 
         let mut moves = game.legal_moves();
-        // Mirror the search backends' root EndTurn suppression.
+        // Mirror the search backends' root EndTurn suppression (skipped in
+        // teacher-corpus mode; see `game::end_turn_retained`).
         let has_other = moves.iter().any(|m| m.move_type() != MoveType::EndTurn);
-        if has_other {
+        if has_other && !crate::game::end_turn_retained() {
             moves.retain(|m| m.move_type() != MoveType::EndTurn);
         }
         if moves.is_empty() {
@@ -245,7 +246,7 @@ impl RandomAgent {
 
         let mut moves = game.legal_moves();
         let has_other = moves.iter().any(|m| m.move_type() != MoveType::EndTurn);
-        if has_other {
+        if has_other && !crate::game::end_turn_retained() {
             moves.retain(|m| m.move_type() != MoveType::EndTurn);
         }
         if moves.is_empty() {
@@ -308,7 +309,7 @@ impl HeuristicMctsAgent {
         let mut filtered_end_turn = false;
         if let Some(moves) = &mut root.untried_moves {
             let has_other_moves = moves.iter().any(|m| m.move_type() != MoveType::EndTurn);
-            if has_other_moves {
+            if has_other_moves && !crate::game::end_turn_retained() {
                 moves.retain(|m| m.move_type() != MoveType::EndTurn);
                 filtered_end_turn = true;
             }
@@ -644,7 +645,7 @@ impl StateDiffGreedyAgent {
         let has_other = moves
             .iter()
             .any(|m| m.move_type() != crate::types::MoveType::EndTurn);
-        if has_other {
+        if has_other && !crate::game::end_turn_retained() {
             moves.retain(|m| m.move_type() != crate::types::MoveType::EndTurn);
         }
 
@@ -676,5 +677,62 @@ impl StateDiffGreedyAgent {
         _move_count: usize,
     ) -> (Option<Box<dyn Move>>, Vec<crate::ai::mcts_types::MoveVisit>) {
         (self.select_move(game), Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod teacher_end_turn_tests {
+    use super::*;
+    use crate::mapgen::{MapGenSettings, generate};
+    use crate::types::{MapSize, TribeType};
+
+    fn fresh_game() -> Game {
+        let settings = MapGenSettings {
+            size: MapSize::Tiny,
+            tribes: vec![TribeType::Imperius, TribeType::Bardur],
+            seed: 12345,
+            ..Default::default()
+        };
+        let mut game = Game::new();
+        game.state = generate(settings);
+        game.post_load();
+        game
+    }
+
+    /// One test, not two: the teacher flags are process-global, so a second
+    /// test would race this one on the same atomics under the parallel runner.
+    /// Covers both modes plus restoration.
+    #[test]
+    fn teacher_end_turn_flag_controls_candidate_set() {
+        // Legacy: strip EndTurn whenever another move exists.
+        crate::game::set_teacher_keep_end_turn(false);
+        let mut game_a = fresh_game();
+        let agent_a = GreedyHeuristicAgent::new();
+        let (mv_a, visits_a) = agent_a.select_move_with_decomposed_visits(&mut game_a, 0);
+        assert!(mv_a.is_some());
+        assert!(
+            visits_a.iter().all(|v| v.move_type != MoveType::EndTurn),
+            "legacy mode must not export EndTurn as a teacher candidate"
+        );
+
+        // Teacher-corpus mode: EndTurn retained and carrying target mass.
+        // Requires adversarial search (see `game::end_turn_retained`).
+        crate::game::set_adversarial_search(true);
+        crate::game::set_teacher_keep_end_turn(true);
+        let mut game_b = fresh_game();
+        let agent_b = GreedyHeuristicAgent::new();
+        let (mv_b, visits_b) = agent_b.select_move_with_decomposed_visits(&mut game_b, 0);
+        assert!(mv_b.is_some());
+        let et = visits_b
+            .iter()
+            .find(|v| v.move_type == MoveType::EndTurn)
+            .expect("EndTurn must be a candidate in teacher mode");
+        // `score_move` scores EndTurn at 0.0; other moves score higher, so it
+        // gets real (non-zero) softmax mass without dominating.
+        assert!(et.visits > 0.0, "EndTurn must carry non-zero target weight");
+
+        // Restore process-global state for any later test.
+        crate::game::set_teacher_keep_end_turn(false);
+        crate::game::set_adversarial_search(false);
     }
 }
