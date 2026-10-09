@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Hardware Telemetry & Performance Analytics for PolyZero Training.
+"""Hardware Telemetry, Time-Wasted Tracking, and Financial Analytics for PolyZero.
 
-Tracks GPU utilization, VRAM, power, CPU intensity, throughput, and bottleneck
-diagnostics on cloud pods (RunPod, Vast.ai, local).
+Tracks GPU utilization, VRAM, power, CPU intensity, simulation throughput,
+and explicitly calculates:
+    1. Time Wasted (seconds the GPU/system sat idling waiting on CPU bottlenecks).
+    2. Money Wasted (exact dollar amount paid for idle/unproductive compute,
+       both per iteration and cumulatively across the run).
 
 Usage:
     # Probe hardware:
@@ -32,6 +35,32 @@ TELEMETRY_CSV = "hardware_telemetry.csv"
 TELEMETRY_JSON = "hardware_status.json"
 PID_FILE = ".telemetry_sampler.pid"
 SAMPLES_FILE = ".telemetry_samples.json"
+CUMULATIVE_FILE = ".telemetry_cumulative.json"
+
+# Typical RunPod on-demand market pricing ($/hr) for automatic cost estimation
+GPU_MARKET_RATES = {
+    "H100": 3.49,
+    "A100": 1.89,
+    "L40S": 0.84,
+    "L40": 0.84,
+    "A40": 0.74,
+    "4090": 0.69,
+    "3090": 0.34,
+    "4080": 0.54,
+    "A5000": 0.44,
+    "A6000": 0.79,
+    "3080": 0.29,
+    "V100": 0.49,
+}
+
+
+def estimate_hourly_rate(gpu_name: str) -> float:
+    """Estimate RunPod hourly cost ($/hr) based on detected GPU name if not set."""
+    name_upper = gpu_name.upper()
+    for model_key, rate in GPU_MARKET_RATES.items():
+        if model_key in name_upper:
+            return rate
+    return 0.50
 
 
 def get_cpu_info() -> Dict[str, Any]:
@@ -170,7 +199,7 @@ def diagnose_bottleneck(gpu_avg: float, cpu_avg: float, vram_used: float, vram_t
         return (
             "CPU_BOTTLENECK",
             "⚠️ Severe CPU throttle. GPU is idling (<35%) while CPU is pegged (>85%). "
-            "You are overpaying for GPU compute! Upgrade to faster/more CPU cores, or switch to a cheaper GPU.",
+            "You are overpaying for GPU compute! Upgrade to faster/more CPU cores, or switch to RTX 4090/3090.",
         )
     elif gpu_avg >= 80.0:
         return (
@@ -191,14 +220,49 @@ def diagnose_bottleneck(gpu_avg: float, cpu_avg: float, vram_used: float, vram_t
         return "MODERATE", "Moderate load. GPU and CPU shared evenly."
 
 
+def load_cumulative_stats() -> Dict[str, float]:
+    """Load running totals across the whole training run."""
+    if os.path.exists(CUMULATIVE_FILE):
+        try:
+            with open(CUMULATIVE_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "total_wall_sec": 0.0,
+        "total_time_wasted_sec": 0.0,
+        "total_spend_dollars": 0.0,
+        "total_wasted_dollars": 0.0,
+        "total_games": 0.0,
+        "iterations_counted": 0.0,
+    }
+
+
+def save_cumulative_stats(stats: Dict[str, float]):
+    """Save running totals to CUMULATIVE_FILE."""
+    try:
+        with open(CUMULATIVE_FILE, "w") as f:
+            json.dump(stats, f, indent=2)
+    except Exception:
+        pass
+
+
 def cmd_probe():
-    """Print hardware specs and current utilization immediately."""
+    """Print hardware specs, estimated hourly rate, and utilization immediately."""
     cpu = get_cpu_info()
     ram = get_ram_info()
     gpus = query_nvidia_smi()
 
+    rate = estimate_hourly_rate(gpus[0]["name"]) if gpus else 0.0
+    user_rate = os.environ.get("POD_HOURLY_COST")
+    if user_rate:
+        try:
+            rate = float(user_rate)
+        except ValueError:
+            pass
+
     print("==============================================================================")
-    print(" 🖥️  HARDWARE PROBE & SPECIFICATIONS")
+    print(" 🖥️  HARDWARE PROBE & FINANCIAL AUDIT")
     print("==============================================================================")
     print(f" CPU:   {cpu['model']} ({cpu['cores']} logical cores)")
     print(f" RAM:   {ram['used_mb']:.0f} MB used / {ram['total_mb']:.0f} MB total ({ram['used_mb']/max(1, ram['total_mb'])*100:.1f}%)")
@@ -207,6 +271,7 @@ def cmd_probe():
             print(f" GPU {g['index']}: {g['name']} (Driver: {g['driver']})")
             print(f"        VRAM:  {g['mem_used_mb']:.0f} MB / {g['mem_total_mb']:.0f} MB ({g['mem_util_pct']}%)")
             print(f"        Load:  Compute {g['gpu_util_pct']}% | Power {g['power_watts']}W | Temp {g['temp_c']}°C")
+        print(f" Pod Pricing: ~${rate:.2f}/hr (Set via POD_HOURLY_COST to customize)")
     else:
         print(" GPU:   None detected via nvidia-smi (CPU-only execution).")
     print("==============================================================================")
@@ -222,12 +287,10 @@ def cmd_start():
         except Exception:
             pass
 
-    # Launch daemon in background
     cmd = [sys.executable, os.path.abspath(__file__), "--daemon-worker"]
     p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setpgrp)
     with open(PID_FILE, "w") as f:
         f.write(str(p.pid))
-    # Reset samples file
     with open(SAMPLES_FILE, "w") as f:
         f.write("[]")
 
@@ -244,7 +307,7 @@ def cmd_stop_and_record(
     games_count: int = 0,
     hourly_cost: Optional[float] = None,
 ):
-    """Stop the sampler, aggregate metrics, append to CSV, and print diagnostic card."""
+    """Stop sampler, aggregate metrics, calculate time & money wasted, and print audit card."""
     # Stop daemon
     if os.path.exists(PID_FILE):
         try:
@@ -271,7 +334,6 @@ def cmd_stop_and_record(
             pass
 
     if not samples:
-        # Fallback to single instant probe if sampler had no samples
         gpus = query_nvidia_smi()
         g = gpus[0] if gpus else {}
         ram = get_ram_info()
@@ -303,29 +365,69 @@ def cmd_stop_and_record(
     gpu_name = samples[-1].get("gpu_name", "Unknown GPU")
     ram_used = samples[-1].get("ram_used_mb", 0.0)
 
+    duration_sec = samples[-1]["t"] if "t" in samples[-1] and samples[-1]["t"] > 0 else 1.0
+
+    # Pricing resolution
+    if hourly_cost is None or hourly_cost <= 0.0:
+        env_cost = os.environ.get("POD_HOURLY_COST")
+        if env_cost:
+            try:
+                hourly_cost = float(env_cost)
+            except ValueError:
+                hourly_cost = estimate_hourly_rate(gpu_name)
+        else:
+            hourly_cost = estimate_hourly_rate(gpu_name)
+
+    # =========================================================================
+    # Financial & Waste Math
+    # =========================================================================
+    # GPU Idle percentage during this iteration
+    gpu_idle_pct = max(0.0, 100.0 - gpu_avg)
+    time_wasted_sec = duration_sec * (gpu_idle_pct / 100.0)
+
+    iteration_cost = hourly_cost * (duration_sec / 3600.0)
+    money_wasted_iter = iteration_cost * (gpu_idle_pct / 100.0)
+
+    cost_per_game = (iteration_cost / games_count) if games_count > 0 else 0.0
+    wasted_per_game = (money_wasted_iter / games_count) if games_count > 0 else 0.0
+
+    # Memory overprovision penalty: PolyZero requires ~3000 MB VRAM
+    vram_excess_mb = max(0.0, vram_total - 3000.0)
+    vram_waste_pct = (vram_excess_mb / max(1.0, vram_total)) * 100.0
+
+    # Cumulative running totals
+    cum = load_cumulative_stats()
+    cum["total_wall_sec"] += duration_sec
+    cum["total_time_wasted_sec"] += time_wasted_sec
+    cum["total_spend_dollars"] += iteration_cost
+    cum["total_wasted_dollars"] += money_wasted_iter
+    cum["total_games"] += games_count
+    cum["iterations_counted"] += 1
+    save_cumulative_stats(cum)
+
+    cum_waste_pct = (
+        (cum["total_wasted_dollars"] / max(1e-5, cum["total_spend_dollars"])) * 100.0
+        if cum["total_spend_dollars"] > 0
+        else 0.0
+    )
+
     verdict_code, verdict_desc = diagnose_bottleneck(gpu_avg, cpu_avg, vram_max, vram_total)
 
-    # Cost calculation if hourly_cost is provided or from env RUNPOD_HOURLY_COST
-    if hourly_cost is None:
-        try:
-            hourly_cost = float(os.environ.get("POD_HOURLY_COST", "0.0"))
-        except ValueError:
-            hourly_cost = 0.0
-
-    duration_sec = samples[-1]["t"] if "t" in samples[-1] else 1.0
-    cost_per_game = (hourly_cost / 3600.0 * duration_sec / games_count) if (hourly_cost > 0 and games_count > 0) else 0.0
-
-    # Print Terminal Diagnostic Card
-    print("")
-    print("┌────────────────────────── 📊 HARDWARE & COST ANALYTICS ──────────────────────────┐")
-    print(f"│ Iteration: {iteration:<6} │ Duration: {duration_sec:>5.1f}s │ Speed: {moves_per_sec:>7.1f} moves/s ({games_count} games) │")
-    print("├──────────────────────────────────────────────────────────────────────────────────┤")
-    print(f"│ GPU:  {gpu_name:<28} │ Load: Avg {gpu_avg:>5.1f}% (Peak {gpu_max:>5.1f}%) │")
+    # Print Terminal Diagnostic Card with explicit Time & Money Waste
     vram_pct = (vram_max / max(1.0, vram_total)) * 100.0
-    print(f"│ VRAM: {vram_max:>6.0f} MB / {vram_total:>6.0f} MB ({vram_pct:>4.1f}%)   │ Power: {power_avg:>5.1f}W              │")
-    print(f"│ CPU:  Avg {cpu_avg:>5.1f}% (Peak {cpu_max:>5.1f}%)          │ System RAM: {ram_used:>6.0f} MB              │")
-    if hourly_cost > 0:
-        print(f"│ Cost: ${hourly_cost:.2f}/hr (~${cost_per_game*1000:.3f} per 1,000 games)                                    │")
+    print("")
+    print("┌────────────────────────── 📊 HARDWARE & FINANCIAL AUDIT ──────────────────────────┐")
+    print(f"│ Iteration: {iteration:<6} │ Duration: {duration_sec:>5.1f}s │ Speed: {moves_per_sec:>7.1f} moves/s ({games_count} games)     │")
+    print("├──────────────────────────────────────────────────────────────────────────────────┤")
+    print(f"│ GPU:  {gpu_name:<28} │ Load: Avg {gpu_avg:>5.1f}% (Peak {gpu_max:>5.1f}%)          │")
+    print(f"│ VRAM: {vram_max:>6.0f} MB / {vram_total:>6.0f} MB ({vram_pct:>4.1f}%)   │ Power: {power_avg:>5.1f}W                       │")
+    print(f"│ CPU:  Avg {cpu_avg:>5.1f}% (Peak {cpu_max:>5.1f}%)          │ System RAM: {ram_used:>6.0f} MB                       │")
+    print("├──────────────────────────────────────────────────────────────────────────────────┤")
+    print(f"│ ⏱️  TIME WASTED:   {time_wasted_sec:>5.1f}s idle / {duration_sec:>5.1f}s total ({gpu_idle_pct:>4.1f}% wasted idle time)      │")
+    print(f"│ 💸 MONEY WASTED:  ${money_wasted_iter:>6.4f} this iter | ${cum['total_wasted_dollars']:>6.2f} cum. wasted (at ${hourly_cost:>4.2f}/hr)   │")
+    print(f"│ 📉 CAPITAL WASTE: {gpu_idle_pct:>5.1f}% of your pod spend was burned on idle cycles            │")
+    if vram_waste_pct > 75.0:
+        print(f"│ 💾 VRAM OVERPAY:  {vram_waste_pct:>4.1f}% excess VRAM ({vram_excess_mb/1024:.0f}GB unneeded) - overpaying for tier!    │")
     print("├──────────────────────────────────────────────────────────────────────────────────┤")
     print(f"│ Diagnosis: {verdict_code:<15}                                                      │")
     print(f"│ {verdict_desc:<80} │")
@@ -337,6 +439,8 @@ def cmd_stop_and_record(
         "timestamp",
         "iteration",
         "duration_sec",
+        "time_wasted_sec",
+        "gpu_idle_pct",
         "moves_per_sec",
         "games_count",
         "gpu_name",
@@ -344,12 +448,17 @@ def cmd_stop_and_record(
         "gpu_util_max",
         "vram_used_max_mb",
         "vram_total_mb",
+        "vram_waste_pct",
         "gpu_power_avg_w",
         "cpu_util_avg",
         "cpu_util_max",
         "ram_used_mb",
         "bottleneck_code",
         "hourly_cost",
+        "iter_cost_dollars",
+        "iter_wasted_dollars",
+        "cum_spend_dollars",
+        "cum_wasted_dollars",
     ]
     file_exists = os.path.exists(TELEMETRY_CSV)
     with open(TELEMETRY_CSV, "a", newline="") as f:
@@ -360,6 +469,8 @@ def cmd_stop_and_record(
             datetime.now(timezone.utc).isoformat(),
             iteration,
             round(duration_sec, 2),
+            round(time_wasted_sec, 2),
+            round(gpu_idle_pct, 2),
             round(moves_per_sec, 2),
             games_count,
             gpu_name,
@@ -367,12 +478,17 @@ def cmd_stop_and_record(
             round(gpu_max, 2),
             round(vram_max, 1),
             round(vram_total, 1),
+            round(vram_waste_pct, 1),
             round(power_avg, 1),
             round(cpu_avg, 2),
             round(cpu_max, 2),
             round(ram_used, 1),
             verdict_code,
             round(hourly_cost, 4),
+            round(iteration_cost, 4),
+            round(money_wasted_iter, 4),
+            round(cum["total_spend_dollars"], 4),
+            round(cum["total_wasted_dollars"], 4),
         ])
 
     # Status JSON update (live snapshot for dashboards and APIs)
@@ -382,6 +498,16 @@ def cmd_stop_and_record(
         "duration_sec": round(duration_sec, 2),
         "moves_per_sec": round(moves_per_sec, 2),
         "games_count": games_count,
+        "financials": {
+            "hourly_rate": round(hourly_cost, 2),
+            "iteration_cost": round(iteration_cost, 4),
+            "iteration_money_wasted": round(money_wasted_iter, 4),
+            "time_wasted_sec": round(time_wasted_sec, 2),
+            "waste_pct": round(gpu_idle_pct, 1),
+            "cumulative_spend_dollars": round(cum["total_spend_dollars"], 2),
+            "cumulative_wasted_dollars": round(cum["total_wasted_dollars"], 2),
+            "cumulative_time_wasted_sec": round(cum["total_time_wasted_sec"], 1),
+        },
         "gpu": {
             "name": gpu_name,
             "util_avg_pct": round(gpu_avg, 2),
@@ -389,6 +515,7 @@ def cmd_stop_and_record(
             "vram_used_mb": round(vram_max, 1),
             "vram_total_mb": round(vram_total, 1),
             "vram_util_pct": round(vram_pct, 1),
+            "vram_waste_pct": round(vram_waste_pct, 1),
             "power_avg_w": round(power_avg, 1),
         },
         "cpu": {
