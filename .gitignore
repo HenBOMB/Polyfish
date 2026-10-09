@@ -46,7 +46,9 @@ polyfish-rs/decision_traces/
 polyfish-rs/models/*
 polyfish-rs/model.safetensors
 polyfish-rs/model_*.safetensors
-polyfish-rs/model.safetensors.bak
+!polyfish-rs/model_dagger_foundation.safetensors
+polyfish-rs/model.safetensors.bak*
+polyfish-rs/optimizer_state.pt
 polyfish-rs/.training.pid
 polyfish-rs/.current_run
 polyfish-rs/server.log

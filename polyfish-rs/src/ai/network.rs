@@ -283,8 +283,20 @@ impl PolyZeroNet {
         };
         let p_fc_shared = candle_nn::linear(1 * MAP_SIZE * MAP_SIZE, filters, vs.pp("p_fc_shared"))?;
 
-        // Policy heads
-        let pi_action = candle_nn::linear(filters, NUM_ACTION_TYPES, vs.pp("pi_action"))?;
+        // Policy heads: support legacy 11-wide action heads by padding with zero
+        let pi_action = if let Ok(ws) = vs.pp("pi_action").get((NUM_ACTION_TYPES, filters), "weight") {
+            let bs = vs.pp("pi_action").get(NUM_ACTION_TYPES, "bias")?;
+            Linear::new(ws, Some(bs))
+        } else if let Ok(ws) = vs.pp("pi_action").get((11, filters), "weight") {
+            let bs = vs.pp("pi_action").get(11, "bias")?;
+            let pad_w = Tensor::zeros((NUM_ACTION_TYPES - 11, filters), ws.dtype(), ws.device())?;
+            let padded_w = Tensor::cat(&[&ws, &pad_w], 0)?;
+            let pad_b = Tensor::zeros(NUM_ACTION_TYPES - 11, bs.dtype(), bs.device())?;
+            let padded_b = Tensor::cat(&[&bs, &pad_b], 0)?;
+            Linear::new(padded_w, Some(padded_b))
+        } else {
+            candle_nn::linear(filters, NUM_ACTION_TYPES, vs.pp("pi_action"))?
+        };
         let pi_source = conv(filters, 1, 1, 1, 0, vs.pp("pi_source"))?;
         let pi_target = conv(filters, 1, 1, 1, 0, vs.pp("pi_target"))?;
         let pi_option = candle_nn::linear(filters, NUM_MOVE_OPTIONS, vs.pp("pi_option"))?;

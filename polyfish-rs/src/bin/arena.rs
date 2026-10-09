@@ -205,6 +205,13 @@ fn player_name(backend: SearchBackend, model: &str, mcts: usize) -> String {
         SearchBackend::Heuristic => format!("heuristic{mcts}"),
         SearchBackend::Zero => format!("{stem}@zero{mcts}"),
         SearchBackend::Gumbel { k } => format!("{stem}@gumbel{mcts}k{k}"),
+        SearchBackend::Gene => {
+            if mcts == 0 {
+                "gene-greedy".to_string()
+            } else {
+                format!("gene{mcts}")
+            }
+        }
     }
 }
 
@@ -496,6 +503,7 @@ fn backend_from_arg(arg: SearchBackendArg, k: usize) -> SearchBackend {
         SearchBackendArg::Greedy => SearchBackend::Greedy,
         SearchBackendArg::StateDiffGreedy => SearchBackend::StateDiffGreedy,
         SearchBackendArg::Random => SearchBackend::Random,
+        SearchBackendArg::Gene => SearchBackend::Gene,
     }
 }
 

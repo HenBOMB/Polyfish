@@ -648,6 +648,7 @@ fn play_single_game(
     trace_max: usize,
     trace_counter: &AtomicUsize,
     aborted_games: &AtomicUsize,
+    dagger: bool,
 ) -> Option<GameResult> {
     let (map_size, max_turns) = curriculum(iteration);
 
@@ -765,6 +766,11 @@ fn play_single_game(
     let mut traced_in_this_game = false;
     let mut kl_sum = 0.0f32;
     let mut kl_n = 0u32;
+    let dagger_teacher = if dagger {
+        Some(polyfish::ai::heuristic_mcts::GreedyHeuristicAgent::new())
+    } else {
+        None
+    };
     while !polyfish::functions::is_game_over(&game.state) {
         record_spt_at_turn_start(&game.state, &mut spt_at_turn, &mut next_spt_milestone);
 
@@ -800,7 +806,14 @@ fn play_single_game(
             current_agent.request_trace();
         }
 
-        let (best_move, move_visits) = current_agent.think_decomposed(&mut game, move_count);
+        let (best_move, move_visits) = if let Some(teacher) = &dagger_teacher {
+            // DAgger: student policy drives the game, teacher provides the expert corrective label on student's state
+            let (student_move, _) = current_agent.think_decomposed(&game, move_count);
+            let (_, teacher_visits) = teacher.select_move_with_decomposed_visits(&mut game, usize::MAX);
+            (student_move, teacher_visits)
+        } else {
+            current_agent.think_decomposed(&mut game, move_count)
+        };
         // The search that just ran was for the CURRENT (pre-move) state, so
         // this is that state's own root value — the TD bootstrap target for
         // whichever earlier step's label lands here as its "next decision".
@@ -1369,6 +1382,11 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, default_value_t = false)]
         reward_shaping: bool,
 
+        /// Run DAgger (Dataset Aggregation): the student drives trajectories
+        /// while the Greedy teacher labels every visited state with expert corrections.
+        #[arg(long, default_value_t = false)]
+        dagger: bool,
+
         /// Mirror-relative value labels: games 2k/2k+1 replay the same seed
         /// with seats swapped; each game's outcome tail is blended toward the
         /// pair mean (fully at game start, not at all by game end), canceling
@@ -1554,6 +1572,7 @@ fn main() -> anyhow::Result<()> {
         SearchBackendArg::Greedy => SearchBackend::Greedy,
         SearchBackendArg::StateDiffGreedy => SearchBackend::StateDiffGreedy,
         SearchBackendArg::Random => SearchBackend::Random,
+        SearchBackendArg::Gene => SearchBackend::Gene,
     };
 
     // Select device: CUDA (NVIDIA) > Metal (macOS) > CPU, unless overridden via POLYFISH_DEVICE
@@ -1836,6 +1855,12 @@ fn main() -> anyhow::Result<()> {
         SearchBackend::Greedy => "Greedy heuristic (no NN, no search)".to_string(),
         SearchBackend::StateDiffGreedy => "State-diff exp greedy (no NN, no search)".to_string(),
         SearchBackend::Random => "Uniform random (no NN, no search)".to_string(),
+        SearchBackend::Gene => "Gene-based candidate (no NN)".to_string(),
+    };
+    let search_label = if args.dagger {
+        format!("DAgger (Student={search_label}, Teacher=Greedy)")
+    } else {
+        search_label
     };
     println!(
         "[Self-Play] {match_label}: {} games, {} mcts-iters, {search_label}, tribes {tribe_label} | eval {backend_label} | {eval_servers} shard(s) cache={per_shard_cache:?} workers={} | {num_actors} actors max_batch={} coalesce_us={} leaf_batch={:?} | device {:?} (CANDLE_METAL_COMPUTE_PER_BUFFER={metal_compute_per_buffer})",
@@ -1941,6 +1966,7 @@ fn main() -> anyhow::Result<()> {
                             args.trace_max,
                             &trace_counter,
                             &aborted_games,
+                            args.dagger,
                         )
                     }))
                     .unwrap_or_else(|_| {

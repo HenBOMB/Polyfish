@@ -21,6 +21,8 @@ pub enum SearchBackend {
     StateDiffGreedy,
     /// Uniform-random legal moves. The fixed 0-Elo anchor for `elo.py`.
     Random,
+    /// Evolved parameters candidate agent (gen_896).
+    Gene,
 }
 
 impl Default for SearchBackend {
@@ -39,6 +41,7 @@ pub enum SearchBackendArg {
     Greedy,
     StateDiffGreedy,
     Random,
+    Gene,
 }
 
 impl From<SearchBackendArg> for SearchBackend {
@@ -50,6 +53,7 @@ impl From<SearchBackendArg> for SearchBackend {
             SearchBackendArg::Greedy => SearchBackend::Greedy,
             SearchBackendArg::StateDiffGreedy => SearchBackend::StateDiffGreedy,
             SearchBackendArg::Random => SearchBackend::Random,
+            SearchBackendArg::Gene => SearchBackend::Gene,
         }
     }
 }
@@ -99,6 +103,7 @@ pub enum SearchAgent<'a> {
     Greedy(crate::ai::heuristic_mcts::GreedyHeuristicAgent),
     StateDiffGreedy(crate::ai::heuristic_mcts::StateDiffGreedyAgent),
     Random(crate::ai::heuristic_mcts::RandomAgent),
+    Gene(crate::ai::gene_agent::GeneAgent),
 }
 
 impl<'a> SearchAgent<'a> {
@@ -110,6 +115,7 @@ impl<'a> SearchAgent<'a> {
             SearchAgent::Greedy(a) => a.select_move(game),
             SearchAgent::StateDiffGreedy(a) => a.select_move(game),
             SearchAgent::Random(a) => a.select_move(game),
+            SearchAgent::Gene(a) => a.select_move(game),
         }
     }
 
@@ -127,6 +133,7 @@ impl<'a> SearchAgent<'a> {
                 a.select_move_with_decomposed_visits(game, move_count)
             }
             SearchAgent::Random(a) => a.select_move_with_decomposed_visits(game, move_count),
+            SearchAgent::Gene(a) => a.select_move_with_decomposed_visits(game, move_count),
         }
     }
 
@@ -139,6 +146,7 @@ impl<'a> SearchAgent<'a> {
             SearchAgent::Greedy(a) => (a.select_move(game), Vec::new()),
             SearchAgent::StateDiffGreedy(a) => (a.select_move(game), Vec::new()),
             SearchAgent::Random(a) => (a.select_move(game), Vec::new()),
+            SearchAgent::Gene(a) => (a.select_move(game), Vec::new()),
         }
     }
 
@@ -230,6 +238,11 @@ pub fn make_search_agent(
             SearchAgent::StateDiffGreedy(crate::ai::heuristic_mcts::StateDiffGreedyAgent)
         }
         SearchBackend::Random => SearchAgent::Random(crate::ai::heuristic_mcts::RandomAgent::new()),
+        SearchBackend::Gene => {
+            let genes = crate::ai::genes::AIGenes::load("gen_896.json")
+                .unwrap_or_else(|_| crate::ai::genes::AIGenes::default());
+            SearchAgent::Gene(crate::ai::gene_agent::GeneAgent::new(genes, iterations))
+        }
     }
 }
 

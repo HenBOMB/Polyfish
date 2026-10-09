@@ -169,6 +169,7 @@ fn main() -> anyhow::Result<()> {
         SearchBackendArg::Greedy => SearchBackend::Greedy,
         SearchBackendArg::StateDiffGreedy => SearchBackend::StateDiffGreedy,
         SearchBackendArg::Random => SearchBackend::Random,
+        SearchBackendArg::Gene => SearchBackend::Gene,
     };
 
     let num_actors = if args.actors > 0 {

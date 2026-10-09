@@ -22,5 +22,8 @@ pub mod metal_network;
 pub mod scoring;
 pub mod policy_composer;
 pub mod reward;
+pub mod genes;
+pub mod gene_ordering;
+pub mod gene_agent;
 pub use evaluator::evaluate_state;
 pub use mcts::{MctsAgent, MctsAnalysis, MoveEvaluation};
