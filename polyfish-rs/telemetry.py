@@ -142,16 +142,92 @@ def read_proc_stat_cpu() -> tuple[int, int]:
 
 
 class SamplerProcess:
-    """Background sampling loop writing time-series metrics to SAMPLES_FILE."""
+    """Background sampling loop writing time-series metrics and streaming to Supabase."""
 
-    def __init__(self, interval_sec: float = 1.5):
+    def __init__(self, interval_sec: float = 1.5, stream_interval_sec: float = 5.0):
         self.interval_sec = interval_sec
+        self.stream_interval_sec = stream_interval_sec
         self.stop_event = threading.Event()
         self.samples: List[Dict[str, Any]] = []
+
+    def _stream_live_snapshot(self, sample: Dict[str, Any], duration_sec: float):
+        """Asynchronously upload current live status to Supabase without blocking sampler."""
+        gpu_util = sample.get("gpu_util_pct", 0.0)
+        cpu_util = sample.get("cpu_util_pct", 0.0)
+        gpu_name = sample.get("gpu_name", "Unknown GPU")
+        vram_used = sample.get("gpu_mem_used_mb", 0.0)
+        vram_total = sample.get("gpu_mem_total_mb", 0.0)
+        vram_pct = (vram_used / max(1.0, vram_total)) * 100.0
+
+        hourly_cost = estimate_hourly_rate(gpu_name)
+        env_cost = os.environ.get("POD_HOURLY_COST")
+        if env_cost:
+            try:
+                hourly_cost = float(env_cost)
+            except ValueError:
+                pass
+
+        gpu_idle_pct = max(0.0, 100.0 - gpu_util)
+        time_wasted_sec = duration_sec * (gpu_idle_pct / 100.0)
+        iter_cost = hourly_cost * (duration_sec / 3600.0)
+        money_wasted = iter_cost * (gpu_idle_pct / 100.0)
+        cum = load_cumulative_stats()
+
+        code, desc = diagnose_bottleneck(gpu_util, cpu_util, vram_used, vram_total)
+
+        status_data = {
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "live": True,
+            "duration_sec": round(duration_sec, 1),
+            "financials": {
+                "hourly_rate": round(hourly_cost, 2),
+                "iteration_cost": round(iter_cost, 4),
+                "iteration_money_wasted": round(money_wasted, 4),
+                "time_wasted_sec": round(time_wasted_sec, 1),
+                "waste_pct": round(gpu_idle_pct, 1),
+                "cumulative_spend_dollars": round(cum["total_spend_dollars"] + iter_cost, 2),
+                "cumulative_wasted_dollars": round(cum["total_wasted_dollars"] + money_wasted, 2),
+                "cumulative_time_wasted_sec": round(cum["total_time_wasted_sec"] + time_wasted_sec, 1),
+            },
+            "gpu": {
+                "name": gpu_name,
+                "util_avg_pct": round(gpu_util, 1),
+                "util_max_pct": round(gpu_util, 1),
+                "vram_used_mb": round(vram_used, 1),
+                "vram_total_mb": round(vram_total, 1),
+                "vram_util_pct": round(vram_pct, 1),
+                "power_avg_w": round(sample.get("gpu_power_watts", 0.0), 1),
+            },
+            "cpu": {
+                "util_avg_pct": round(cpu_util, 1),
+                "util_max_pct": round(cpu_util, 1),
+                "ram_used_mb": round(sample.get("ram_used_mb", 0.0), 1),
+            },
+            "diagnosis": {
+                "code": code,
+                "description": desc,
+            },
+        }
+
+        try:
+            with open(TELEMETRY_JSON, "w") as f:
+                json.dump(status_data, f, indent=2)
+        except Exception:
+            pass
+
+        def _upload_task():
+            try:
+                import supabase_sync
+                supabase_sync.upload(TELEMETRY_JSON)
+            except Exception:
+                pass
+
+        threading.Thread(target=_upload_task, daemon=True).start()
 
     def run(self):
         last_work, last_total = read_proc_stat_cpu()
         start_time = time.time()
+        last_stream = 0.0
 
         while not self.stop_event.is_set():
             time.sleep(self.interval_sec)
@@ -188,6 +264,11 @@ class SamplerProcess:
                     json.dump(self.samples, f)
             except Exception:
                 pass
+
+            # Stream live status every stream_interval_sec
+            if now - last_stream >= self.stream_interval_sec:
+                last_stream = now
+                self._stream_live_snapshot(sample, now - start_time)
 
 
 def diagnose_bottleneck(gpu_avg: float, cpu_avg: float, vram_used: float, vram_total: float) -> tuple[str, str]:
