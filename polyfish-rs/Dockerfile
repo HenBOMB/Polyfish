@@ -30,6 +30,8 @@ RUN CARGO_PROFILE_RELEASE_LTO=thin CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
 # (which require NVRTC and unversioned .so symlinks). 
 FROM nvidia/cuda:12.4.0-devel-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
+ENV POLYFISH_ADVERSARIAL_SEARCH=1
+ENV ITER_OFFSET=76
 
 # Install Python and minimal runtime tools
 RUN apt-get update && apt-get install -y \
