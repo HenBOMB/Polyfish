@@ -80,6 +80,10 @@ else
 fi
 PLATFORM_DEFAULT_ACTORS=128
 
+if [ -f "telemetry.py" ]; then
+    python3 telemetry.py probe || true
+fi
+
 # --- Long-option parsing (mirror of run_training_loop.sh) -------------------
 RESUME_RUN=""
 RESET=false
@@ -442,10 +446,16 @@ do
     EFF_ITER=$((EFF_ITER + ${ITER_OFFSET:-0}))
 
     SP_LOG=$(mktemp)
+    if [ -f "telemetry.py" ]; then .venv/bin/python3 telemetry.py start 2>/dev/null || true; fi
     ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k 16 --actors $ACTORS --eval-servers $EVAL_SERVERS $EVAL_BACKEND_FLAG $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
+    MPS=$(grep "Throughput:" "$SP_LOG" | tail -n 1 | sed -n 's/.*Throughput: *\([0-9.]*\) *moves\/sec.*/\1/p' || true)
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then echo "Self-play failed with exit code $SP_STATUS" >&2; exit "$SP_STATUS"; fi
+
+    if [ -f "telemetry.py" ]; then
+        .venv/bin/python3 telemetry.py record --iteration "$i" --moves-per-sec "${MPS:-0}" --games "$NUM_GAMES" 2>/dev/null || true
+    fi
 
     GAME_JSON=$(.venv/bin/python3 training_log.py parse-self-play)
     GAMES_FILE=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('games_file',''))")
@@ -510,15 +520,19 @@ do
     mv games_*.safetensors archive/ 2>/dev/null || true
     ls -t archive/games_*.safetensors 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm
 
-    # Supabase: Backup the new model weights, training logs, and elo ratings
+    # Supabase: Backup the new model weights, training logs, elo ratings, and hardware analytics
     if [ "$SYNC_SUPABASE" = true ]; then
         .venv/bin/python3 supabase_sync.py backup-pod
         .venv/bin/python3 supabase_sync.py upload model.safetensors
+        if [ -f hardware_telemetry.csv ]; then .venv/bin/python3 supabase_sync.py upload hardware_telemetry.csv; fi
+        if [ -f hardware_status.json ]; then .venv/bin/python3 supabase_sync.py upload hardware_status.json; fi
     else
         .venv/bin/python3 supabase_sync.py upload model.safetensors
         if [ -f training_log.csv ]; then .venv/bin/python3 supabase_sync.py upload training_log.csv; fi
         if [ -f elo_ratings.json ]; then .venv/bin/python3 supabase_sync.py upload elo_ratings.json; fi
         if [ -f matches.jsonl ]; then .venv/bin/python3 supabase_sync.py upload matches.jsonl; fi
+        if [ -f hardware_telemetry.csv ]; then .venv/bin/python3 supabase_sync.py upload hardware_telemetry.csv; fi
+        if [ -f hardware_status.json ]; then .venv/bin/python3 supabase_sync.py upload hardware_status.json; fi
     fi
 
     # Smart pruning: last 10 + every MILESTONE_EVERY-th + iter 1
