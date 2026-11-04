@@ -33,16 +33,21 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV POLYFISH_ADVERSARIAL_SEARCH=1
 ENV ITER_OFFSET=76
 
-# Install Python and minimal runtime tools
-RUN apt-get update && apt-get install -y \
-    python3-venv python3-pip jq tmux git libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Install Python 3.11 and minimal runtime tools
+RUN apt-get update && apt-get install -y software-properties-common && \
+    add-apt-repository -y ppa:deadsnakes/ppa && \
+    apt-get update && apt-get install -y \
+    python3.11 python3.11-venv python3.11-dev jq tmux git libssl-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 
 WORKDIR /app
 
+ENV PATH="/app/.venv/bin:$PATH"
+
 # Create venv and install python packages without cache bloat
 COPY requirements.txt ./
-RUN python3 -m venv .venv && \
+RUN python3.11 -m venv .venv && \
     .venv/bin/pip install --no-cache-dir --upgrade pip && \
     .venv/bin/pip install --no-cache-dir --pre --upgrade torch --index-url https://download.pytorch.org/whl/nightly/cu124 && \
     .venv/bin/pip install --no-cache-dir -r requirements.txt && \

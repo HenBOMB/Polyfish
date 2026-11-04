@@ -434,7 +434,7 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
             production: 1,
             owner: pov_id,
             rewards: Vec::new(),
-            _territory: territory.clone(),
+            _territory: Vec::new(),
         };
 
         if let Some(tribe) = state.tribes.get_mut(&pov_id) {

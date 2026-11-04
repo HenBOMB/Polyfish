@@ -7,6 +7,7 @@ use crate::actions::{
     self, UndoCallback, end_unit_turn, gain_stars, has_effect, start_unit_turn,
     try_discover_other_tribes, try_remove_effect, update_exploration,
 };
+use crate::coords::Coords;
 use crate::functions::{
     get_adjacent_indices, get_pov_tribe, get_total_production, is_game_over, sync_scores,
 };
@@ -278,12 +279,12 @@ impl Game {
             self.state._next_unit_id = next_id;
         }
 
-        // 3. Calculate _territory for cities
+        // 3. Calculate _territory for cities and assign ruling_city_coords
         let mut territory_updates = Vec::new();
         for tribe in self.state.tribes.values() {
             for city in &tribe.cities {
                 // fetch nearby tiles and filter the ones we own
-                let territory = get_adjacent_indices(&self.state, city.idx, 2)
+                let mut territory = get_adjacent_indices(&self.state, city.idx, 2)
                     .into_iter()
                     .filter(|&idx| {
                         self.state
@@ -293,11 +294,28 @@ impl Game {
                             .unwrap_or(false)
                     })
                     .collect::<Vec<i32>>();
+                if !territory.contains(&city.idx)
+                    && self
+                        .state
+                        .tiles
+                        .get(&city.idx)
+                        .map_or(false, |t| t.owner == city.owner)
+                {
+                    territory.push(city.idx);
+                }
                 territory_updates.push((tribe.id, city.idx, territory));
             }
         }
 
         for (tribe_id, city_idx, territory) in territory_updates {
+            let city_coords = Coords::from_index(city_idx, map_size);
+            for &idx in &territory {
+                if let Some(tile) = self.state.tiles.get_mut(&idx) {
+                    if tile.ruling_city_coords.is_none() {
+                        tile.ruling_city_coords = Some(city_coords);
+                    }
+                }
+            }
             if let Some(tribe) = self.state.tribes.get_mut(&tribe_id) {
                 if let Some(city) = tribe.cities.iter_mut().find(|c| c.idx == city_idx) {
                     city._territory = territory;

@@ -10,13 +10,16 @@ if [ -n "$1" ]; then
     echo "Building for compute capability: $1"
 fi
 
-IMAGE_TAG="${2:-henbomb/polyzero:v0.1}"
+IMAGE_TAG="${2:-henbomb/polyfish:latest}"
 
 echo "Building Docker image ($IMAGE_TAG)..."
-docker build $CAP_ARG -t "$IMAGE_TAG" -f Dockerfile .
+sudo docker build $CAP_ARG -t "$IMAGE_TAG" -f Dockerfile .
 
 echo "Cleaning up Cargo.docker.toml..."
-rm Cargo.docker.toml
+rm -f Cargo.docker.toml
 
 echo "Pushing Docker image ($IMAGE_TAG)..."
-docker push "$IMAGE_TAG"
+sudo docker tag "$IMAGE_TAG" henbomb/polyfish:latest
+sudo docker push "$IMAGE_TAG"
+
+
