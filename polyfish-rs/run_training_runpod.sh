@@ -471,7 +471,7 @@ do
     TRIBE2=${SELECTED_TRIBES[1]}
 
     SP_LOG=$(mktemp)
-    if [ -f "telemetry.py" ]; then .venv/bin/python3 telemetry.py start 2>/dev/null || true; fi
+    if [ -f "telemetry.py" ]; then .venv/bin/python3 telemetry.py start --iteration "$i" 2>/dev/null || true; fi
     ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k 16 --actors $ACTORS --eval-servers $EVAL_SERVERS $EVAL_BACKEND_FLAG $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     MPS=$(grep "Throughput:" "$SP_LOG" | tail -n 1 | sed -n 's/.*Throughput: *\([0-9.]*\) *moves\/sec.*/\1/p' || true)

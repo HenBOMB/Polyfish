@@ -36,6 +36,22 @@ TELEMETRY_JSON = "hardware_status.json"
 PID_FILE = ".telemetry_sampler.pid"
 SAMPLES_FILE = ".telemetry_samples.json"
 CUMULATIVE_FILE = ".telemetry_cumulative.json"
+START_TIME_FILE = ".telemetry_start_time"
+
+
+def atomic_write_json(file_path: str, data: Any):
+    """Write json data atomically to prevent corruption on process termination."""
+    tmp_path = f"{file_path}.tmp.{os.getpid()}"
+    try:
+        with open(tmp_path, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, file_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 # Typical RunPod on-demand market pricing ($/hr) for automatic cost estimation
 GPU_MARKET_RATES = {
@@ -144,11 +160,19 @@ def read_proc_stat_cpu() -> tuple[int, int]:
 class SamplerProcess:
     """Background sampling loop writing time-series metrics and streaming to Supabase."""
 
-    def __init__(self, interval_sec: float = 1.5, stream_interval_sec: float = 5.0):
+    def __init__(
+        self,
+        interval_sec: float = 1.5,
+        stream_interval_sec: float = 10.0,
+        iteration: Optional[int] = None,
+    ):
         self.interval_sec = interval_sec
         self.stream_interval_sec = stream_interval_sec
+        self.iteration = iteration
         self.stop_event = threading.Event()
         self.samples: List[Dict[str, Any]] = []
+        self._upload_lock = threading.Lock()
+        self._is_uploading = False
 
     def _stream_live_snapshot(self, sample: Dict[str, Any], duration_sec: float):
         """Asynchronously upload current live status to Supabase without blocking sampler."""
@@ -178,6 +202,7 @@ class SamplerProcess:
         status_data = {
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "live": True,
+            "latest_iteration": self.iteration if self.iteration is not None else 0,
             "duration_sec": round(duration_sec, 1),
             "financials": {
                 "hourly_rate": round(hourly_cost, 2),
@@ -209,11 +234,13 @@ class SamplerProcess:
             },
         }
 
-        try:
-            with open(TELEMETRY_JSON, "w") as f:
-                json.dump(status_data, f, indent=2)
-        except Exception:
-            pass
+        atomic_write_json(TELEMETRY_JSON, status_data)
+
+        # Upload non-blocking, ensuring at most one upload thread runs concurrently
+        with self._upload_lock:
+            if self._is_uploading:
+                return
+            self._is_uploading = True
 
         def _upload_task():
             try:
@@ -221,6 +248,9 @@ class SamplerProcess:
                 supabase_sync.upload(TELEMETRY_JSON)
             except Exception:
                 pass
+            finally:
+                with self._upload_lock:
+                    self._is_uploading = False
 
         threading.Thread(target=_upload_task, daemon=True).start()
 
@@ -259,11 +289,7 @@ class SamplerProcess:
                 "gpu_name": primary_gpu.get("name", "None / CPU"),
             }
             self.samples.append(sample)
-            try:
-                with open(SAMPLES_FILE, "w") as f:
-                    json.dump(self.samples, f)
-            except Exception:
-                pass
+            atomic_write_json(SAMPLES_FILE, self.samples)
 
             # Stream live status every stream_interval_sec
             if now - last_stream >= self.stream_interval_sec:
@@ -321,11 +347,7 @@ def load_cumulative_stats() -> Dict[str, float]:
 
 def save_cumulative_stats(stats: Dict[str, float]):
     """Save running totals to CUMULATIVE_FILE."""
-    try:
-        with open(CUMULATIVE_FILE, "w") as f:
-            json.dump(stats, f, indent=2)
-    except Exception:
-        pass
+    atomic_write_json(CUMULATIVE_FILE, stats)
 
 
 def cmd_probe():
@@ -358,7 +380,7 @@ def cmd_probe():
     print("==============================================================================")
 
 
-def cmd_start():
+def cmd_start(iteration: Optional[int] = None):
     """Start background sampling process."""
     if os.path.exists(PID_FILE):
         try:
@@ -368,17 +390,21 @@ def cmd_start():
         except Exception:
             pass
 
-    cmd = [sys.executable, os.path.abspath(__file__), "--daemon-worker"]
+    cmd = [sys.executable, os.path.abspath(__file__), "daemon-worker"]
+    if iteration is not None:
+        cmd.extend(["--iteration", str(iteration)])
+
     p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setpgrp)
     with open(PID_FILE, "w") as f:
         f.write(str(p.pid))
-    with open(SAMPLES_FILE, "w") as f:
-        f.write("[]")
+    with open(START_TIME_FILE, "w") as f:
+        f.write(str(time.time()))
+    atomic_write_json(SAMPLES_FILE, [])
 
 
-def cmd_daemon_worker():
+def cmd_daemon_worker(iteration: Optional[int] = None):
     """Worker process that records samples until killed."""
-    sampler = SamplerProcess(interval_sec=1.5)
+    sampler = SamplerProcess(interval_sec=1.5, stream_interval_sec=10.0, iteration=iteration)
     sampler.run()
 
 
@@ -389,15 +415,34 @@ def cmd_stop_and_record(
     hourly_cost: Optional[float] = None,
 ):
     """Stop sampler, aggregate metrics, calculate time & money wasted, and print audit card."""
-    # Stop daemon
+    # Stop daemon gracefully
     if os.path.exists(PID_FILE):
         try:
             pid = int(open(PID_FILE).read().strip())
-            os.kill(pid, 9)
+            os.kill(pid, 15)
+            time.sleep(0.1)
+            try:
+                os.kill(pid, 9)
+            except Exception:
+                pass
         except Exception:
             pass
         try:
             os.remove(PID_FILE)
+        except Exception:
+            pass
+
+    # Record elapsed time from start time file if available
+    elapsed_time = 0.0
+    if os.path.exists(START_TIME_FILE):
+        try:
+            with open(START_TIME_FILE, "r") as f:
+                start_ts = float(f.read().strip())
+                elapsed_time = max(0.0, time.time() - start_ts)
+        except Exception:
+            pass
+        try:
+            os.remove(START_TIME_FILE)
         except Exception:
             pass
 
@@ -419,6 +464,7 @@ def cmd_stop_and_record(
         g = gpus[0] if gpus else {}
         ram = get_ram_info()
         samples = [{
+            "t": elapsed_time,
             "cpu_util_pct": 50.0,
             "ram_used_mb": ram["used_mb"],
             "gpu_util_pct": g.get("gpu_util_pct", 0.0),
@@ -446,7 +492,7 @@ def cmd_stop_and_record(
     gpu_name = samples[-1].get("gpu_name", "Unknown GPU")
     ram_used = samples[-1].get("ram_used_mb", 0.0)
 
-    duration_sec = samples[-1]["t"] if "t" in samples[-1] and samples[-1]["t"] > 0 else 1.0
+    duration_sec = samples[-1]["t"] if "t" in samples[-1] and samples[-1]["t"] > 0 else (elapsed_time if elapsed_time > 0 else 1.0)
 
     # Pricing resolution
     if hourly_cost is None or hourly_cost <= 0.0:
@@ -609,17 +655,23 @@ def cmd_stop_and_record(
             "description": verdict_desc,
         },
     }
-    with open(TELEMETRY_JSON, "w") as f:
-        json.dump(status_data, f, indent=2)
+    atomic_write_json(TELEMETRY_JSON, status_data)
 
 
 def main():
     parser = argparse.ArgumentParser(description="PolyZero Hardware Telemetry & Cost Analytics")
+    parser.add_argument("--daemon-worker", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--iteration", type=int, default=None, help=argparse.SUPPRESS)
+
     sub = parser.add_subparsers(dest="cmd")
 
     sub.add_parser("probe", help="Probe current hardware specs and load")
-    sub.add_parser("start", help="Start background sampler")
-    sub.add_parser("--daemon-worker", help="Internal worker")
+
+    start_p = sub.add_parser("start", help="Start background sampler")
+    start_p.add_argument("--iteration", type=int, default=None, help="Current iteration number")
+
+    worker_p = sub.add_parser("daemon-worker", help="Internal worker")
+    worker_p.add_argument("--iteration", type=int, default=None, help="Current iteration number")
 
     rec = sub.add_parser("record", help="Stop sampler and record metrics")
     rec.add_argument("--iteration", type=int, required=True, help="Current iteration number")
@@ -629,12 +681,12 @@ def main():
 
     args = parser.parse_args()
 
-    if args.cmd == "probe":
+    if getattr(args, "daemon_worker", False) or args.cmd == "daemon-worker":
+        cmd_daemon_worker(iteration=args.iteration)
+    elif args.cmd == "probe":
         cmd_probe()
     elif args.cmd == "start":
-        cmd_start()
-    elif args.cmd == "--daemon-worker":
-        cmd_daemon_worker()
+        cmd_start(iteration=args.iteration)
     elif args.cmd == "record":
         cmd_stop_and_record(
             iteration=args.iteration,
