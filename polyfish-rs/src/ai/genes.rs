@@ -434,7 +434,7 @@ impl Default for OrderingGenes {
             capture_starfish: 80.0,
 
             attack_kill: 45.0,
-            attack_suicide: 1.0,
+            attack_suicide: -15.0,
             attack_heavy_damage: 25.0,
             attack_light_damage: 15.0,
             attack_heavy_threshold: 5,

@@ -120,7 +120,10 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                         // the objective itself. Max here is 75 + 15 = 90.
                         75.0 + territory_bonus
                     } else if preview.attacker_dies {
-                        1.0 // Suicide is very low priority regardless of context
+                        // Unforced suicide: attacker perishes without killing the defender.
+                        // Strictly penalized below EndTurn (0.0) so the unit holds position,
+                        // forces the opponent to spend an attack, and allows allies to assist.
+                        -15.0
                     } else if preview.damage_to_defender > 5.0 {
                         50.0 + territory_bonus
                     } else {
@@ -802,27 +805,36 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
 
         // --- Slot 3: PopGrowth vs BorderGrowth ---
         CityRewardType::PopGrowth => {
-            // Generally better — +3 pop is solid and consistent
+            // Consistent fallback: +3 population advances city toward next level
             base + 8.0
         }
         CityRewardType::BorderGrowth => {
-            // Only worth it if border expansion covers valuable terrain
-            // Heuristic: smaller cities benefit more from border growth
+            // Border growth expands territory from 3x3 (radius 1) to 5x5 (radius 2).
+            // Value is determined by whether the expansion claims new, unowned land and resources.
             let city_idx = mv.target_idx().unwrap_or(0) as i32;
-            if let Some(tribe) = state.tribes.get(&player_id) {
-                let city_territory = tribe
-                    .cities
-                    .iter()
-                    .find(|c| c.idx == city_idx)
-                    .map(|c| c._territory.len())
-                    .unwrap_or(0);
-                if city_territory < 10 {
-                    base + 9.0 // Small city — border growth reveals/claims more
-                } else {
-                    base + 5.0 // Large city — pop growth is usually better
+            let mut valuable_tiles = 0;
+            let adj_ring = get_adjacent_indices(state, city_idx, 2);
+
+            for &tile_idx in &adj_ring {
+                if let Some(tile) = state.tiles.get(&tile_idx) {
+                    if tile.owner != player_id {
+                        valuable_tiles += 1;
+                        if crate::functions::get_resource_at(state, tile_idx).is_some() {
+                            valuable_tiles += 2;
+                        }
+                        if tile.terrain_type == TerrainType::Forest {
+                            valuable_tiles += 1;
+                        }
+                    }
                 }
+            }
+
+            // In competitive Polytopia, if expanding borders claims >= 3 productive/unowned tiles,
+            // Border Growth is overwhelmingly preferred over a flat +3 population.
+            if valuable_tiles >= 3 {
+                base + 10.0 // Wins over PopGrowth (+8.0)
             } else {
-                base + 5.0
+                base + 5.0  // Hemmed in / empty: PopGrowth (+8.0) is superior
             }
         }
 

@@ -4,7 +4,7 @@ use crate::functions::{calculate_combat_preview, get_adjacent_indices, get_struc
 use crate::game::Game;
 use crate::moves::Move;
 use crate::settings::get_structure_setting;
-use crate::types::{AbilityType, CityRewardType, ModeType, MoveType, StructureType};
+use crate::types::{AbilityType, CityRewardType, ModeType, MoveType, StructureType, TerrainType};
 
 /// Score a move based on heuristics for move ordering
 pub fn score_move(game: &Game, mv: &dyn Move, genes: &AIGenes) -> f32 {
@@ -568,18 +568,25 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move, genes: &AIGenes
         CityRewardType::PopGrowth => base + genes.ordering.reward_pop_growth_bonus,
         CityRewardType::BorderGrowth => {
             let city_idx = mv.target_idx().unwrap_or(0) as i32;
-            if let Some(tribe) = state.tribes.get(&player_id) {
-                let city_territory = tribe
-                    .cities
-                    .iter()
-                    .find(|c| c.idx == city_idx)
-                    .map(|c| c._territory.len())
-                    .unwrap_or(0);
-                if city_territory < 10 {
-                    base + genes.ordering.reward_border_growth_small_bonus
-                } else {
-                    base + genes.ordering.reward_border_growth_large_bonus
+            let mut valuable_tiles = 0;
+            let adj_ring = get_adjacent_indices(state, city_idx, 2);
+
+            for &tile_idx in &adj_ring {
+                if let Some(tile) = state.tiles.get(&tile_idx) {
+                    if tile.owner != player_id {
+                        valuable_tiles += 1;
+                        if crate::functions::get_resource_at(state, tile_idx).is_some() {
+                            valuable_tiles += 2;
+                        }
+                        if tile.terrain_type == TerrainType::Forest {
+                            valuable_tiles += 1;
+                        }
+                    }
                 }
+            }
+
+            if valuable_tiles >= 3 {
+                base + genes.ordering.reward_border_growth_small_bonus
             } else {
                 base + genes.ordering.reward_border_growth_large_bonus
             }
