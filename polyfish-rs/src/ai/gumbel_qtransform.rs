@@ -144,9 +144,21 @@ pub fn softmax(values: &[f32]) -> Vec<f32> {
         return Vec::new();
     }
     let max = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let exps: Vec<f32> = values.iter().map(|&v| (v - max).exp()).collect();
+    if !max.is_finite() {
+        return vec![1.0 / values.len() as f32; values.len()];
+    }
+    let exps: Vec<f32> = values
+        .iter()
+        .map(|&v| {
+            if v == f32::NEG_INFINITY {
+                0.0
+            } else {
+                (v - max).exp()
+            }
+        })
+        .collect();
     let sum: f32 = exps.iter().sum();
-    if sum <= 0.0 {
+    if sum <= 0.0 || sum.is_nan() {
         return vec![1.0 / values.len() as f32; values.len()];
     }
     exps.into_iter().map(|e| e / sum).collect()

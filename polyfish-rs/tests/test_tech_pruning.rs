@@ -1,6 +1,6 @@
 use polyfish::PlayerId;
 use polyfish::ai::evaluator::research::evaluate_tech_utility;
-use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
+use polyfish::ai::heuristic_mcts::{GreedyHeuristicAgent, HeuristicMctsAgent};
 use polyfish::ai::scoring::score_move;
 use polyfish::coords::Coords;
 use polyfish::game::Game;
@@ -297,4 +297,54 @@ fn test_heuristic_mcts_never_selects_neg_infinity_tech() {
             );
         }
     }
+}
+
+#[test]
+fn test_greedy_heuristic_agent_does_not_panic_when_only_pruned_moves_remain() {
+    let gen_settings = MapGenSettings {
+        size: MapSize::Small,
+        map_type: MapType::Drylands,
+        tribes: vec![TribeType::Imperius, TribeType::Oumaji],
+        seed: 1793849293, // Seed from Game 38 in RunPod log
+        ..Default::default()
+    };
+
+    let mut game = Game::new();
+    game.state = generate(gen_settings);
+    game.post_load();
+
+    let player_id: PlayerId = game.state.settings.current_player_turn_id;
+    // Clear all harvestable resources
+    game.state.resources.clear();
+    if let Some(tribe) = game.state.tribes.get_mut(&player_id) {
+        tribe.stars = 5;
+        // Make all units exhausted
+        for unit in &mut tribe.units {
+            unit.moved = true;
+            unit.attacked = true;
+        }
+        // Push all tier 1 techs to tech_vanilla except Sailing, so ONLY Sailing is legal to research
+        for &t in &[TechnologyType::Climbing, TechnologyType::Riding, TechnologyType::Fishing, TechnologyType::Hunting] {
+            if !tribe.tech_vanilla.iter().any(|tech| tech.tech_type == t) {
+                tribe.tech_vanilla.push(polyfish::states::TechnologyState {
+                    tech_type: t,
+                    discovered: true,
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    let agent = GreedyHeuristicAgent::new();
+    // This previously panicked at src/ai/heuristic_mcts.rs:205:53 with Option::unwrap() on None (NaN in softmax)
+    let (chosen_move, _visits) = agent.select_move_with_decomposed_visits(&mut game, 1);
+
+    assert!(chosen_move.is_some(), "Agent must return a move without panicking");
+    let chosen = chosen_move.unwrap();
+    // When only pruned tech or end turn exist, it should choose EndTurn
+    assert_eq!(
+        chosen.move_type(),
+        MoveType::EndTurn,
+        "GreedyHeuristicAgent should choose EndTurn rather than a pruned negative infinity move"
+    );
 }

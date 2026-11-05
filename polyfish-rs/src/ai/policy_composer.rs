@@ -318,8 +318,23 @@ fn softmax(logits: &[f32]) -> Vec<f32> {
         return vec![];
     }
     let max_logit = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let exp_values: Vec<f32> = logits.iter().map(|&l| (l - max_logit).exp()).collect();
+    if !max_logit.is_finite() {
+        return vec![1.0 / logits.len() as f32; logits.len()];
+    }
+    let exp_values: Vec<f32> = logits
+        .iter()
+        .map(|&l| {
+            if l == f32::NEG_INFINITY {
+                0.0
+            } else {
+                (l - max_logit).exp()
+            }
+        })
+        .collect();
     let exp_sum: f32 = exp_values.iter().sum();
+    if exp_sum <= 0.0 || exp_sum.is_nan() {
+        return vec![1.0 / logits.len() as f32; logits.len()];
+    }
     exp_values
         .into_iter()
         .map(|v| (v / exp_sum).max(1e-12))

@@ -158,18 +158,44 @@ impl GreedyHeuristicAgent {
             return (Some(Box::new(EndTurnMove)), Vec::new());
         }
 
+        // Suppress moves with NEG_INFINITY score if other moves exist
+        if moves
+            .iter()
+            .any(|m| crate::ai::scoring::score_move(game, m.as_ref()) > f32::NEG_INFINITY)
+        {
+            moves.retain(|m| crate::ai::scoring::score_move(game, m.as_ref()) > f32::NEG_INFINITY);
+        } else if !crate::game::end_turn_retained() {
+            // All remaining candidate moves are suppressed/worthless (e.g. zero-utility research).
+            // End the turn rather than executing junk actions.
+            return (Some(Box::new(EndTurnMove)), Vec::new());
+        }
+
         let scores: Vec<f32> = moves
             .iter()
             .map(|m| crate::ai::scoring::score_move(game, m.as_ref()))
             .collect();
         let max_score = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        if !max_score.is_finite() {
+            return (Some(Box::new(EndTurnMove)), Vec::new());
+        }
+
         let probs: Vec<f32> = {
             let exps: Vec<f32> = scores
                 .iter()
-                .map(|s| ((s - max_score) / GREEDY_SOFTMAX_TEMP).exp())
+                .map(|&s| {
+                    if s == f32::NEG_INFINITY {
+                        0.0
+                    } else {
+                        ((s - max_score) / GREEDY_SOFTMAX_TEMP).exp()
+                    }
+                })
                 .collect();
             let sum: f32 = exps.iter().sum();
-            exps.iter().map(|e| e / sum).collect()
+            if sum > 0.0 && sum.is_finite() {
+                exps.iter().map(|e| e / sum).collect()
+            } else {
+                vec![1.0 / moves.len() as f32; moves.len()]
+            }
         };
 
         let visits: Vec<MoveVisit> = moves
@@ -202,7 +228,7 @@ impl GreedyHeuristicAgent {
             probs
                 .iter()
                 .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
                 .map(|(i, _)| i)
                 .unwrap_or(0)
         });
@@ -567,6 +593,19 @@ impl HeuristicMctsAgent {
             // Remove EndTurn from candidates (we want to play all useful moves first)
             moves.retain(|m| m.move_type() != crate::types::MoveType::EndTurn);
             if moves.is_empty() {
+                break;
+            }
+
+            // Suppress moves with NEG_INFINITY score if other moves exist
+            if moves
+                .iter()
+                .any(|m| crate::ai::scoring::score_move(game, m.as_ref()) > f32::NEG_INFINITY)
+            {
+                moves.retain(|m| {
+                    crate::ai::scoring::score_move(game, m.as_ref()) > f32::NEG_INFINITY
+                });
+            } else {
+                // All remaining candidate moves are worthless; end the turn rollout
                 break;
             }
 

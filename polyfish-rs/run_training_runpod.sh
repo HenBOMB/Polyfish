@@ -415,12 +415,41 @@ do
         if [ -n "$SELECTED_CP" ]; then OPPONENT_FLAG="--opponent $SELECTED_CP"; MATCH_TYPE="league"; fi
     fi
 
+    if [ "${START_ITER:-1}" -gt 1 ]; then
+        # Run was explicitly resumed or seeded from START_ITER (e.g. 76).
+        # Advance pace from START_ITER based on games played in this run.
+        EFF_ITER=$(awk -v i="$i" -v s="$START_ITER" -v b="$BASELINE_GAMES" -v g="$NUM_GAMES" \
+            'BEGIN { print s + int((i - s) * g / b) }')
+    else
+        EFF_ITER=$(awk -v i="$i" -v b="$BASELINE_GAMES" -v g="$NUM_GAMES" \
+            'BEGIN { print int((i - 1) * g / b) + 1 }')
+        EFF_ITER=$((EFF_ITER + ${ITER_OFFSET:-0}))
+    fi
+
     ANCHOR_FLAG=""
     if [ "$MATCH_TYPE" = "selfplay" ]; then
         ANCHOR_FLAG="--anchor-frac ${ANCHOR_FRAC:-0.25}"
-        [ -n "$ANCHOR_HOLD_ITERS" ] && ANCHOR_FLAG="$ANCHOR_FLAG --anchor-hold-iters $ANCHOR_HOLD_ITERS"
+        if [ -n "$ANCHOR_HOLD_ITERS" ]; then
+            if [ "${START_ITER:-1}" -gt 1 ]; then
+                EFF_HOLD=$((START_ITER + ANCHOR_HOLD_ITERS))
+            else
+                EFF_HOLD="$ANCHOR_HOLD_ITERS"
+            fi
+            ANCHOR_FLAG="$ANCHOR_FLAG --anchor-hold-iters $EFF_HOLD"
+        fi
         [ -n "$ANCHOR_GRADUATE_WINRATE" ] && ANCHOR_FLAG="$ANCHOR_FLAG --anchor-graduate-winrate $ANCHOR_GRADUATE_WINRATE"
         [ -n "$ANCHOR_PROBE_FRAC" ] && ANCHOR_FLAG="$ANCHOR_FLAG --anchor-probe-frac $ANCHOR_PROBE_FRAC"
+
+        # EXP_ELO_002: hold anchor_frac at its starting rate until the model has
+        # crossed 50% vs the greedy anchor. The gauge block persists the crossing
+        # EFF_ITER into .anchor_decay_start; until then, passing current EFF_ITER
+        # keeps the anchor decay exponent at 0 (no premature decay before graduation).
+        if [ -f .anchor_decay_start ]; then
+            ANCHOR_DECAY_START=$(cat .anchor_decay_start)
+        else
+            ANCHOR_DECAY_START=$EFF_ITER
+        fi
+        ANCHOR_FLAG="$ANCHOR_FLAG --anchor-decay-start $ANCHOR_DECAY_START"
     fi
 
     VALUE_TRUST=$(awk -v i="$i" -v r="${VALUE_TRUST_RAMP_ITERS:-30}" -v cap="${VALUE_TRUST_CAP:-1.0}" \
@@ -440,10 +469,6 @@ do
     SELECTED_TRIBES=($(printf "%s\n" "${TRIBE_LIST[@]}" | portable_shuf 2))
     TRIBE1=${SELECTED_TRIBES[0]}
     TRIBE2=${SELECTED_TRIBES[1]}
-
-    EFF_ITER=$(awk -v i="$i" -v b="$BASELINE_GAMES" -v g="$NUM_GAMES" \
-        'BEGIN { print int((i - 1) * g / b) + 1 }')
-    EFF_ITER=$((EFF_ITER + ${ITER_OFFSET:-0}))
 
     SP_LOG=$(mktemp)
     if [ -f "telemetry.py" ]; then .venv/bin/python3 telemetry.py start 2>/dev/null || true; fi
