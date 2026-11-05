@@ -180,7 +180,7 @@ if [ "$BENCHMARK" = true ]; then
         BENCH_OUT=$(./target/release/self_play \
             --num-games "$BENCH_GAMES" \
             --mcts-iters "$BENCH_MCTS" \
-            --gumbel-k 16 \
+            --gumbel-k "${GUMBEL_K:-8}" \
             --actors "$b_actors" \
             --eval-servers "$b_eservers" \
             --iteration 30 \
@@ -239,10 +239,11 @@ REWARD_SHAPING=false
 LEAGUE_INTERVAL=10
 ELO_TRACK=1
 TRAIN_EVERY=1
+GUMBEL_K="${GUMBEL_K:-8}"
 ANCHOR_HOLD_ITERS="${ANCHOR_HOLD_ITERS:-}"
 ANCHOR_GRADUATE_WINRATE="${ANCHOR_GRADUATE_WINRATE:-}"
 ANCHOR_PROBE_FRAC="${ANCHOR_PROBE_FRAC:-}"
-while getopts "fbcri:g:n:a:e:l:K:A:H:W:P:E:" opt; do
+while getopts "fbcri:g:n:k:a:e:l:K:A:H:W:P:E:" opt; do
   case $opt in
     f) FORCE_TRAIN=true ;;
     b) BOOST=true ;;
@@ -251,6 +252,7 @@ while getopts "fbcri:g:n:a:e:l:K:A:H:W:P:E:" opt; do
     i) ITERATIONS=$OPTARG; ITERATIONS_SET=true ;;
     g) NUM_GAMES=$OPTARG ;;
     n) MCTS_ITERS=$OPTARG; MCTS_ITERS_SET=true ;;
+    k) GUMBEL_K=$OPTARG ;;
     a) ACTORS=$OPTARG; ACTORS_SET=true ;;
     e) EVAL_SERVERS=$OPTARG; ESERVERS_SET=true ;;
     l) LEAGUE_INTERVAL=$OPTARG ;;
@@ -301,8 +303,8 @@ if [ -n "$RESUME_FROM_ITER" ]; then
             exit 1
         fi
     fi
-    # Clean stale game data — fresh run, old games are meaningless
-    rm -f games_*.safetensors archive/games_*.safetensors
+    # Clean stale game data and anchor state — fresh run, old games are meaningless
+    rm -f games_*.safetensors archive/games_*.safetensors .anchor_state.json .anchor_decay_start .last_train_metrics.json .last_self_play_metrics.json .telemetry_cumulative.json .telemetry_samples.json
     # Force new run (ignore any --resume that was also passed)
     RESUME_RUN=""
     echo "✅ Loaded checkpoint iter $RESUME_FROM_ITER as initial model. Starting fresh run."
@@ -310,7 +312,7 @@ fi
 
 if [ "$RESET" = true ]; then
     echo "🗑️  Reset: deleting model.safetensors and self-play game data..."
-    rm -f model.safetensors games_*.safetensors archive/games_*.safetensors
+    rm -f model.safetensors games_*.safetensors archive/games_*.safetensors .anchor_state.json .anchor_decay_start .last_train_metrics.json .last_self_play_metrics.json .telemetry_cumulative.json .telemetry_samples.json
     if [ -n "$RESUME_RUN" ]; then echo "   (ignoring --resume since --reset starts fresh)"; RESUME_RUN=""; fi
 fi
 
@@ -472,7 +474,7 @@ do
 
     SP_LOG=$(mktemp)
     if [ -f "telemetry.py" ]; then .venv/bin/python3 telemetry.py start --iteration "$i" 2>/dev/null || true; fi
-    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k 16 --actors $ACTORS --eval-servers $EVAL_SERVERS $EVAL_BACKEND_FLAG $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $EVAL_BACKEND_FLAG $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     MPS=$(grep "Throughput:" "$SP_LOG" | tail -n 1 | sed -n 's/.*Throughput: *\([0-9.]*\) *moves\/sec.*/\1/p' || true)
     rm -f "$SP_LOG"
