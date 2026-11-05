@@ -584,7 +584,13 @@ impl<'a> GumbelMctsAgent<'a> {
                 .partial_cmp(&(root.children[a].logit + root.children[a].gumbel))
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        let k = self.k.min(root.children.len());
+        if in_cut
+            .iter()
+            .any(|&i| root.children[i].logit > f32::NEG_INFINITY)
+        {
+            in_cut.retain(|&i| root.children[i].logit > f32::NEG_INFINITY);
+        }
+        let k = self.k.min(in_cut.len());
         in_cut.truncate(k);
         in_cut
     }
@@ -1219,6 +1225,10 @@ fn blend_heuristic_into_logits(logits: &mut [f32], heur_scores: &[f32], weight: 
     let p_heur = softmax(&scaled);
 
     for (i, l) in logits.iter_mut().enumerate() {
+        if heur_scores[i] == f32::NEG_INFINITY || heur_scores[i] <= -100.0 {
+            *l = f32::NEG_INFINITY;
+            continue;
+        }
         let p = (1.0 - weight) * p_net[i] + weight * p_heur[i];
         // Add a small epsilon to prevent log(0)
         *l = (p + 1e-9).ln();

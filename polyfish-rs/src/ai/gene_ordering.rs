@@ -494,7 +494,14 @@ fn score_research(
         let utility =
             crate::ai::evaluator::research::evaluate_tech_utility(state, player_id, tech);
 
-        let base = genes.ordering.research_base + (utility.clamp(-2.0, 8.0) + 2.0);
+        if utility == f32::NEG_INFINITY {
+            return f32::NEG_INFINITY;
+        }
+        if utility < 0.0 {
+            return utility;
+        }
+
+        let base = genes.ordering.research_base + (utility.min(8.0) + 2.0);
 
         let has_village_opportunity = tribe.units.iter().any(|unit| {
             let idx = unit.coords.idx;

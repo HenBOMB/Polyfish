@@ -55,8 +55,9 @@ Score is all that matters?
     empty "hub-spots" (potential Sawmill sites). Penalty scales with other
     neighboring prereqs.
 - [TODO] Disband / destructive abilities (disband, burn forest)
-- Research: [IMPLEMENTED] Scored via `evaluate_tech_utility` ROI +
-  buy-before-capture bonus
+- Research: [PARTIAL] Scored via `evaluate_tech_utility` ROI +
+  buy-before-capture bonus. Needs pruning overhaul (suppressing zero-utility tech
+  and upgrading Climbing/Trade models); see `docs/research/05_TECH_PRUNING_AND_EVALUATION_SPEC.md`.
 - Unit attack suicides
 
 # REWARDING

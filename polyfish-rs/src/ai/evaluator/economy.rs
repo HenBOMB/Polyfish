@@ -28,11 +28,16 @@ pub fn evaluate_economy(state: &GameState, player_id: PlayerId) -> f32 {
     let mut total_tech_utility = 0.0;
     for tech_state in &tribe.tech_vanilla {
         if tech_state.discovered {
-            total_tech_utility += crate::ai::evaluator::research::evaluate_tech_utility(
+            let u = crate::ai::evaluator::research::evaluate_tech_utility(
                 state,
                 player_id,
                 tech_state.tech_type,
             );
+            if u.is_finite() {
+                total_tech_utility += u;
+            } else {
+                total_tech_utility -= 3.0;
+            }
         }
     }
 

@@ -699,10 +699,17 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                 let utility =
                     crate::ai::evaluator::research::evaluate_tech_utility(state, player_id, tech);
 
+                if utility == f32::NEG_INFINITY {
+                    return f32::NEG_INFINITY;
+                }
+                if utility < 0.0 {
+                    return utility;
+                }
+
                 // Map utility into 8-18 range:
-                //   utility of -2 or less -> 8.0 (low priority but still above default 5.0)
+                //   utility of 0 -> 10.0
                 //   utility of +8 or more -> 18.0 (above build/harvest at 22 is too aggressive)
-                let base = 8.0 + (utility.clamp(-2.0, 8.0) + 2.0);
+                let base = 8.0 + (utility.min(8.0) + 2.0);
 
                 // "Buy before capture" bonus:
                 // If any of our units are sitting on an uncaptured village,

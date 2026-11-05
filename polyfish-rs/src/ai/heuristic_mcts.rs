@@ -48,6 +48,16 @@ impl Node {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
 
+            // Suppress moves with NEG_INFINITY score if other moves exist
+            if filtered
+                .iter()
+                .any(|m| crate::ai::scoring::score_move(game, m.as_ref()) > f32::NEG_INFINITY)
+            {
+                filtered.retain(|m| {
+                    crate::ai::scoring::score_move(game, m.as_ref()) > f32::NEG_INFINITY
+                });
+            }
+
             Some(filtered)
         };
 
