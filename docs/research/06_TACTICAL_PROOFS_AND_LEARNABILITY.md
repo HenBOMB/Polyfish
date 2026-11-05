@@ -81,6 +81,41 @@ All proofs listed below are covered by deterministic integration tests in the re
 
 ---
 
+### Proof #6: Fog-of-War Horizon Barrier (POMDP Observation Erasure)
+* **Test:** [`polyfish-rs/tests/test_category_2_proofs.rs::proof_category_2_item_1_fow_horizon_barrier`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/test_category_2_proofs.rs#L34)
+* **Mechanic:** In POMDPs, the agent cannot learn from what it cannot observe. `clone_for_mcts` completely blanks out unexplored terrain, structures, and units under fog.
+* **Deterministic Verification:**
+  - Real game state contains hidden villages and ruins.
+  - In `clone_for_mcts`, `obscure_fog` erases all structures and units under fog (`structures.get(idx) == None`).
+  - Stepping into the fog within MCTS simulation yields 0 in-tree village captures, 0 city income, and 0 structure rewards.
+* **Learnability Verdict:** **Mathematically unlearnable without inductive bias.** Stepping into fog incurs movement cost and defensive exposure without in-tree reward. Without synthetic discovery reward or vision heuristics, MCTS strictly favors defensive corner-huddling.
+
+---
+
+### Proof #7: Top-K Gumbel Candidate Displacement
+* **Test:** [`polyfish-rs/tests/test_category_2_proofs.rs::proof_category_2_item_2_top_k_gumbel_displacement`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/test_category_2_proofs.rs#L85)
+* **Mechanic:** Gumbel noise $g \sim \text{Gumbel}(0, 1)$ exhibits heavy right-tail extremes across large legal move sets ($N=50$). When dead moves are unpruned, extreme tail draws displace high-value moves from the Top-$K$ ($K=4$) candidate cut.
+* **Deterministic Verification:**
+  - Simulated 1,000 trials with 49 unpruned junk moves ($\ell = 0.0$) and 1 critical move ($\ell = 1.5$).
+  - **Empirical Result:** In **68.7% of trials**, junk moves displace the critical move completely from the Top-4 cut.
+  - When displaced, the critical move receives **exactly 0 simulation visits**.
+  - When junk moves are pruned to $-f32::\text{INFINITY}$, displacement drops to **0.0%**.
+* **Learnability Verdict:** **Physical search failure.** The network cannot learn the value of a move that is systematically starved of MCTS visits by unpruned competitors.
+
+---
+
+### Proof #8: Teacher Poisoning Under Supervised DAgger Distillation
+* **Test:** [`polyfish-rs/tests/test_category_2_proofs.rs::proof_category_2_item_3_teacher_poisoning_dagger`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/test_category_2_proofs.rs#L182)
+* **Mechanic:** When training under DAgger imitation learning, the student is supervised by the heuristic teacher's target distribution $\pi^*_{\text{teacher}}$. If the teacher has an inverted heuristic (preferring PopGrowth over BorderGrowth for city territory $\ge 10$), the student is punished for selecting the superior move.
+* **Deterministic Verification:**
+  - Heuristic teacher scores PopGrowth at $208.0$ and BorderGrowth at $205.0$ ($\Delta = +3.0$), yielding $\pi^*_{\text{teacher}}(\text{PopGrowth}) = 0.953$ and $\pi^*_{\text{teacher}}(\text{BorderGrowth}) = 0.047$.
+  - A student network that predicts $\pi_{\text{student}}(\text{BorderGrowth}) = 0.80$ produces a strictly positive cross-entropy gradient:
+    $$\frac{\partial \mathcal{L}}{\partial z_{\text{BorderGrowth}}} = 0.80 - 0.047 = +0.753$$
+  - Under gradient descent, $z \leftarrow z - \alpha \nabla$, the student's probability for BorderGrowth is **actively decreased**.
+* **Learnability Verdict:** **Mathematically impossible to unlearn under pure DAgger.** Supervised distillation forces the student to converge to the teacher's policy ceiling, actively penalizing student innovations.
+
+---
+
 ## 3. The Reality Matrix: RL vs Structural Engineering
 
 | Tactical Behavior | Can Pure RL Learn It? | Engine Proof Status | Recommended Approach |
