@@ -2,14 +2,17 @@
 // recursively per field and EXP_ARCH_001 added value-composition fields.
 #![recursion_limit = "256"]
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use candle_core::{Device, Tensor};
 use polyfish::TribeType;
 use polyfish::ai::brain::{Brain, SearchBackend, SearchBackendArg};
 use polyfish::ai::eval_server::{
-    BackendSpec, EvalHandle, EvalServer, EvalServerConfig, EvalServerStats, Evaluator,
+    EvalHandle, EvalServer, EvalServerConfig, EvalServerStats, Evaluator,
     ShardedEvalHandle,
 };
-use polyfish::ai::features::{self, GameFeatures, state_to_tensor};
+use polyfish::ai::features::{self, state_to_cpu_features, RawFeatures};
 use polyfish::ai::mapper::DecomposedMapper;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::ai::reward;
@@ -239,7 +242,7 @@ struct DecomposedPolicyData {
 /// the TD bootstrap target used by whichever *earlier* step's label lands on
 /// this step as its "next decision" horizon.
 struct HistoryStep {
-    features: GameFeatures,
+    features: RawFeatures,
     policy: DecomposedPolicyData,
     player_id: PlayerId,
     my_score: i32,
@@ -624,8 +627,6 @@ fn sample_opening_move(
 }
 
 fn play_single_game(
-    network1: &PolyZeroNet,
-    network2: &PolyZeroNet, // Added network2
     eval1: &Evaluator,
     eval2: &Evaluator,
     mcts_iters: usize,
@@ -785,11 +786,9 @@ fn play_single_game(
 
         let pov = game.state.settings.current_player_turn_id;
 
-        // Get state tensor
-        let current_network = if pov == 1 { network1 } else { network2 };
-        let device = current_network.device();
-        let state_t = state_to_tensor(&game.state, pov, &device)
-            .expect("BUG: Failed to create state tensor - game state is invalid");
+        // Pre-move CPU feature snapshot for training history (device-free, zero CUDA calls on actor thread)
+        let state_feat = state_to_cpu_features(&game.state, pov)
+            .expect("BUG: Failed to extract CPU features - game state is invalid");
 
         // MCTS Search - use the correct agent
         let current_agent = if pov == 1 { &mut agent1 } else { &mut agent2 };
@@ -1014,7 +1013,7 @@ fn play_single_game(
             flat_recap.push((turn_now, pov, replay_command));
             if record_sample {
                 game_history.push(HistoryStep {
-                    features: state_t,
+                    features: state_feat,
                     policy: policy_data,
                     player_id: pov,
                     my_score: my_score_now,
@@ -1674,25 +1673,8 @@ fn main() -> anyhow::Result<()> {
     // Resolve the eval backend: explicit --eval-backend, else auto (metal
     // when compiled in, else tch when compiled in, else candle).
     let eval_backend_kind = resolve_eval_backend_kind(args.eval_backend.as_str())?;
-    // Resolve shard count. We default to the best measured throughput
-    let eval_servers = match args.eval_servers {
-        0 => {
-            if eval_backend_kind == EvalBackendKind::Metal {
-                3
-            } else {
-                1
-            }
-        }
-        n => {
-            if n > 1 && eval_backend_kind == EvalBackendKind::Candle {
-                anyhow::bail!(
-                    "--eval-servers > 1 requires --eval-backend tch or metal \
-                     (candle Metal corrupts when >1 thread encodes on the same device)"
-                );
-            }
-            n
-        }
-    };
+    // Resolve shard count.
+    let eval_servers = polyfish::ai::eval_backend::resolve_eval_servers(eval_backend_kind, args.eval_servers)?;
     // Each shard sees ~1/N of the working set (hash-routed), so dividing the
     // per-shard cache by N keeps total resident cache ~constant while
     // preserving the hit rate (cache / working-set ratio is unchanged).
@@ -1889,8 +1871,6 @@ fn main() -> anyhow::Result<()> {
             let trace_counter = trace_counter.clone();
             let aborted_games = aborted_games.clone();
             let finish_milestones = finish_milestones.clone();
-            let network1 = &network1;
-            let network2 = &network2;
             let eval1 = &eval1;
             let eval2 = &eval2;
             let args = &args;
@@ -1907,10 +1887,10 @@ fn main() -> anyhow::Result<()> {
                     // value labels can cancel per-map/spawn/seat luck.
                     let seed = (base_seed + (i / 2) as u64) as i64;
                     let swap_players = i % 2 == 1; // Swap every other game
-                    let (p1_net, p2_net, p1_eval, p2_eval) = if swap_players {
-                        (&**network2, &**network1, eval2, eval1)
+                    let (p1_eval, p2_eval) = if swap_players {
+                        (eval2, eval1)
                     } else {
-                        (&**network1, &**network2, eval1, eval2)
+                        (eval1, eval2)
                     };
 
                     // Anchor games are scheduled per PAIR (evenly spread at
@@ -1942,8 +1922,6 @@ fn main() -> anyhow::Result<()> {
                     // Ensure panicking game doesnt kill the whole run
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         play_single_game(
-                            p1_net,
-                            p2_net,
                             p1_eval,
                             p2_eval,
                             args.mcts_iters,
@@ -2105,8 +2083,8 @@ fn main() -> anyhow::Result<()> {
     );
 
     // Aggregate results
-    let mut collected_spatial_maps: Vec<Tensor> = Vec::new();
-    let mut collected_player_states: Vec<Tensor> = Vec::new();
+    let mut collected_spatial_maps: Vec<Vec<f32>> = Vec::new();
+    let mut collected_player_states: Vec<Vec<f32>> = Vec::new();
 
     // Decomposed policy targets (7 heads)
     let mut collected_action_type: Vec<Vec<f32>> = Vec::new();
@@ -2315,17 +2293,8 @@ fn main() -> anyhow::Result<()> {
                 player_id: p_id,
                 ..
             } = step;
-            let flat_map = features
-                .spatial_map
-                .flatten_all()
-                .expect("BUG: Failed to flatten spatial map tensor");
-            collected_spatial_maps.push(flat_map);
-
-            let flat_player = features
-                .player_state
-                .flatten_all()
-                .expect("BUG: Failed to flatten player state tensor");
-            collected_player_states.push(flat_player);
+            collected_spatial_maps.push(features.spatial);
+            collected_player_states.push(features.player);
 
             collected_action_type.push(policy_data.action_type);
             collected_source_spatial.push(policy_data.source_spatial);
@@ -2489,26 +2458,32 @@ fn main() -> anyhow::Result<()> {
         let spatial_dim = features::NUM_CHANNELS * features::MAP_SIZE * features::MAP_SIZE;
         let player_dim = features::RawFeatures::PLAYER_STATE_DIM;
 
-        let spatial_maps_tensor = Tensor::cat(&collected_spatial_maps, 0)?;
-        let spatial_maps_tensor = spatial_maps_tensor.reshape((total_steps, spatial_dim))?;
+        // Helper to simple-flatten data
+        fn flatten_vec(v: Vec<Vec<f32>>) -> Vec<f32> {
+            v.into_iter().flatten().collect()
+        }
+
+        let spatial_maps_tensor = Tensor::from_vec(
+            flatten_vec(collected_spatial_maps),
+            (total_steps, spatial_dim),
+            &Device::Cpu,
+        )?;
         println!(
             "Spatial maps shape: {:?} (dim: {})",
             spatial_maps_tensor.shape(),
             spatial_dim
         );
 
-        let player_states_tensor = Tensor::cat(&collected_player_states, 0)?;
-        let player_states_tensor = player_states_tensor.reshape((total_steps, player_dim))?;
-
-        // Helper to simple-flatten data
-        fn flatten_vec(v: Vec<Vec<f32>>) -> Vec<f32> {
-            v.into_iter().flatten().collect()
-        }
+        let player_states_tensor = Tensor::from_vec(
+            flatten_vec(collected_player_states),
+            (total_steps, player_dim),
+            &Device::Cpu,
+        )?;
 
         let action_tensor = Tensor::from_vec(
             flatten_vec(collected_action_type),
             (total_steps, polyfish::ai::network::NUM_ACTION_TYPES),
-            &device,
+            &Device::Cpu,
         )?;
 
         let spatial_logit_dim = features::MAP_SIZE * features::MAP_SIZE;
@@ -2516,23 +2491,23 @@ fn main() -> anyhow::Result<()> {
         let source_tensor = Tensor::from_vec(
             flatten_vec(collected_source_spatial),
             (total_steps, spatial_logit_dim),
-            &device,
+            &Device::Cpu,
         )?;
         let target_tensor = Tensor::from_vec(
             flatten_vec(collected_target_spatial),
             (total_steps, spatial_logit_dim),
-            &device,
+            &Device::Cpu,
         )?;
         let option_tensor =
-            Tensor::from_vec(flatten_vec(collected_option), (total_steps, 192), &device)?;
+            Tensor::from_vec(flatten_vec(collected_option), (total_steps, 192), &Device::Cpu)?;
 
         // Values
-        let values_tensor = Tensor::from_vec(collected_values, (total_steps, 1), &device)?;
-        let progress_tensor = Tensor::from_vec(collected_progress, (total_steps, 1), &device)?;
+        let values_tensor = Tensor::from_vec(collected_values, (total_steps, 1), &Device::Cpu)?;
+        let progress_tensor = Tensor::from_vec(collected_progress, (total_steps, 1), &Device::Cpu)?;
         let ownership_tensor = Tensor::from_vec(
             flatten_vec(collected_ownership),
             (total_steps, spatial_logit_dim),
-            &device,
+            &Device::Cpu,
         )?;
 
         let mut tensors = HashMap::new();

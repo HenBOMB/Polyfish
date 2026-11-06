@@ -20,6 +20,9 @@
 //! touching the real backends.
 
 use polyfish::TribeType;
+
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use polyfish::ai::brain::{Brain, SearchBackend, SearchBackendArg};
 use polyfish::ai::eval_server::{DummyEvalHandle, Evaluator};
 use polyfish::game::Game;

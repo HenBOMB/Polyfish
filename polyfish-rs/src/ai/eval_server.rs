@@ -270,22 +270,8 @@ impl InferenceBackend {
                     .forward_t(&spatial_tensor, &player_tensor, false)
                     .expect("BUG: eval-server forward_t failed");
 
-                let values = value_out
-                    .win_value
-                    .flatten_all()
-                    .expect("BUG: flatten win_value")
-                    .to_vec1::<f32>()
-                    .expect("BUG: win_value to_vec1");
-                let progress = value_out
-                    .progress_value
-                    .flatten_all()
-                    .expect("BUG: flatten progress_value")
-                    .to_vec1::<f32>()
-                    .expect("BUG: progress_value to_vec1");
-                let policy_rows = policy_out
-                    .to_raw_rows()
-                    .expect("BUG: failed to read policy batch to CPU");
-                (values, progress, policy_rows)
+                decode_outputs_single_readback(&value_out, &policy_out, batch_size)
+                    .expect("BUG: single-readback decode failed")
             }
             #[cfg(feature = "tch-eval")]
             InferenceBackend::Tch(net) => {
@@ -427,7 +413,7 @@ fn run_eval_loop(
 /// a caller that reads stats right after its reply sees them up to date.
 fn evaluate_batch(
     backend: &InferenceBackend,
-    requests: Vec<EvalRequest>,
+    mut requests: Vec<EvalRequest>,
     mut cache: Option<&mut lru::LruCache<u64, EvalResult>>,
     stats: &EvalServerStats,
 ) {
@@ -452,8 +438,9 @@ fn evaluate_batch(
     let mut miss_hashes: Vec<u64> = Vec::with_capacity(total_rows);
     let mut served_from_cache: u64 = 0;
 
-    for req in &requests {
-        for (feat, &hash) in req.features.iter().zip(req.hashes.iter()) {
+    for req in &mut requests {
+        let features = std::mem::take(&mut req.features);
+        for (feat, &hash) in features.into_iter().zip(req.hashes.iter()) {
             let hit = cache
                 .as_mut()
                 .and_then(|c| c.get(&hash).cloned());
@@ -466,10 +453,7 @@ fn evaluate_batch(
                     let flat_idx = row_results.len();
                     row_results.push(None);
                     miss_slots.push(flat_idx);
-                    miss_features.push(RawFeatures {
-                        spatial: feat.spatial.clone(),
-                        player: feat.player.clone(),
-                    });
+                    miss_features.push(feat);
                     miss_hashes.push(hash);
                 }
             }
@@ -784,8 +768,9 @@ fn run_metal_pipelined_loop(
         let mut miss_hashes: Vec<u64> = Vec::new();
         let mut served_from_cache: u64 = 0;
 
-        for req in &requests {
-            for (feat, &hash) in req.features.iter().zip(req.hashes.iter()) {
+        for req in &mut requests {
+            let features = std::mem::take(&mut req.features);
+            for (feat, &hash) in features.into_iter().zip(req.hashes.iter()) {
                 let hit = cache.as_mut().and_then(|c| c.get(&hash).cloned());
                 match hit {
                     Some(result) => {
@@ -796,10 +781,7 @@ fn run_metal_pipelined_loop(
                         let flat_idx = row_results.len();
                         row_results.push(None);
                         miss_slots.push(flat_idx);
-                        miss_features.push(RawFeatures {
-                            spatial: feat.spatial.clone(),
-                            player: feat.player.clone(),
-                        });
+                        miss_features.push(feat);
                         miss_hashes.push(hash);
                     }
                 }
@@ -852,6 +834,74 @@ pub struct InlineEvalHandle {
     network: Arc<PolyZeroNet>,
 }
 
+/// Read value + progress + 4 policy heads back to CPU in a SINGLE device->CPU
+/// transfer. Concatenates all outputs on-device into one [B, 448] tensor,
+/// issues one readback, and unpacks the slice offsets on CPU. Eliminates
+/// 5 redundant PCIe synchronization flushes per forward pass.
+pub fn decode_outputs_single_readback(
+    value_out: &crate::ai::network::ValueOutput,
+    policy_out: &crate::ai::network::PolicyOutput,
+    batch_size: usize,
+) -> candle_core::Result<(Vec<f32>, Vec<f32>, Vec<RawPolicyOutput>)> {
+    if batch_size == 0 {
+        return Ok((Vec::new(), Vec::new(), Vec::new()));
+    }
+
+    const V_WIN: usize = 1;
+    const V_PROG: usize = 1;
+    const AT: usize = crate::ai::network::NUM_ACTION_TYPES;
+    const SS: usize = crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE;
+    const TS: usize = crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE;
+    const MO: usize = crate::ai::mapper::NUM_MOVE_OPTIONS;
+    const ROW_LEN: usize = V_WIN + V_PROG + AT + SS + TS + MO;
+
+    let combined = Tensor::cat(
+        &[
+            &value_out.win_value,
+            &value_out.progress_value,
+            &policy_out.action_type,
+            &policy_out.source_spatial,
+            &policy_out.target_spatial,
+            &policy_out.move_option,
+        ],
+        1,
+    )?;
+
+    let flat: Vec<f32> = combined.flatten_all()?.to_vec1()?;
+    debug_assert_eq!(flat.len(), batch_size * ROW_LEN);
+
+    let mut values = Vec::with_capacity(batch_size);
+    let mut progress = Vec::with_capacity(batch_size);
+    let mut policy_rows = Vec::with_capacity(batch_size);
+
+    for i in 0..batch_size {
+        let base = i * ROW_LEN;
+        values.push(flat[base]);
+        progress.push(flat[base + V_WIN]);
+
+        let at_off = base + V_WIN + V_PROG;
+        let action_type = flat[at_off..at_off + AT].to_vec();
+
+        let ss_off = at_off + AT;
+        let source_spatial = flat[ss_off..ss_off + SS].to_vec();
+
+        let ts_off = ss_off + SS;
+        let target_spatial = flat[ts_off..ts_off + TS].to_vec();
+
+        let mo_off = ts_off + TS;
+        let move_option = flat[mo_off..mo_off + MO].to_vec();
+
+        policy_rows.push(RawPolicyOutput {
+            action_type,
+            source_spatial,
+            target_spatial,
+            move_option,
+        });
+    }
+
+    Ok((values, progress, policy_rows))
+}
+
 impl InlineEvalHandle {
     pub fn new(network: Arc<PolyZeroNet>) -> Self {
         Self { network }
@@ -894,21 +944,8 @@ impl InlineEvalHandle {
             .forward_t(&spatial_tensor, &player_tensor, false)
             .expect("BUG: inline eval forward_t failed");
 
-        let values = value_out
-            .win_value
-            .flatten_all()
-            .expect("BUG: flatten win_value")
-            .to_vec1::<f32>()
-            .expect("BUG: win_value to_vec1");
-        let progress = value_out
-            .progress_value
-            .flatten_all()
-            .expect("BUG: flatten progress_value")
-            .to_vec1::<f32>()
-            .expect("BUG: progress_value to_vec1");
-        let policy_rows = policy_out
-            .to_raw_rows()
-            .expect("BUG: failed to read policy batch to CPU");
+        let (values, progress, policy_rows) = decode_outputs_single_readback(&value_out, &policy_out, batch_size)
+            .expect("BUG: inline single-readback decode failed");
 
         values
             .into_iter()
@@ -1265,5 +1302,51 @@ mod tests {
         let misses = stats.cache_misses.load(Ordering::Relaxed);
         assert_eq!(misses, 1, "first call must be a cache miss");
         assert_eq!(hits, 1, "second call must be a cache hit");
+    }
+
+    #[test]
+    fn eval_server_sharded_candle_works() {
+        use crate::ai::eval_backend::spawn_eval_shards;
+        use crate::ai::eval_server::ShardedEvalHandle;
+
+        let device = Device::Cpu;
+        let network = Arc::new(test_network(&device));
+        let game = Game::default();
+        let feat = state_to_cpu_features(&game.state, 1).unwrap();
+
+        let specs = vec![
+            BackendSpec::Candle(network.clone()),
+            BackendSpec::Candle(network.clone()),
+        ];
+        let (servers, handles) = spawn_eval_shards(
+            specs,
+            EvalServerConfig {
+                max_batch: 256,
+                coalesce_timeout: Duration::from_millis(5),
+                cache_capacity: None,
+                pipeline_workers: 0,
+            },
+        );
+        let sharded = ShardedEvalHandle::new(handles);
+
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let sharded = sharded.clone();
+                let raw = RawFeatures {
+                    spatial: feat.spatial.clone(),
+                    player: feat.player.clone(),
+                };
+                std::thread::spawn(move || sharded.evaluate(vec![raw]))
+            })
+            .collect();
+
+        for t in threads {
+            let result = t.join().unwrap();
+            assert_eq!(result.len(), 1);
+        }
+        drop(sharded);
+        for s in servers {
+            s.shutdown();
+        }
     }
 }

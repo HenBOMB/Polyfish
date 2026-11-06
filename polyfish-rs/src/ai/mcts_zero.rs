@@ -437,13 +437,10 @@ impl<'a> ZeroMctsAgent<'a> {
             if let Some(terminal_val) = leaf.terminal_value {
                 // Terminal node with known outcome
                 values[i] = terminal_val;
-            } else if let Some(ref feat) = leaf.features {
+            } else if let Some(feat) = leaf.features.borrow_mut().take() {
                 // Non-terminal, needs NN evaluation.
                 indices_needing_eval.push(i);
-                eval_batch.push(RawFeatures {
-                    spatial: feat.spatial.clone(),
-                    player: feat.player.clone(),
-                });
+                eval_batch.push(feat);
             }
             // else: no features and no terminal value -> stays 0.0 (shouldn't happen)
         }

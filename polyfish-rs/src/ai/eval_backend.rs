@@ -140,13 +140,20 @@ pub fn resolve_eval_backend_kind(arg: &str) -> anyhow::Result<EvalBackendKind> {
     }
 }
 
-/// Resolve shard count from `--eval-servers` (`0` = auto: 3 on metal, 1
-/// otherwise), validating candle's hard >1-shard prohibition (Metal
-/// corrupts when >1 thread encodes on the same device).
+/// Resolve shard count from `--eval-servers` (`0` = auto: 3 on metal, 2 on cuda, 1
+/// otherwise). Validates candle's >1-shard prohibition on macOS Metal (where
+/// candle Metal corrupts when >1 thread encodes on the same device).
 pub fn resolve_eval_servers(kind: EvalBackendKind, requested: usize) -> anyhow::Result<usize> {
     match requested {
-        0 => Ok(if kind == EvalBackendKind::Metal { 3 } else { 1 }),
+        0 => Ok(if kind == EvalBackendKind::Metal {
+            3
+        } else if cfg!(feature = "cuda") {
+            2
+        } else {
+            1
+        }),
         n => {
+            #[cfg(all(target_os = "macos", feature = "metal"))]
             if n > 1 && kind == EvalBackendKind::Candle {
                 anyhow::bail!(
                     "--eval-servers > 1 requires --eval-backend tch or metal \

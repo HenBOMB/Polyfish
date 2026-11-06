@@ -933,12 +933,9 @@ impl<'a> GumbelMctsAgent<'a> {
         for (i, leaf) in leaves.iter().enumerate() {
             if let Some(tv) = leaf.data.terminal_value {
                 values[i] = tv;
-            } else if let Some(ref feat) = leaf.data.features {
+            } else if let Some(feat) = leaf.data.features.borrow_mut().take() {
                 indices_needing_eval.push(i);
-                eval_batch.push(RawFeatures {
-                    spatial: feat.spatial.clone(),
-                    player: feat.player.clone(),
-                });
+                eval_batch.push(feat);
             }
         }
 

@@ -35,7 +35,8 @@ pub(crate) struct LeafData {
     /// after descending into `path_indices[i]`).
     pub path_players: Vec<i32>,
     /// Device-free features for NN evaluation (`None` if terminal / horizon-only).
-    pub features: Option<RawFeatures>,
+    /// Wrapped in `RefCell` for interior mutability during `take()` in the batched-expansion phase.
+    pub features: RefCell<Option<RawFeatures>>,
     /// Legal moves at this leaf, wrapped in `RefCell` for interior mutability
     /// during `take()` in the batched-expansion phase.
     pub legal_moves: RefCell<Vec<Box<dyn Move>>>,
@@ -129,7 +130,7 @@ pub(crate) fn extract_leaf_data(
         return LeafData {
             path_indices: indices_stack,
             path_players,
-            features: None,
+            features: RefCell::new(None),
             legal_moves: RefCell::new(Vec::new()),
             heuristic_scores: None,
             map_size,
@@ -154,7 +155,7 @@ pub(crate) fn extract_leaf_data(
         return LeafData {
             path_indices: indices_stack,
             path_players,
-            features: Some(feat),
+            features: RefCell::new(Some(feat)),
             legal_moves: RefCell::new(legal_moves),
             heuristic_scores: None,
             map_size,
@@ -168,7 +169,7 @@ pub(crate) fn extract_leaf_data(
     LeafData {
         path_indices: indices_stack,
         path_players,
-        features: feat,
+        features: RefCell::new(feat),
         legal_moves: RefCell::new(Vec::new()),
         heuristic_scores: None,
         map_size,

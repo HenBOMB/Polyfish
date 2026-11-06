@@ -67,8 +67,8 @@ else
     .venv/bin/python3 init_model.py
 fi
 
-echo "=== [6/6] Building CUDA-Accelerated Binaries ==="
-cargo build --release --no-default-features --features cuda \
+echo "=== [6/6] Building CUDA-Accelerated Binaries (Native CPU Vectorization) ==="
+RUSTFLAGS="-C target-cpu=native ${RUSTFLAGS:-}" cargo build --release --no-default-features --features cuda \
     --bin self_play --bin arena --bin polyfish
 
 chmod +x *.sh 2>/dev/null || true

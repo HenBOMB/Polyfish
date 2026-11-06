@@ -72,7 +72,7 @@ elif command -v cargo >/dev/null 2>&1; then
         echo "⚡ FAST_BUILD: thin LTO + 16 codegen-units (faster compile, slightly slower binary)"
         BUILD_ENV=(CARGO_PROFILE_RELEASE_LTO=thin CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16)
     fi
-    env "${BUILD_ENV[@]}" cargo build --bin polyfish --bin self_play --bin benchmark --bin arena --release \
+    env "${BUILD_ENV[@]}" RUSTFLAGS="-C target-cpu=native ${RUSTFLAGS:-}" cargo build --bin polyfish --bin self_play --bin benchmark --bin arena --release \
         --no-default-features --features cuda
 else
     echo "Error: binaries not found and cargo not available to build them." >&2
