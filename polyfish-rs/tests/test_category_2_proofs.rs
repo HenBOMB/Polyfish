@@ -311,6 +311,32 @@ fn proof_category_2_item_3_teacher_poisoning_dagger() {
         (score_pop_b - score_border_b - 3.0).abs() < 1e-4,
         "PopGrowth should outscore BorderGrowth by exactly 3.0 points when borders cannot expand"
     );
+
+    // Case C: Outer ring tiles are owned by an ENEMY (cannot be claimed by Border Growth)
+    {
+        let outer_ring = get_adjacent_indices(&game.state, city_idx, 2);
+        for &t_idx in &outer_ring {
+            if let Some(tile) = game.state.tiles.get_mut(&t_idx) {
+                tile.owner = 2; // Enemy tribe
+            }
+        }
+    }
+
+    let score_pop_c = score_move(&game, &pop_move);
+    let score_border_c = score_move(&game, &border_move);
+
+    println!(
+        "Repaired Teacher (Enemy-Hemmed Outer Ring): PopGrowth={score_pop_c}, BorderGrowth={score_border_c}"
+    );
+
+    assert!(
+        score_pop_c > score_border_c,
+        "Teacher must prefer PopGrowth when outer ring is owned by enemy (cannot claim enemy land)"
+    );
+    assert!(
+        (score_pop_c - score_border_c - 3.0).abs() < 1e-4,
+        "PopGrowth should outscore BorderGrowth by 3.0 points when hemmed in by enemy borders"
+    );
 }
 
 /// Category 2 Item 4: Unforced Suicide Attack Subordination

@@ -20,7 +20,8 @@ pub fn compute_move_priors(
     _allow_end_turn: bool,
 ) -> Vec<f32> {
     // Convert tensors to probability distributions (Softmax)
-    let action_probs = softmax_1d(&policy.action_type).unwrap_or_else(|_| vec![1.0 / 11.0; 11]);
+    let action_probs = softmax_1d(&policy.action_type)
+        .unwrap_or_else(|_| vec![1.0 / (crate::ai::network::NUM_ACTION_TYPES as f32); crate::ai::network::NUM_ACTION_TYPES]);
     let spatial_size = (features::MAP_SIZE * features::MAP_SIZE) as f32;
 
     let source_probs = softmax_1d(&policy.source_spatial)
@@ -159,7 +160,9 @@ pub fn compute_move_log_probs(
     map_size: usize,
 ) -> Vec<f32> {
     // Convert tensors to log-probabilities (LogSoftmax)
-    let action_logs = log_softmax_1d(&policy.action_type).unwrap_or_else(|_| vec![-2.4; 11]);
+    let log_action_unif = -((crate::ai::network::NUM_ACTION_TYPES as f32).ln());
+    let action_logs = log_softmax_1d(&policy.action_type)
+        .unwrap_or_else(|_| vec![log_action_unif; crate::ai::network::NUM_ACTION_TYPES]);
     let spatial_size = (features::MAP_SIZE * features::MAP_SIZE) as f32;
     let log_spatial_unif = -(spatial_size.ln());
 
@@ -296,18 +299,38 @@ fn log_softmax(logits: &[f32]) -> Vec<f32> {
 
     // Find max for numerical stability
     let max_logit = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    if !max_logit.is_finite() {
+        return vec![-((logits.len() as f32).ln()); logits.len()];
+    }
 
-    // Compute log(sum(exp(xi - max)))
-    let log_sum_exp = logits
+    // Compute log(sum(exp(xi - max))) filtering out NEG_INFINITY pruned moves
+    let exp_sum: f32 = logits
         .iter()
-        .map(|&l| (l - max_logit).exp())
-        .sum::<f32>()
-        .ln();
+        .map(|&l| {
+            if l == f32::NEG_INFINITY {
+                0.0
+            } else {
+                (l - max_logit).exp()
+            }
+        })
+        .sum();
 
-    // xi - max - log_sum_exp
+    if exp_sum <= 0.0 || exp_sum.is_nan() {
+        return vec![-((logits.len() as f32).ln()); logits.len()];
+    }
+
+    let log_sum_exp = exp_sum.ln();
+
+    // xi - max - log_sum_exp for valid moves; NEG_INFINITY preserved for pruned moves
     logits
         .iter()
-        .map(|&l| l - max_logit - log_sum_exp)
+        .map(|&l| {
+            if l == f32::NEG_INFINITY {
+                f32::NEG_INFINITY
+            } else {
+                l - max_logit - log_sum_exp
+            }
+        })
         .collect()
 }
 
@@ -362,9 +385,10 @@ mod tests {
     fn synthetic_policy_output() -> PolicyOutput {
         let device = Device::Cpu;
         let spatial = features::MAP_SIZE * features::MAP_SIZE;
-        let action_type = Tensor::arange(0f32, (2 * 11) as f32, &device)
+        let num_actions = crate::ai::network::NUM_ACTION_TYPES;
+        let action_type = Tensor::arange(0f32, (2 * num_actions) as f32, &device)
             .unwrap()
-            .reshape((2, 11))
+            .reshape((2, num_actions))
             .unwrap();
         let source_spatial = Tensor::arange(0f32, (2 * spatial) as f32, &device)
             .unwrap()
@@ -432,6 +456,28 @@ mod tests {
                     "log-prob mismatch at row {row}: {t} vs {r}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn log_softmax_handles_neg_infinity_pruning() {
+        let logits = vec![2.0, f32::NEG_INFINITY, 1.0];
+        let logs = log_softmax(&logits);
+        assert_eq!(logs[1], f32::NEG_INFINITY);
+        assert!(!logs[0].is_nan());
+        assert!(!logs[2].is_nan());
+        // exp(logs[0]) + exp(logs[2]) should sum to 1.0
+        let sum_prob = logs[0].exp() + logs[2].exp();
+        assert!((sum_prob - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn log_softmax_handles_all_neg_infinity() {
+        let logits = vec![f32::NEG_INFINITY; 4];
+        let logs = log_softmax(&logits);
+        let expected = -((4.0f32).ln());
+        for &l in &logs {
+            assert!((l - expected).abs() < 1e-6);
         }
     }
 }

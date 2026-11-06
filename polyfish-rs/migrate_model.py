@@ -47,22 +47,23 @@ def migrate_model(file_path):
         or "v_fc1.weight" not in state_dict
         or state_dict["v_fc1.weight"].shape[1] != dual_path_in_dim
     )
+    target_dtype = state_dict["v_win.weight"].dtype
     if stale_keys or needs_dual_path:
         for k in stale_keys:
             print(f"  Removing stale key: {k}")
             del state_dict[k]
         if "v_spatial_conv.weight" not in state_dict:
             print(f"  Initialising v_spatial_conv (Conv2d({filters}, 2, 1)) fresh")
-            state_dict["v_spatial_conv.weight"] = torch.randn(2, filters, 1, 1) * 0.01
-            state_dict["v_spatial_conv.bias"] = torch.zeros(2)
+            state_dict["v_spatial_conv.weight"] = (torch.randn(2, filters, 1, 1) * 0.01).to(target_dtype)
+            state_dict["v_spatial_conv.bias"] = torch.zeros(2, dtype=target_dtype)
         if "v_fc1.weight" not in state_dict or state_dict["v_fc1.weight"].shape[1] != dual_path_in_dim:
             print(f"  Initialising v_fc1 (Linear({dual_path_in_dim}, {filters})) fresh")
-            state_dict["v_fc1.weight"] = torch.randn(filters, dual_path_in_dim) * 0.01
-            state_dict["v_fc1.bias"] = torch.zeros(filters)
+            state_dict["v_fc1.weight"] = (torch.randn(filters, dual_path_in_dim) * 0.01).to(target_dtype)
+            state_dict["v_fc1.bias"] = torch.zeros(filters, dtype=target_dtype)
         if "v_fc2.weight" not in state_dict:
             print(f"  Initialising v_fc2 (Linear({filters}, {filters})) fresh")
-            state_dict["v_fc2.weight"] = torch.randn(filters, filters) * 0.01
-            state_dict["v_fc2.bias"] = torch.zeros(filters)
+            state_dict["v_fc2.weight"] = (torch.randn(filters, filters) * 0.01).to(target_dtype)
+            state_dict["v_fc2.bias"] = torch.zeros(filters, dtype=target_dtype)
         migrated = True
 
     # ------------------------------------------------------------------

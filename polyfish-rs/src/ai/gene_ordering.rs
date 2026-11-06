@@ -573,7 +573,7 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move, genes: &AIGenes
 
             for &tile_idx in &adj_ring {
                 if let Some(tile) = state.tiles.get(&tile_idx) {
-                    if tile.owner != player_id {
+                    if tile.owner == 0 {
                         valuable_tiles += 1;
                         if crate::functions::get_resource_at(state, tile_idx).is_some() {
                             valuable_tiles += 2;

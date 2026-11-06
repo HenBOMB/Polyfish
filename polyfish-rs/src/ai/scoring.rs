@@ -811,13 +811,15 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
         CityRewardType::BorderGrowth => {
             // Border growth expands territory from 3x3 (radius 1) to 5x5 (radius 2).
             // Value is determined by whether the expansion claims new, unowned land and resources.
+            // Note: In Polytopia, claim_territory only claims unowned tiles (tile.owner == 0);
+            // tiles owned by enemy players cannot be claimed by Border Growth.
             let city_idx = mv.target_idx().unwrap_or(0) as i32;
             let mut valuable_tiles = 0;
             let adj_ring = get_adjacent_indices(state, city_idx, 2);
 
             for &tile_idx in &adj_ring {
                 if let Some(tile) = state.tiles.get(&tile_idx) {
-                    if tile.owner != player_id {
+                    if tile.owner == 0 {
                         valuable_tiles += 1;
                         if crate::functions::get_resource_at(state, tile_idx).is_some() {
                             valuable_tiles += 2;

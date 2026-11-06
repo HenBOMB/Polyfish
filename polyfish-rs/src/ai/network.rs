@@ -311,15 +311,15 @@ impl PolyZeroNet {
         const SPATIAL_FEATURES: usize = SPATIAL_CHANNELS * MAP_SIZE * MAP_SIZE; // 242
         let dual_path_in_dim = SPATIAL_FEATURES + 2 * filters; // 370
 
-        let (v_spatial_conv, v_fc1) = if let Ok(conv_layer) = conv(filters, SPATIAL_CHANNELS, 1, 1, 0, vs.pp("v_spatial_conv")) {
-            let fc1 = candle_nn::linear(dual_path_in_dim, filters, vs.pp("v_fc1"))?;
-            (Some(conv_layer), fc1)
-        } else if let Ok(fc1) = candle_nn::linear(dual_path_in_dim, filters, vs.pp("v_fc1")) {
-            let conv_layer = conv(filters, SPATIAL_CHANNELS, 1, 1, 0, vs.pp("v_spatial_conv"))?;
-            (Some(conv_layer), fc1)
-        } else {
-            let fc1 = candle_nn::linear(2 * filters, filters, vs.pp("v_fc1"))?;
-            (None, fc1)
+        let (v_spatial_conv, v_fc1) = match (
+            conv(filters, SPATIAL_CHANNELS, 1, 1, 0, vs.pp("v_spatial_conv")),
+            candle_nn::linear(dual_path_in_dim, filters, vs.pp("v_fc1")),
+        ) {
+            (Ok(conv_layer), Ok(fc1)) => (Some(conv_layer), fc1),
+            _ => {
+                let fc1 = candle_nn::linear(2 * filters, filters, vs.pp("v_fc1"))?;
+                (None, fc1)
+            }
         };
         let v_fc2 = candle_nn::linear(filters, filters, vs.pp("v_fc2"))?;
         let v_win = candle_nn::linear(filters, 1, vs.pp("v_win"))?;
@@ -552,13 +552,13 @@ mod tests {
 
         // Map A: Point activation at (x=2, y=2)
         let mut map_a_vec = vec![0.0f32; crate::ai::features::NUM_CHANNELS * MAP_SIZE * MAP_SIZE];
-        let idx_a = 0 * (MAP_SIZE * MAP_SIZE) + (2 * MAP_SIZE + 2);
+        let idx_a = 2 * MAP_SIZE + 2;
         map_a_vec[idx_a] = 10.0;
         let map_a = Tensor::from_vec(map_a_vec, (1, crate::ai::features::NUM_CHANNELS, MAP_SIZE, MAP_SIZE), &device).unwrap();
 
         // Map B: Point activation at (x=8, y=8) (Exact same global mean and max!)
         let mut map_b_vec = vec![0.0f32; crate::ai::features::NUM_CHANNELS * MAP_SIZE * MAP_SIZE];
-        let idx_b = 0 * (MAP_SIZE * MAP_SIZE) + (8 * MAP_SIZE + 8);
+        let idx_b = 8 * MAP_SIZE + 8;
         map_b_vec[idx_b] = 10.0;
         let map_b = Tensor::from_vec(map_b_vec, (1, crate::ai::features::NUM_CHANNELS, MAP_SIZE, MAP_SIZE), &device).unwrap();
 
