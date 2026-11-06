@@ -35,22 +35,32 @@ def migrate_model(file_path):
     migrated = False
 
     # ------------------------------------------------------------------
-    # 1. Value-head swap: v_pool_conv / v_fc_shared  →  v_fc1 / v_fc2
+    # 1. Value-head upgrade: EXP_ARCH_002 dual-path value head (370 inputs)
     # ------------------------------------------------------------------
     stale_value_prefixes = ("v_pool_conv.", "v_fc_shared.")
     stale_keys = [k for k in state_dict if k.startswith(stale_value_prefixes)]
-    if stale_keys or "v_fc1.weight" not in state_dict:
+    map_size = 11
+    dual_path_in_dim = 2 * map_size * map_size + 2 * filters  # 242 + 128 = 370
+
+    needs_dual_path = (
+        "v_spatial_conv.weight" not in state_dict
+        or "v_fc1.weight" not in state_dict
+        or state_dict["v_fc1.weight"].shape[1] != dual_path_in_dim
+    )
+    if stale_keys or needs_dual_path:
         for k in stale_keys:
             print(f"  Removing stale key: {k}")
             del state_dict[k]
-        if "v_fc1.weight" not in state_dict:
-            # v_fc1: Linear(2*filters, filters)
-            print("  Initialising v_fc1 (Linear(128, 64)) fresh")
-            state_dict["v_fc1.weight"] = torch.randn(filters, 2 * filters) * 0.01
+        if "v_spatial_conv.weight" not in state_dict:
+            print(f"  Initialising v_spatial_conv (Conv2d({filters}, 2, 1)) fresh")
+            state_dict["v_spatial_conv.weight"] = torch.randn(2, filters, 1, 1) * 0.01
+            state_dict["v_spatial_conv.bias"] = torch.zeros(2)
+        if "v_fc1.weight" not in state_dict or state_dict["v_fc1.weight"].shape[1] != dual_path_in_dim:
+            print(f"  Initialising v_fc1 (Linear({dual_path_in_dim}, {filters})) fresh")
+            state_dict["v_fc1.weight"] = torch.randn(filters, dual_path_in_dim) * 0.01
             state_dict["v_fc1.bias"] = torch.zeros(filters)
         if "v_fc2.weight" not in state_dict:
-            # v_fc2: Linear(filters, filters)
-            print("  Initialising v_fc2 (Linear(64, 64)) fresh")
+            print(f"  Initialising v_fc2 (Linear({filters}, {filters})) fresh")
             state_dict["v_fc2.weight"] = torch.randn(filters, filters) * 0.01
             state_dict["v_fc2.bias"] = torch.zeros(filters)
         migrated = True

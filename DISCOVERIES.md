@@ -139,6 +139,21 @@ Every discovery documented below carries exact citations to the repository files
 * **Citation**: [CLAUDE.md:150-153](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/CLAUDE.md#L150-L153), commit `7c994745`
 * **Finding**: The 1-channel spatial pooling convolutions (`p_pool_conv`) originally used un-normalized ReLU activations, which caused irreversible dead-neuron collapse. Kept the pooling convs fully linear (no norm, no activation).
 
+### 4.4 The Spatial Erasure Flaw of Global Pooling (EXP_ARCH_001)
+* **Discovered by**: HenBOMB & Antigravity
+* **Citations**: [`polyfish-rs/src/ai/network.rs:304-307`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/network.rs#L304-L307), [`polyfish-rs/tests/test_neural_behavioral_probe.rs:165-212`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/test_neural_behavioral_probe.rs#L165-L212)
+* **Finding**: In `EXP_ARCH_001`, the value head replaced the original 1-channel bottleneck with global mean and max pooling across all 121 map tiles (`v_mean = v_spatial.mean(2)`, `v_max = v_spatial.amax(2)`). While this widened feature capacity, global average pooling across spatial dimensions is mathematically permutation-invariant ($P(\pi(X)) = P(X)$). It collapsed all local coordinate information: a threat or structure at coordinate $(x, y)$ was averaged into the entire board, diluting its signal by a factor of $\frac{1}{121} \approx 0.0083$.
+* **Pathology**: When an acting player stepped off their own capital to scout fog, the move revealed 3–4 new tiles, adding positive macro exploration features to the global sum. Because the capital loss was diluted by 121 while exploration gains summed across multiple tiles, the neural value head evaluated an undefended, threatened capital *higher* ($-0.029$) than an occupied, defended capital ($-0.109$). The network was architecturally incapable of associating state value with coordinate-specific vulnerabilities.
+
+### 4.5 Dual-Path Value Head with Spatial Coordinate Awareness (EXP_ARCH_002)
+* **Discovered by**: HenBOMB & Antigravity
+* **Citations**: [`polyfish-rs/src/ai/network.rs:244,305-323,371-381`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/network.rs#L244), [`polyfish-rs/train.py:173-178,218-223`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/train.py#L173-L178), [`polyfish-rs/migrate_model.py:38-66`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/migrate_model.py#L38-L66)
+* **Finding & Architecture**: To eliminate spatial coordinate erasure without resorting to ad-hoc domain heuristics, `EXP_ARCH_002` introduced a Dual-Path Value Head:
+  1. **Path A (Local Spatial Coordinates)**: A $1\times 1$ convolution (`v_spatial_conv`, $64 \to 2$ channels) preserving the full $11\times 11$ coordinate grid, flattened to $2 \times 11 \times 11 = 242$ dimensions. Channel 0 learns friendly structure and garrison presence; Channel 1 learns hostile tactical threat zones.
+  2. **Path B (Global Macro Context)**: Global mean and max pooling over the 64 trunk filters ($2 \times 64 = 128$ dimensions), retaining aggregate macro information (economy, tech level, total unit counts).
+  3. **Fusion & Backward Compatibility**: Concatenation $[242 + 128] = 370$ inputs into `v_fc1` (Linear $370 \to 64$). `PolyZeroNet::new()` dynamically detects layer weights to remain 100% backward-compatible with legacy `EXP_ARCH_001` checkpoints.
+* **Verification**: Unit test `test_exp_arch_002_spatial_value_sensitivity` proved the architecture differentiates between localized activations at $(2, 2)$ vs $(8, 8)$ ($\Delta = 0.2875$) despite identical global mean/max values. Parameter footprint increased by only $+15,618$ parameters ($+5.3\%$, $\approx +0.06$ MB).
+
 ---
 
 ## 5. Strategic Macro Bottlenecks & Elo Autopsies

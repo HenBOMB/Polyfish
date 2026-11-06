@@ -250,11 +250,15 @@ impl TchPolyZeroNet {
         let source_spatial = self.conv2d(&x, "pi_source", 0).flatten(1, 3); // [B, 121]
         let target_spatial = self.conv2d(&x, "pi_target", 0).flatten(1, 3); // [B, 121]
 
-        // Value head (EXP_ARCH_001): global mean+max pool over the full trunk
-        // -> MLP. Mirrors network.rs / train.py.
+        // Value head (EXP_ARCH_002): Dual-path value head with 1x1 spatial projection + global pooling
         let v_mean = x.mean_dim([2i64, 3].as_slice(), false, Kind::Float); // [B, FILTERS]
         let v_max = x.amax([2i64, 3].as_slice(), false); // [B, FILTERS]
-        let v_feat = Tensor::cat(&[&v_mean, &v_max], 1); // [B, 2*FILTERS]
+        let v_feat = if self.w.contains_key("v_spatial_conv.weight") {
+            let v_spatial_proj = self.conv2d(&x, "v_spatial_conv", 0).flatten(1, 3);
+            Tensor::cat(&[&v_spatial_proj, &v_mean, &v_max], 1)
+        } else {
+            Tensor::cat(&[&v_mean, &v_max], 1)
+        };
         let v_latent = self.linear(&v_feat, "v_fc1").relu();
         let v_latent = self.linear(&v_latent, "v_fc2").relu();
         let win = self.linear(&v_latent, "v_win"); // [B, 1]

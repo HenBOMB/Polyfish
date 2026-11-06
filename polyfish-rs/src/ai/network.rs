@@ -241,6 +241,7 @@ pub struct PolyZeroNet {
     pi_target: Conv2d, // Spatial target
     pi_option: Linear, // Unified 192 options head
 
+    v_spatial_conv: Option<Conv2d>, // EXP_ARCH_002: Spatial coordinate projection (64 -> 2)
     v_fc1: Linear,
     v_fc2: Linear,
     v_win: Linear,
@@ -301,9 +302,25 @@ impl PolyZeroNet {
         let pi_target = conv(filters, 1, 1, 1, 0, vs.pp("pi_target"))?;
         let pi_option = candle_nn::linear(filters, NUM_MOVE_OPTIONS, vs.pp("pi_option"))?;
 
-        // Value processing (EXP_ARCH_001): global mean+max pool over the full
-        // trunk -> MLP, instead of collapsing to a single channel.
-        let v_fc1 = candle_nn::linear(2 * filters, filters, vs.pp("v_fc1"))?;
+        // Value processing:
+        // EXP_ARCH_002: Dual-path value head with 1x1 spatial coordinate projection
+        // (2 channels, 2*11*11=242 floats) concatenated with global mean+max pooling
+        // (128 floats) -> Linear(370, filters).
+        // Backward-compatible with EXP_ARCH_001 checkpoints where v_fc1 is Linear(128, filters).
+        const SPATIAL_CHANNELS: usize = 2;
+        const SPATIAL_FEATURES: usize = SPATIAL_CHANNELS * MAP_SIZE * MAP_SIZE; // 242
+        let dual_path_in_dim = SPATIAL_FEATURES + 2 * filters; // 370
+
+        let (v_spatial_conv, v_fc1) = if let Ok(conv_layer) = conv(filters, SPATIAL_CHANNELS, 1, 1, 0, vs.pp("v_spatial_conv")) {
+            let fc1 = candle_nn::linear(dual_path_in_dim, filters, vs.pp("v_fc1"))?;
+            (Some(conv_layer), fc1)
+        } else if let Ok(fc1) = candle_nn::linear(dual_path_in_dim, filters, vs.pp("v_fc1")) {
+            let conv_layer = conv(filters, SPATIAL_CHANNELS, 1, 1, 0, vs.pp("v_spatial_conv"))?;
+            (Some(conv_layer), fc1)
+        } else {
+            let fc1 = candle_nn::linear(2 * filters, filters, vs.pp("v_fc1"))?;
+            (None, fc1)
+        };
         let v_fc2 = candle_nn::linear(filters, filters, vs.pp("v_fc2"))?;
         let v_win = candle_nn::linear(filters, 1, vs.pp("v_win"))?;
         let v_progress = candle_nn::linear(filters, 1, vs.pp("v_progress"))?;
@@ -322,6 +339,7 @@ impl PolyZeroNet {
             pi_source,
             pi_target,
             pi_option,
+            v_spatial_conv,
             v_fc1,
             v_fc2,
             v_win,
@@ -396,13 +414,20 @@ impl PolyZeroNet {
             move_option: pi_option,
         };
 
-        // 5. Value Heads (EXP_ARCH_001): pool the full trunk (mean+max over
-        // H*W) -> MLP, giving the value estimate a real feature basis.
+        // 5. Value Heads (EXP_ARCH_002):
+        // Dual-path value head: local 1x1 spatial projection (242 floats)
+        // concatenated with global mean+max pooling (128 floats) -> MLP.
         let v_spatial = shared.flatten_from(2)?; // [B, filters, H*W]
         let v_mean = v_spatial.mean(2)?; // [B, filters]
         let v_max = v_spatial.max(2)?; // [B, filters]
-        let v_feat = Tensor::cat(&[&v_mean, &v_max], 1)?; // [B, 2*filters]
-        let v_latent = self.v_fc1.forward(&v_feat)?.relu()?;
+        let v_latent = if let Some(ref spatial_conv) = self.v_spatial_conv {
+            let v_spatial_proj = spatial_conv.forward(&shared)?.flatten_from(1)?;
+            let v_feat = Tensor::cat(&[&v_spatial_proj, &v_mean, &v_max], 1)?;
+            self.v_fc1.forward(&v_feat)?.relu()?
+        } else {
+            let v_feat = Tensor::cat(&[&v_mean, &v_max], 1)?;
+            self.v_fc1.forward(&v_feat)?.relu()?
+        };
         let v_latent = self.v_fc2.forward(&v_latent)?.relu()?;
         let v_win = self.v_win.forward(&v_latent)?;
         let v_progress = self.v_progress.forward(&v_latent)?;
@@ -508,6 +533,72 @@ mod tests {
         assert_eq!(policy.target_spatial.dims(), &[2, MAP_SIZE * MAP_SIZE]);
         assert_eq!(value.win_value.dims(), &[2, 1]);
         assert_eq!(value.progress_value.dims(), &[2, 1]);
+    }
+
+    /// EXP_ARCH_002 Verification: Spatial coordinates break permutation symmetry in the value head.
+    /// Under EXP_ARCH_001 (global pooling only), placing an activation at (2, 2) vs (8, 8) produced
+    /// mathematically identical global means. EXP_ARCH_002's dual-path projection ensures spatial
+    /// positions yield distinct value evaluations.
+    #[test]
+    fn test_exp_arch_002_spatial_value_sensitivity() {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vs = VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
+        let net = PolyZeroNet::new(vs).unwrap();
+
+        assert!(net.v_spatial_conv.is_some(), "EXP_ARCH_002 spatial conv must be initialized");
+
+        let p = Tensor::zeros((1, crate::ai::features::RawFeatures::PLAYER_STATE_DIM), candle_core::DType::F32, &device).unwrap();
+
+        // Map A: Point activation at (x=2, y=2)
+        let mut map_a_vec = vec![0.0f32; crate::ai::features::NUM_CHANNELS * MAP_SIZE * MAP_SIZE];
+        let idx_a = 0 * (MAP_SIZE * MAP_SIZE) + (2 * MAP_SIZE + 2);
+        map_a_vec[idx_a] = 10.0;
+        let map_a = Tensor::from_vec(map_a_vec, (1, crate::ai::features::NUM_CHANNELS, MAP_SIZE, MAP_SIZE), &device).unwrap();
+
+        // Map B: Point activation at (x=8, y=8) (Exact same global mean and max!)
+        let mut map_b_vec = vec![0.0f32; crate::ai::features::NUM_CHANNELS * MAP_SIZE * MAP_SIZE];
+        let idx_b = 0 * (MAP_SIZE * MAP_SIZE) + (8 * MAP_SIZE + 8);
+        map_b_vec[idx_b] = 10.0;
+        let map_b = Tensor::from_vec(map_b_vec, (1, crate::ai::features::NUM_CHANNELS, MAP_SIZE, MAP_SIZE), &device).unwrap();
+
+        let (_, val_a) = net.forward(&map_a, &p).unwrap();
+        let (_, val_b) = net.forward(&map_b, &p).unwrap();
+
+        let v_a = val_a.win_value.to_vec2::<f32>().unwrap()[0][0];
+        let v_b = val_b.win_value.to_vec2::<f32>().unwrap()[0][0];
+
+        println!("EXP_ARCH_002 Spatial Sensitivity: Val(2,2) = {:.6}, Val(8,8) = {:.6}, Diff = {:.6}",
+            v_a, v_b, (v_a - v_b).abs());
+
+        assert!(
+            (v_a - v_b).abs() > 1e-6,
+            "Spatial value head must differentiate between coordinates (2,2) and (8,8) despite identical global means"
+        );
+    }
+
+    /// Verifies backward compatibility with legacy EXP_ARCH_001 checkpoints (e.g. model_iter129)
+    /// where v_fc1 was Linear(128, 64) and v_spatial_conv did not exist.
+    #[test]
+    fn test_legacy_exp_arch_001_checkpoint_compatibility() {
+        let path = "model_iter129.safetensors";
+        if !std::path::Path::new(path).exists() {
+            println!("Skipping legacy compatibility test: {path} not found locally");
+            return;
+        }
+
+        let device = Device::Cpu;
+        let vs = unsafe {
+            VarBuilder::from_mmaped_safetensors(&[path], candle_core::DType::F32, &device).unwrap()
+        };
+        let net = PolyZeroNet::new(vs).unwrap();
+
+        assert!(net.v_spatial_conv.is_none(), "Legacy checkpoint must fall back to v_spatial_conv = None");
+
+        let (policy, value) = forward_dummy(&net, &device);
+        assert_eq!(policy.action_type.dims(), &[2, NUM_ACTION_TYPES]);
+        assert_eq!(value.win_value.dims(), &[2, 1]);
+        println!("Legacy EXP_ARCH_001 backward compatibility verified for {}", path);
     }
 
     /// Dumps a fixed pseudo-random input batch plus the network outputs for a

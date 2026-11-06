@@ -172,11 +172,12 @@ class PolyZeroNet(nn.Module):
         self.pi_target = nn.Conv2d(self.filters, 1, 1)
         
         # --- Value Heads ---
-        # Heavy value head (EXP_ARCH_001): global mean+max pool over the FULL
-        # 64-channel trunk -> 2-layer MLP. The old head collapsed the trunk to
-        # ONE channel and ran a single linear layer — a near-linear probe that
-        # cannot represent "am I winning" for a strategic game. This can.
-        self.v_fc1 = nn.Linear(2 * self.filters, self.filters)
+        # Dual-path value head (EXP_ARCH_002): Local spatial projection (1x1 conv to 2 channels,
+        # flattened to 2*11*11=242) + Global context pooling (mean+max over trunk = 128)
+        # -> Linear(370, filters) -> Linear(filters, filters) -> Linear(filters, 1).
+        # Eliminates coordinate blindness while preserving macro game summary features.
+        self.v_spatial_conv = nn.Conv2d(self.filters, 2, 1)
+        self.v_fc1 = nn.Linear(2 * self.map_height * self.map_width + 2 * self.filters, self.filters)
         self.v_fc2 = nn.Linear(self.filters, self.filters)
         self.v_win = nn.Linear(self.filters, 1)
         self.v_progress = nn.Linear(self.filters, 1)
@@ -214,11 +215,12 @@ class PolyZeroNet(nn.Module):
         policy['source_spatial'] = self.pi_source(x).flatten(1)
         policy['target_spatial'] = self.pi_target(x).flatten(1)
         
-        # --- Value Heads ---
+        # --- Value Heads (EXP_ARCH_002) ---
         v_input = x.detach() if DETACH_VALUE_TRUNK else x
+        v_spatial_proj = self.v_spatial_conv(v_input).flatten(1)
         v_mean = v_input.mean(dim=(2, 3))          # [B, filters]
         v_max = v_input.amax(dim=(2, 3))           # [B, filters]
-        v_feat = torch.cat([v_mean, v_max], dim=1)  # [B, 2*filters]
+        v_feat = torch.cat([v_spatial_proj, v_mean, v_max], dim=1)  # [B, 370]
         v_latent = self.relu(self.v_fc2(self.relu(self.v_fc1(v_feat))))
         
         values = {}
@@ -320,33 +322,31 @@ def _migrate_checkpoint(state_dict, model, player_state_dim):
     filters = state_dict['v_win.weight'].shape[1]  # always 64
 
     # ------------------------------------------------------------------
-    # 1. Value-head swap: v_pool_conv / v_fc_shared  →  v_fc1 / v_fc2
-    #    The old head collapsed the trunk to 1 channel then ran a single
-    #    linear; the new head uses global mean+max pool → 2-layer MLP.
-    #    Weights are not transferable, so we initialise from the model's
-    #    freshly-created parameters and delete the stale keys.
+    # 1. Value-head upgrade: EXP_ARCH_002 dual-path value head (370 inputs)
+    #    Combines 1x1 spatial coordinate projection (2*11*11=242 floats)
+    #    with global context pooling (mean+max over trunk = 128 floats).
+    #    Re-initialises v_spatial_conv and v_fc1 if missing or legacy shape.
     # ------------------------------------------------------------------
     stale_value_prefixes = ("v_pool_conv.", "v_fc_shared.")
     stale_keys = [k for k in state_dict if k.startswith(stale_value_prefixes)]
-    new_value_prefixes = ("v_fc1.", "v_fc2.")
-    new_keys_missing = any(
-        k.startswith(new_value_prefixes)
-        for k in model.state_dict()
-    ) and not any(
-        k.startswith(new_value_prefixes)
-        for k in state_dict
+    for k in stale_keys:
+        del state_dict[k]
+
+    needs_dual_path_migration = (
+        "v_spatial_conv.weight" not in state_dict
+        or ("v_fc1.weight" in state_dict and state_dict["v_fc1.weight"].shape[1] != model.v_fc1.weight.shape[1])
+        or "v_fc1.weight" not in state_dict
     )
-    if stale_keys or new_keys_missing:
-        for k in stale_keys:
-            del state_dict[k]
-        # Seed v_fc1/v_fc2 from model's random init so load_state_dict
-        # won't report them as missing.
-        for k, v in model.state_dict().items():
-            if k.startswith(new_value_prefixes):
-                state_dict[k] = v.clone()
-        dropped = ", ".join(sorted(stale_keys)) if stale_keys else "(none)"
+    if needs_dual_path_migration:
+        state_dict["v_spatial_conv.weight"] = model.v_spatial_conv.weight.clone()
+        state_dict["v_spatial_conv.bias"] = model.v_spatial_conv.bias.clone()
+        state_dict["v_fc1.weight"] = model.v_fc1.weight.clone()
+        state_dict["v_fc1.bias"] = model.v_fc1.bias.clone()
+        if "v_fc2.weight" not in state_dict:
+            state_dict["v_fc2.weight"] = model.v_fc2.weight.clone()
+            state_dict["v_fc2.bias"] = model.v_fc2.bias.clone()
         migrations.append(
-            f"value-head: dropped [{dropped}], initialised v_fc1/v_fc2 fresh"
+            f"value-head (EXP_ARCH_002): initialised dual-path spatial value head (v_spatial_conv [64->2] + v_fc1 [in: {model.v_fc1.weight.shape[1]}])"
         )
 
     # ------------------------------------------------------------------
