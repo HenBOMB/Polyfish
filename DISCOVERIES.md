@@ -71,6 +71,25 @@ Every discovery documented below carries exact citations to the repository files
 * **Finding**: While tuning value heads on long-horizon games, aggregate calibration improved substantially ($R^2 = 0.972$ on late turns in EXP_ELO_067), yet net win rate dropped by 13 percentage points against hand-written heuristics.
 * **Lesson**: Value heads trained via MSE regression learn macro score correlations (calibration) but fail to distinguish fine-grained tactical advantages between immediate candidate states (discrimination).
 
+### 2.8 The Symmetrical Benchmark Victory: In-Tree Adversarial Modeling Neutralizes the P2 Deficit
+* **Discovered by**: HenBOMB & Antigravity
+* **Citation**: [`docs/research/04_ADVERSARIAL_DAGGER_TRACKING.md`](docs/research/04_ADVERSARIAL_DAGGER_TRACKING.md), [`polyfish-rs/arena_iter129_vs_iter156_100games.json`](polyfish-rs/arena_iter129_vs_iter156_100games.json)
+* **Finding**: In a 100-game symmetric arena showdown (`mcts=128`, `gumbel-k=16`, `adversarial=true`, 50 paired seeds), the adversarial self-play model (`Iter 129`) decisively defeated legacy AlphaZero (`iter 156`) **62 to 38 (62.0% win rate)** with a **+829.1 average score differential** ($Z = 2.40, p = 0.0164$, 95% Wilson CI $[52.2\%, 70.9\%]$).
+* **Breakthrough**: Solved the historic Player 2 wipeout collapse. Prior models lost 100% of P2 games against `iter 156` due to solitaire search assumptions. Iter 129 achieved a **56.0% win rate as Player 2 (28 / 50 wins)**, demonstrating that in-tree opponent simulation successfully teaches the value and policy networks to price enemy retaliation.
+
+### 2.9 Non-Transitivity in Imperfect Information Games
+* **Discovered by**: HenBOMB & Antigravity
+* **Citation**: [`docs/research/06_TACTICAL_PROOFS_AND_LEARNABILITY.md`](docs/research/06_TACTICAL_PROOFS_AND_LEARNABILITY.md), [`.anchor_state.json`](polyfish-rs/tests/test_category_2_proofs.rs)
+* **Finding**: While Iter 129 dominates neural opponents (62% vs `iter 156`), it only wins 11.5% against the deterministic Greedy heuristic. In POMDP fog-of-war, MCTS search cannot observe rewards under fog (Proof #6), causing the neural model to expand cautiously while Greedy advances aggressively without lookahead. Tactical neural strength against tree-search agents does not translate transitively to winning against deterministic expansion heuristics.
+
+### 2.10 Zero-Search Behavioral Interpretability: Aggression and Infiltration vs. Defensive Retreat
+* **Discovered by**: HenBOMB & Antigravity
+* **Citation**: [`polyfish-rs/tests/test_neural_behavioral_probe.rs`](polyfish-rs/tests/test_neural_behavioral_probe.rs)
+* **Finding**: 
+  1. **Ratio Fallacy in Policy Priors**: Earlier reports claimed that checkpoint Iter 129 had internalised a "hit-and-run escape primitive" due to a massive increase in the ratio `p(escape) / p(EndTurn)`. Controlled 0-search distribution analysis proved this was an artifact of extreme `EndTurn` suppression ($5\times 10^{-6} \to <10^{-7}$). In absolute terms, the retreat move (`Step` to safe tile at Chebyshev dist 2) dropped from 8.48% (Rank #4) in Iter 76 to 0.83% (Rank #6+) in Iter 129.
+  2. **Forward Infiltration over Retreat**: In simulated decision-making (both raw greedy $\arg\max_a \pi(a|s)$ and 128-visit Gumbel MCTS), the agent intentionally rejects retreating to neutral safety. Instead, MCTS visits `Step 2 -> 13` (49 visits, $Q = +0.0138$) into enemy territory adjacent to a wounded 5 HP enemy Warrior, because combat math confirms the 5 HP Warrior deals only 3.0 retaliation damage (failing to kill the 5 HP Rider). The network learned aggressive positional advancement, not cowardly retreat.
+  3. **1-Ply Capital Threat Blindness in Value Head**: In Probe 3, the raw neural value head evaluated an undefended capital with an adjacent enemy higher ($-0.029$) than a garrisoned capital ($-0.109$). The raw value network is blind to 1-ply capital threats; avoidance of capital snipes relies entirely on tree search rollouts reaching the game-loss state.
+
 ---
 
 ## 3. Game Mechanics, Heuristics & Movement Cues

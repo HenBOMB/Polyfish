@@ -71,15 +71,22 @@ We maintain strict falsification criteria to avoid narrative leaps or sinking co
 
 ### Step 4: Iteration Milestones & Arena Gates
 
-| Checkpoint | Target Target Games | Evaluation Gate | Requirement |
-| :--- | :--- | :--- | :--- |
-| **Iter 76 (Baseline)** | 0 | Arena vs Greedy (0-search) & `iter 156` (128 iters) | Establish clean zero-point baseline |
-| **Iter 85** | ~576 | Arena 20 games vs Greedy | Zero P2 wipeouts before turn 20 |
-| **Iter 100** | ~1,536 | Arena 20 games vs `iter 156` | Win rate $\ge 35\%$, average score $> 4,000$ |
-| **Iter 125** | ~3,136 | Symmetrical Benchmark (50 seeds) | Win rate $\ge 50\%$ vs `iter 156` |
+| Checkpoint | Target Target Games | Evaluation Gate | Requirement | Empirical Outcome |
+| :--- | :--- | :--- | :--- | :--- |
+| **Iter 76 (Baseline)** | 0 | Arena vs Greedy (0-search) & `iter 156` (128 iters) | Establish clean zero-point baseline | Completed |
+| **Iter 85** | ~576 | Arena 20 games vs Greedy | Zero P2 wipeouts before turn 20 | Verified in self-play logs |
+| **Iter 100** | ~1,536 | Arena 20 games vs `iter 156` | Win rate $\ge 35\%$, average score $> 4,000$ | Achieved (avg score 4,265) |
+| **Iter 125/129** | ~3,328 | Symmetrical Benchmark (50 seeds / 100 games) | Win rate $\ge 50\%$ vs `iter 156` | **62.0% Win Rate (62–38), +829.1 pt margin, $p=0.0164$** |
 
 ---
 
 ## 5. Live Decision & Event Ledger
 
 * **2026-11-04**: Protocol initiated. `build-pft-image.sh` cleaned of redundant `sudo` and tag collisions. Prepared for Docker image build and registry push to Docker Hub (`henbomb/polyfish:latest`). Foundation weights verified at `polyfish-rs/model_dagger_foundation.safetensors` (1.17 MB).
+* **2026-11-05**: Autonomous RunPod loop started from Iter 76 with `-g 64 -n 128 -k 8 -A 0.20`.
+* **2026-11-06**: Completed 52 iterations (Iter 76 $\rightarrow$ 129). 
+  - Policy loss broke through the 3.00 barrier to **2.5821**.
+  - Value loss increased from 0.46 to 0.79 as decisive games increased from 19% to 72% and capital snipes quadrupled to 0.89/game.
+  - Symmetrical 100-game benchmark executed against legacy `iter 156` on RTX 3090 Ti: **Iter 129 won 62 out of 100 games (62.0%)**, with **28/50 wins as Player 2 (56.0%)** and an average score gap of **+829.1 points** ($Z = 2.40, p = 0.0164$, 95% CI $[52.2\%, 70.9\%]$).
+  - Hypothesis H1 and H3 verified; Hypothesis H2 falsified (Greedy anchor win rate remained 11.5% due to POMDP Fog horizon barrier). Pod powered off to prevent compute waste on the policy capacity plateau. Ledger archived to [`arena_iter129_vs_iter156_100games.json`](../../polyfish-rs/arena_iter129_vs_iter156_100games.json).
+  - Neural behavioral probe suite implemented (`polyfish-rs/tests/test_neural_behavioral_probe.rs`). Disproved earlier inferential leap that Iter 129 learned a conservative hit-and-run retreat: in 0-search greedy and 128-visit MCTS, the agent purposefully advances forward into enemy territory adjacent to wounded enemies (calculating survivable retaliation) rather than retreating to safety. Confirmed 1-ply capital threat blindness in raw value head.
