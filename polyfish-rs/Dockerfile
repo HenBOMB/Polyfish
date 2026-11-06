@@ -10,8 +10,9 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /app
 # We only need the rust source code to build the binaries for prod
-COPY Cargo.docker.toml Cargo.toml
-COPY Cargo.lock ./
+COPY Cargo.toml Cargo.lock ./
+# Strip examples/tests that require local test fixtures or Apple Metal
+RUN sed -i -e '/^\[\[test\]\]/,$d' -e '/^\[\[example\]\]/,$d' Cargo.toml
 COPY src ./src
 
 # Bypass nvidia-smi check during Docker build by hardcoding the compute capability
