@@ -97,3 +97,47 @@ We maintain strict falsification criteria to avoid narrative leaps or sinking co
   - **Probe Evaluation**: Capital defense distortion in Probe 3 dropped from $+0.079$ down to **$+0.005$** (a 93.7% reduction). Lethal threat valuation in Probe 2 shifted from $-0.060$ to **$-0.404$**.
   - **Symmetric Arena Benchmark**: Paused loop at Iteration 100 and ran 50-game symmetric showdown vs `Iter 129` (`EXP_ARCH_001`). Iter 100 won **19 / 50 games (38.0%)** (95% Wilson CI: $[25.9\%, 51.8\%]$). Falsified Prediction 4 due to the 29-iteration training gap ($P_{\text{loss}} = 2.5821$ vs $2.8563$).
   - **Loop Resumed**: Resumed training at Iteration 101 via background tmux session to allow `EXP_ARCH_002` to train toward the policy capacity ceiling (~Iter 125–129). Ledger archived to [`arena_exp002_vs_iter129_50games.json`](../../polyfish-rs/arena_exp002_vs_iter129_50games.json).
+
+---
+
+## 6. Architecture Tracking Ledger: EXP_ARCH_001 vs. EXP_ARCH_002
+
+### 6.1 Training Trajectory Comparison (From DAgger Foundation Iter 76)
+
+| Metric | Iteration 76 (Baseline) | Iteration 85 | Iteration 100 | Iteration 129 (Target Floor) |
+| :--- | :--- | :--- | :--- | :--- |
+| **`EXP_ARCH_001` Policy Loss** | 4.8920 | 3.5510 | 2.9720 | **2.5821** (Perplexity: 13.2) |
+| **`EXP_ARCH_002` Policy Loss** | 5.0872 | 3.4862 | **2.8563** | *Training In Progress (Iter 101+)* |
+| **`EXP_ARCH_001` Value Loss** | 0.4620 | 0.5840 | 0.7420 | 0.7982 |
+| **`EXP_ARCH_002` Value Loss** | 0.9810 *(migration spike)* | 0.6596 | 0.8234 | *Training In Progress* |
+| **`EXP_ARCH_001` Holdout $R^2$** | ~0.450 | ~0.520 | ~0.570 | **0.6149** |
+| **`EXP_ARCH_002` Holdout $R^2$** | 0.3710 *(fresh weights)* | 0.5658 | 0.5903 (peak 0.6056) | *Training In Progress* |
+| **`EXP_ARCH_001` Decisive Frac** | 19.0% | 48.0% | 64.0% | 73.4% |
+| **`EXP_ARCH_002` Decisive Frac** | 35.9% | 56.2% | 59.4% (peak 87.5%) | *Training In Progress* |
+
+---
+
+### 6.2 Behavioral Probe Comparison (Weight Interpretability)
+
+| Probe Dimension | EXP_ARCH_001 (Iter 76) | EXP_ARCH_001 (Iter 129) | EXP_ARCH_002 (Iter 99) | Impact |
+| :--- | :--- | :--- | :--- | :--- |
+| **Probe 1: Escape Prior $p(\text{retreat})$** | 8.48% (Rank #4) | 0.83% (Rank #6+) | **9.27% (Rank #4)** | Escape prior restored |
+| **Probe 1: Threat Valuation** | $V = -0.003$ | $V = -0.073$ | **$V = -0.339$** | Threat priced 4.6× more severely |
+| **Probe 2: Lethal Suicide Valuation** | $V = +0.125$ | $V = -0.060$ | **$V = -0.404$** | Correctly evaluates fatal danger |
+| **Probe 3: Capital Abandonment $\Delta$** | $+0.051$ | $+0.079$ *(pathological)* | **$+0.005$** | **93.7% reduction** in delusion |
+
+---
+
+### 6.3 Symmetrical Arena Benchmarks
+
+1. **Benchmark 1 (Legacy AlphaZero vs Adversarial Self-Play, EXP_ARCH_001)**:
+   * **Matchup**: `Iter 129 (Adversarial)` vs `Iter 156 (AlphaZero Solitaire)`
+   * **Result**: **62 - 38 (62.0% Win Rate)**, $Z = 2.40, p = 0.0164$, +829.1 pt margin.
+   * **Ledger**: [`polyfish-rs/arena_iter129_vs_iter156_100games.json`](../../polyfish-rs/arena_iter129_vs_iter156_100games.json)
+
+2. **Benchmark 2 (Dual-Path Value Head vs Legacy Global Pooling)**:
+   * **Matchup**: `Iter 100 (EXP_ARCH_002)` vs `Iter 129 (EXP_ARCH_001)`
+   * **Result**: **19 - 31 (38.0% Win Rate)**, 95% Wilson CI $[25.9\%, 51.8\%]$.
+   * **Diagnosis**: Confounded by 29-iteration training gap ($P_{\text{loss}} = 2.5821$ vs $2.8563$); `EXP_ARCH_002` won 44% as P2 vs 32% as P1 due to increased tactical caution.
+   * **Ledger**: [`polyfish-rs/arena_exp002_vs_iter129_50games.json`](../../polyfish-rs/arena_exp002_vs_iter129_50games.json)
+
