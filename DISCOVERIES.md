@@ -154,6 +154,15 @@ Every discovery documented below carries exact citations to the repository files
   3. **Fusion & Backward Compatibility**: Concatenation $[242 + 128] = 370$ inputs into `v_fc1` (Linear $370 \to 64$). `PolyZeroNet::new()` dynamically detects layer weights to remain 100% backward-compatible with legacy `EXP_ARCH_001` checkpoints.
 * **Verification**: Unit test `test_exp_arch_002_spatial_value_sensitivity` proved the architecture differentiates between localized activations at $(2, 2)$ vs $(8, 8)$ ($\Delta = 0.2875$) despite identical global mean/max values. Parameter footprint increased by only $+15,618$ parameters ($+5.3\%$, $\approx +0.06$ MB).
 
+### 4.6 The Asymmetric Training Gap in Head-to-Head Architecture Evaluation
+* **Discovered by**: HenBOMB & Antigravity
+* **Citations**: [`polyfish-rs/arena_exp002_vs_iter129_50games.json`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/arena_exp002_vs_iter129_50games.json), [`polyfish-rs/tests/test_neural_behavioral_probe.rs:174-210,350-410`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/test_neural_behavioral_probe.rs)
+* **Finding**: In a 50-game symmetric arena showdown, `EXP_ARCH_002` (Iter 100) lost to `EXP_ARCH_001` (Iter 129) **19 to 31 (38.0% win rate)**. 
+* **Forensic Diagnosis**:
+  1. *Training Step Confounding*: `Iter 129` trained for 53 iterations from Iteration 76, compressing its policy loss to 2.5821 ($\text{perplexity} \approx 13.2$). `Iter 100` trained for only 24 iterations, leaving policy loss at 2.8563 ($\text{perplexity} \approx 17.4$).
+  2. *Gumbel Candidate Filtering*: In Gumbel MCTS with $k=16$, a 31% higher policy entropy means candidate sets frequently miss tactical combat lines, crippling tree search before simulation begins.
+  3. *Asymmetric Aggression vs. Timidity*: Behavioral probes proved `EXP_ARCH_002` corrected the capital abandonment delusion (reducing distortion from $+0.079$ to $+0.005$) and increased tactical danger pricing ($V = -0.339$). However, until its policy head sharpens to match, defensive awareness caused early-turn timidity as Player 1 (32% win rate), while `Iter 129` scored 11 early eliminations by pushing across the map recklessly. In contrast, `Iter 100` won 44% of games as Player 2, where defense directly prevented wipeouts.
+
 ---
 
 ## 5. Strategic Macro Bottlenecks & Elo Autopsies
