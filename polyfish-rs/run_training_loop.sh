@@ -75,9 +75,43 @@ elif command -v nvcc >/dev/null 2>&1; then
     # Runtime selection will verify that a usable CUDA device exists.
     echo "Building with CUDA support..."
     echo "CUDA compiler: $(nvcc --version | tail -n1)"
-    # --no-default-features: opt out of the macOS `metal` default, which does
-    # not compile on Linux.
-    cargo build --bin polyfish --bin self_play --bin arena --release --no-default-features --features cuda
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ -f "$SCRIPT_DIR/cuda_arch_helper.sh" ]; then
+        source "$SCRIPT_DIR/cuda_arch_helper.sh"
+    fi
+
+    DETECTED_TARGET=""
+    if [ -n "${CUDA_COMPUTE_CAP:-}" ]; then
+        DETECTED_TARGET="$CUDA_COMPUTE_CAP"
+    elif command -v nvidia-smi &> /dev/null; then
+        DETECTED_TARGET=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1)
+        if [ -z "$DETECTED_TARGET" ]; then
+            DETECTED_TARGET=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | tr -d '.' | head -n 1)
+        fi
+    fi
+
+    RESOLVED_CAP="86"
+    if command -v resolve_cuda_cap &>/dev/null && [ -n "$DETECTED_TARGET" ]; then
+        RESOLVED_CAP=$(resolve_cuda_cap "$DETECTED_TARGET" 2>/dev/null || echo "86")
+    elif [ -n "$DETECTED_TARGET" ]; then
+        RESOLVED_CAP="$DETECTED_TARGET"
+    fi
+    TARGET_CAP="${RESOLVED_CAP:-86}"
+    export CUDA_COMPUTE_CAP="$TARGET_CAP"
+    echo "Targeting CUDA Compute Capability: sm_${TARGET_CAP} (Input/GPU: '${DETECTED_TARGET:-default}')"
+
+    ARCH_BIN_DIR="target/bin_sm${TARGET_CAP}"
+    mkdir -p "$ARCH_BIN_DIR" target/release
+    if [ "${SKIP_BUILD:-0}" != "1" ] && [ -x "$ARCH_BIN_DIR/self_play" ] && [ -x "$ARCH_BIN_DIR/polyfish" ] && [ -x "$ARCH_BIN_DIR/arena" ]; then
+        echo "Using cached sm_${TARGET_CAP} binaries from $ARCH_BIN_DIR"
+        cp "$ARCH_BIN_DIR"/self_play "$ARCH_BIN_DIR"/polyfish "$ARCH_BIN_DIR"/arena ./target/release/
+    else
+        # --no-default-features: opt out of the macOS `metal` default, which does
+        # not compile on Linux.
+        cargo build --bin polyfish --bin self_play --bin arena --release --no-default-features --features cuda
+        echo "$TARGET_CAP" > ./target/release/.cuda_cap
+        cp ./target/release/self_play ./target/release/polyfish ./target/release/arena "$ARCH_BIN_DIR/" 2>/dev/null || true
+    fi
 else
     # CPU-only fallback
     echo "Building CPU-only version..."

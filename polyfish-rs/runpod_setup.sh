@@ -39,20 +39,59 @@ if [ ! -d ".venv" ]; then
 fi
 .venv/bin/pip install --upgrade pip
 
-# Detect CUDA version or default to cu121
-CUDA_INDEX="cu121"
-if command -v nvcc &> /dev/null; then
-    NVCC_VER=$(nvcc --version | grep "release" | sed -n 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/p')
-    if [[ "$NVCC_VER" =~ ^12\. ]]; then
-        CUDA_INDEX="cu121"
-    elif [[ "$NVCC_VER" =~ ^11\. ]]; then
-        CUDA_INDEX="cu118"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/cuda_arch_helper.sh" ]; then
+    source "$SCRIPT_DIR/cuda_arch_helper.sh"
+fi
+
+# Detect host GPU or resolve user-defined CUDA_COMPUTE_CAP (e.g. "5090", "3090 ti", "120")
+DETECTED_TARGET=""
+if [ -n "${CUDA_COMPUTE_CAP:-}" ]; then
+    DETECTED_TARGET="$CUDA_COMPUTE_CAP"
+elif command -v nvidia-smi &> /dev/null; then
+    DETECTED_TARGET=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1)
+    if [ -z "$DETECTED_TARGET" ]; then
+        DETECTED_TARGET=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | tr -d '.' | head -n 1)
     fi
 fi
 
-echo "Installing PyTorch ($CUDA_INDEX)..."
-.venv/bin/pip install torch==2.1.2 --index-url "https://download.pytorch.org/whl/$CUDA_INDEX" || \
-.venv/bin/pip install torch --index-url "https://download.pytorch.org/whl/$CUDA_INDEX"
+RESOLVED_CAP="86"
+if command -v resolve_cuda_cap &>/dev/null && [ -n "$DETECTED_TARGET" ]; then
+    RESOLVED_CAP=$(resolve_cuda_cap "$DETECTED_TARGET" 2>/dev/null || echo "86")
+elif [ -n "$DETECTED_TARGET" ]; then
+    RESOLVED_CAP="$DETECTED_TARGET"
+fi
+TARGET_CAP="${RESOLVED_CAP:-86}"
+export CUDA_COMPUTE_CAP="$TARGET_CAP"
+echo "Targeting CUDA Compute Capability: sm_${TARGET_CAP} (Input/GPU: '${DETECTED_TARGET:-default}')"
+
+# PyTorch installation: cu128 covers Blackwell (sm_120) down to Ampere (sm_86) seamlessly.
+TORCH_CUDA_INDEXES="${TORCH_CUDA_INDEXES:-cu128 cu126 cu124 cu121}"
+TORCH_VERSION="$(sed -n 's/^# *POLYFISH_TORCH_VERSION=//p' requirements.txt | head -n 1)"
+INSTALLED_TORCH="$(.venv/bin/python3 -c 'import torch; print(torch.__version__)' 2>/dev/null || true)"
+
+if [ -z "$INSTALLED_TORCH" ]; then
+    echo "Installing PyTorch with CUDA support..."
+    OK=0
+    for IDX in $TORCH_CUDA_INDEXES; do
+        echo "Trying CUDA wheel index $IDX..."
+        if [ -n "$TORCH_VERSION" ]; then
+            if .venv/bin/pip install "torch==$TORCH_VERSION" --index-url "https://download.pytorch.org/whl/$IDX"; then
+                OK=1; break
+            fi
+        else
+            if .venv/bin/pip install torch --index-url "https://download.pytorch.org/whl/$IDX"; then
+                OK=1; break
+            fi
+        fi
+    done
+    if [ "$OK" -ne 1 ]; then
+        echo "Failed to install CUDA PyTorch from $TORCH_CUDA_INDEXES, falling back to default PyPI wheel..."
+        .venv/bin/pip install torch
+    fi
+else
+    echo "PyTorch $INSTALLED_TORCH is already installed."
+fi
 
 .venv/bin/pip install -r requirements.txt
 
@@ -68,8 +107,14 @@ else
 fi
 
 echo "=== [6/6] Building CUDA-Accelerated Binaries (Native CPU Vectorization) ==="
+ARCH_BIN_DIR="target/bin_sm${TARGET_CAP}"
+mkdir -p "$ARCH_BIN_DIR" target/release
+
 RUSTFLAGS="-C target-cpu=native ${RUSTFLAGS:-}" cargo build --release --no-default-features --features cuda \
     --bin self_play --bin arena --bin polyfish
+echo "$TARGET_CAP" > ./target/release/.cuda_cap
+cp ./target/release/self_play ./target/release/polyfish ./target/release/arena "$ARCH_BIN_DIR/" 2>/dev/null || true
+echo "Cached sm_${TARGET_CAP} binaries to $ARCH_BIN_DIR"
 
 chmod +x *.sh 2>/dev/null || true
 

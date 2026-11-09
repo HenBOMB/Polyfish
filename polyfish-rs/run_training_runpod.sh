@@ -58,24 +58,59 @@ LOG_FILE="session.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 echo "Logging to $LOG_FILE"
 
-# --- Build (CUDA-only) ------------------------------------------------------
-# In the Docker image, binaries are precompiled and cargo is not installed.
-# Only attempt a build if cargo is available AND binaries are missing or stale.
-if [ -x ./target/release/self_play ] && [ -x ./target/release/polyfish ] && [ -x ./target/release/arena ]; then
-    echo "Precompiled binaries found — skipping build."
+# --- Build & Architecture-Aware Binary Selection (CUDA-only) ----------------
+# In persistent volume environments where users switch between GPUs (e.g. RTX 3090 sm_86
+# and RTX 5090 sm_120), binaries must match the active device's compute capability.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/cuda_arch_helper.sh" ]; then
+    source "$SCRIPT_DIR/cuda_arch_helper.sh"
+fi
+
+# Detect host GPU or resolve user-defined CUDA_COMPUTE_CAP (e.g. "5090", "3090 ti", "120")
+DETECTED_TARGET=""
+if [ -n "${CUDA_COMPUTE_CAP:-}" ]; then
+    DETECTED_TARGET="$CUDA_COMPUTE_CAP"
+elif command -v nvidia-smi &> /dev/null; then
+    DETECTED_TARGET=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1)
+    if [ -z "$DETECTED_TARGET" ]; then
+        DETECTED_TARGET=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | tr -d '.' | head -n 1)
+    fi
+fi
+
+RESOLVED_CAP="86"
+if command -v resolve_cuda_cap &>/dev/null && [ -n "$DETECTED_TARGET" ]; then
+    RESOLVED_CAP=$(resolve_cuda_cap "$DETECTED_TARGET" 2>/dev/null || echo "86")
+elif [ -n "$DETECTED_TARGET" ]; then
+    RESOLVED_CAP="$DETECTED_TARGET"
+fi
+TARGET_CAP="${RESOLVED_CAP:-86}"
+export CUDA_COMPUTE_CAP="$TARGET_CAP"
+echo "Active GPU Compute Capability: sm_${TARGET_CAP} (Input/GPU: '${DETECTED_TARGET:-default}')"
+
+ARCH_BIN_DIR="target/bin_sm${TARGET_CAP}"
+mkdir -p "$ARCH_BIN_DIR" target/release
+
+# Check if cached binary for this architecture already exists
+if [ "${SKIP_BUILD:-0}" != "1" ] && [ -x "$ARCH_BIN_DIR/self_play" ] && [ -x "$ARCH_BIN_DIR/polyfish" ] && [ -x "$ARCH_BIN_DIR/arena" ]; then
+    echo "Found precompiled sm_${TARGET_CAP} binaries in $ARCH_BIN_DIR — restoring into target/release."
+    cp "$ARCH_BIN_DIR"/self_play "$ARCH_BIN_DIR"/polyfish "$ARCH_BIN_DIR"/arena ./target/release/
+    echo "$TARGET_CAP" > ./target/release/.cuda_cap
+elif [ -x ./target/release/self_play ] && [ -f ./target/release/.cuda_cap ] && [ "$(cat ./target/release/.cuda_cap 2>/dev/null)" = "$TARGET_CAP" ] && [ "${SKIP_BUILD:-0}" = "1" ]; then
+    echo "Precompiled sm_${TARGET_CAP} binaries already loaded in target/release — skipping build."
 elif command -v cargo >/dev/null 2>&1; then
-    echo "Building CUDA binaries (release)..."
-    # --no-default-features: opt out of the macOS `metal` default, which does
-    # not compile on Linux. --features cuda routes candle inference onto the GPU.
-    BUILD_ENV=()
+    echo "Building CUDA binaries for sm_${TARGET_CAP} (release)..."
+    BUILD_ENV=(CUDA_COMPUTE_CAP="$TARGET_CAP")
     if [ "${FAST_BUILD:-0}" = "1" ]; then
         echo "⚡ FAST_BUILD: thin LTO + 16 codegen-units (faster compile, slightly slower binary)"
-        BUILD_ENV=(CARGO_PROFILE_RELEASE_LTO=thin CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16)
+        BUILD_ENV+=(CARGO_PROFILE_RELEASE_LTO=thin CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16)
     fi
     env "${BUILD_ENV[@]}" RUSTFLAGS="-C target-cpu=native ${RUSTFLAGS:-}" cargo build --bin polyfish --bin self_play --bin benchmark --bin arena --release \
         --no-default-features --features cuda
+    echo "$TARGET_CAP" > ./target/release/.cuda_cap
+    cp ./target/release/self_play ./target/release/polyfish ./target/release/arena "$ARCH_BIN_DIR/" 2>/dev/null || true
+    echo "Successfully cached sm_${TARGET_CAP} binaries to $ARCH_BIN_DIR"
 else
-    echo "Error: binaries not found and cargo not available to build them." >&2
+    echo "Error: binaries for sm_${TARGET_CAP} not found and cargo not available to build them." >&2
     exit 1
 fi
 PLATFORM_DEFAULT_ACTORS=128
