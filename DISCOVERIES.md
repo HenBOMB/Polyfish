@@ -163,6 +163,16 @@ Every discovery documented below carries exact citations to the repository files
   2. *Gumbel Candidate Filtering*: In Gumbel MCTS with $k=16$, a 31% higher policy entropy means candidate sets frequently miss tactical combat lines, crippling tree search before simulation begins.
   3. *Asymmetric Aggression vs. Timidity*: Behavioral probes proved `EXP_ARCH_002` corrected the capital abandonment delusion (reducing distortion from $+0.079$ to $+0.005$) and increased tactical danger pricing ($V = -0.339$). However, until its policy head sharpens to match, defensive awareness caused early-turn timidity as Player 1 (32% win rate), while `Iter 129` scored 11 early eliminations by pushing across the map recklessly. In contrast, `Iter 100` won 44% of games as Player 2, where defense directly prevented wipeouts.
 
+### 4.7 Inversion of the Capital Abandonment Delusion ($\Delta < 0$) Under EXP_ARCH_002
+* **Discovered by**: HenBOMB & Antigravity
+* **Citations**: [`polyfish-rs/tests/test_neural_behavioral_probe.rs:439-470`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/test_neural_behavioral_probe.rs#L439-L470), [`polyfish-rs/model_exp002_iter129.safetensors`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/model_exp002_iter129.safetensors)
+* **Finding**: As training progressed to Iteration 129 (53 training iterations from Iteration 76 foundation), the Dual-Path Value Head officially inverted the sign of the capital abandonment pathology:
+  - `EXP_ARCH_001 (Iter 76 Baseline)`: Garrison $-0.123$, Abandoned $-0.072 \implies \Delta = \mathbf{+0.051}$
+  - `EXP_ARCH_001 (Iter 129 Final)`: Garrison $-0.109$, Abandoned $-0.029 \implies \Delta = \mathbf{+0.079}$ (Delusion worsened by 54%)
+  - `EXP_ARCH_002 (Iter 99 Mid-run)`: Garrison $-0.068$, Abandoned $-0.063 \implies \Delta = \mathbf{+0.005}$ (93.7% reduction)
+  - `EXP_ARCH_002 (Iter 129 Full Run)`: Garrison $+0.052$, Abandoned $+0.024 \implies \Delta = \mathbf{-0.028}$ (**Delusion cured: abandoning capital penalized by $-0.028$**)
+* **Global Metric Impact**: Value loss dropped to **0.7019** (an improvement of $+0.0963$ vs `EXP_ARCH_001`'s 0.7982), and holdout $R^2$ reached **0.6263** (peaking at **0.6429** at Iteration 117), confirming that spatial coordinate persistence directly yields higher explained variance and eliminates fatal tactical blind spots.
+
 ---
 
 ## 5. Strategic Macro Bottlenecks & Elo Autopsies

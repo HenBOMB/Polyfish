@@ -173,15 +173,21 @@ fn probe_1_rider_hit_and_run_escape() {
     // 2. EndTurnMove (stay in fatal danger)
     let net_76 = load_network("model_dagger_foundation.safetensors");
     let net_129 = load_network("model_iter129.safetensors");
-    let net_exp002 = if std::path::Path::new("model_exp002_iter99.safetensors").exists() {
+    let net_exp002_99 = if std::path::Path::new("model_exp002_iter99.safetensors").exists() {
         Some(load_network("model_exp002_iter99.safetensors"))
+    } else {
+        None
+    };
+    let net_exp002_129 = if std::path::Path::new("model_exp002_iter129.safetensors").exists() {
+        Some(load_network("model_exp002_iter129.safetensors"))
     } else {
         None
     };
 
     let (val_76, moves_76) = evaluate_zero_search(&net_76, &game, 1);
     let (val_129, moves_129) = evaluate_zero_search(&net_129, &game, 1);
-    let res_exp002 = net_exp002.as_ref().map(|n| evaluate_zero_search(n, &game, 1));
+    let res_exp002_99 = net_exp002_99.as_ref().map(|n| evaluate_zero_search(n, &game, 1));
+    let res_exp002_129 = net_exp002_129.as_ref().map(|n| evaluate_zero_search(n, &game, 1));
 
     let get_prior = |moves: &[(Box<dyn Move>, f32)], m_type: MoveType, target: Option<usize>| -> f32 {
         moves
@@ -206,11 +212,18 @@ fn probe_1_rider_hit_and_run_escape() {
     println!("Model Iter 129: Escape Prior: {:.6} | EndTurn Prior: {:.6} | Ratio (Escape/End): {:.3} | Value: {:.3}",
         p_esc_129, p_end_129, ratio_129, val_129);
 
-    if let Some((val_exp002, ref moves_exp002)) = res_exp002 {
+    if let Some((val_exp002, ref moves_exp002)) = res_exp002_99 {
         let p_esc_exp002 = get_prior(moves_exp002, MoveType::Step, Some(t_retreat as usize));
         let p_end_exp002 = get_prior(moves_exp002, MoveType::EndTurn, None);
         let ratio_exp002 = if p_end_exp002 > 0.0 { p_esc_exp002 / p_end_exp002 } else { 0.0 };
-        println!("EXP_ARCH_002:   Escape Prior: {:.6} | EndTurn Prior: {:.6} | Ratio (Escape/End): {:.3} | Value: {:.3}",
+        println!("EXP_002 Iter 99:  Escape Prior: {:.6} | EndTurn Prior: {:.6} | Ratio (Escape/End): {:.3} | Value: {:.3}",
+            p_esc_exp002, p_end_exp002, ratio_exp002, val_exp002);
+    }
+    if let Some((val_exp002, ref moves_exp002)) = res_exp002_129 {
+        let p_esc_exp002 = get_prior(moves_exp002, MoveType::Step, Some(t_retreat as usize));
+        let p_end_exp002 = get_prior(moves_exp002, MoveType::EndTurn, None);
+        let ratio_exp002 = if p_end_exp002 > 0.0 { p_esc_exp002 / p_end_exp002 } else { 0.0 };
+        println!("EXP_002 Iter 129: Escape Prior: {:.6} | EndTurn Prior: {:.6} | Ratio (Escape/End): {:.3} | Value: {:.3}",
             p_esc_exp002, p_end_exp002, ratio_exp002, val_exp002);
     }
 
@@ -333,15 +346,21 @@ fn probe_2_fatal_suicide_attack_discouragement() {
 
     let net_76 = load_network("model_dagger_foundation.safetensors");
     let net_129 = load_network("model_iter129.safetensors");
-    let net_exp002 = if std::path::Path::new("model_exp002_iter99.safetensors").exists() {
+    let net_exp002_99 = if std::path::Path::new("model_exp002_iter99.safetensors").exists() {
         Some(load_network("model_exp002_iter99.safetensors"))
+    } else {
+        None
+    };
+    let net_exp002_129 = if std::path::Path::new("model_exp002_iter129.safetensors").exists() {
+        Some(load_network("model_exp002_iter129.safetensors"))
     } else {
         None
     };
 
     let (val_76, moves_76) = evaluate_zero_search(&net_76, &game, 1);
     let (val_129, moves_129) = evaluate_zero_search(&net_129, &game, 1);
-    let res_exp002 = net_exp002.as_ref().map(|n| evaluate_zero_search(n, &game, 1));
+    let res_exp002_99 = net_exp002_99.as_ref().map(|n| evaluate_zero_search(n, &game, 1));
+    let res_exp002_129 = net_exp002_129.as_ref().map(|n| evaluate_zero_search(n, &game, 1));
 
     let get_prior = |moves: &[(Box<dyn Move>, f32)], m_type: MoveType, target: Option<usize>| -> f32 {
         moves
@@ -363,10 +382,16 @@ fn probe_2_fatal_suicide_attack_discouragement() {
     println!("Model Iter 129: Suicide Prior: {:.6} | EndTurn Prior: {:.6} | Value: {:.3}",
         p_suicide_129, p_end_129, val_129);
 
-    if let Some((val_exp002, ref moves_exp002)) = res_exp002 {
+    if let Some((val_exp002, ref moves_exp002)) = res_exp002_99 {
         let p_suicide_exp002 = get_prior(moves_exp002, MoveType::Attack, Some(t_p2 as usize));
         let p_end_exp002 = get_prior(moves_exp002, MoveType::EndTurn, None);
-        println!("EXP_ARCH_002:   Suicide Prior: {:.6} | EndTurn Prior: {:.6} | Value: {:.3}",
+        println!("EXP_002 Iter 99:  Suicide Prior: {:.6} | EndTurn Prior: {:.6} | Value: {:.3}",
+            p_suicide_exp002, p_end_exp002, val_exp002);
+    }
+    if let Some((val_exp002, ref moves_exp002)) = res_exp002_129 {
+        let p_suicide_exp002 = get_prior(moves_exp002, MoveType::Attack, Some(t_p2 as usize));
+        let p_end_exp002 = get_prior(moves_exp002, MoveType::EndTurn, None);
+        println!("EXP_002 Iter 129: Suicide Prior: {:.6} | EndTurn Prior: {:.6} | Value: {:.3}",
             p_suicide_exp002, p_end_exp002, val_exp002);
     }
 
@@ -413,8 +438,13 @@ fn probe_3_capital_defense_abandonment() {
 
     let net_76 = load_network("model_dagger_foundation.safetensors");
     let net_129 = load_network("model_iter129.safetensors");
-    let net_exp002 = if std::path::Path::new("model_exp002_iter99.safetensors").exists() {
+    let net_exp002_99 = if std::path::Path::new("model_exp002_iter99.safetensors").exists() {
         Some(load_network("model_exp002_iter99.safetensors"))
+    } else {
+        None
+    };
+    let net_exp002_129 = if std::path::Path::new("model_exp002_iter129.safetensors").exists() {
+        Some(load_network("model_exp002_iter129.safetensors"))
     } else {
         None
     };
@@ -422,7 +452,8 @@ fn probe_3_capital_defense_abandonment() {
     // Case A: Defender is GARRISONED on Capital
     let (val_garrison_76, _) = evaluate_zero_search(&net_76, &game, 1);
     let (val_garrison_129, _) = evaluate_zero_search(&net_129, &game, 1);
-    let val_garrison_exp002 = net_exp002.as_ref().map(|n| evaluate_zero_search(n, &game, 1).0);
+    let val_garrison_exp002_99 = net_exp002_99.as_ref().map(|n| evaluate_zero_search(n, &game, 1).0);
+    let val_garrison_exp002_129 = net_exp002_129.as_ref().map(|n| evaluate_zero_search(n, &game, 1).0);
 
     // Case B: Defender STEPS OFF the capital to t_empty (leaving capital bare)
     let mut game_abandoned = game.clone();
@@ -431,7 +462,8 @@ fn probe_3_capital_defense_abandonment() {
 
     let (val_abandoned_76, _) = evaluate_zero_search(&net_76, &game_abandoned, 1);
     let (val_abandoned_129, _) = evaluate_zero_search(&net_129, &game_abandoned, 1);
-    let val_abandoned_exp002 = net_exp002.as_ref().map(|n| evaluate_zero_search(n, &game_abandoned, 1).0);
+    let val_abandoned_exp002_99 = net_exp002_99.as_ref().map(|n| evaluate_zero_search(n, &game_abandoned, 1).0);
+    let val_abandoned_exp002_129 = net_exp002_129.as_ref().map(|n| evaluate_zero_search(n, &game_abandoned, 1).0);
 
     let penalty_76 = val_abandoned_76 - val_garrison_76;
     let penalty_129 = val_abandoned_129 - val_garrison_129;
@@ -441,9 +473,14 @@ fn probe_3_capital_defense_abandonment() {
     println!("Model Iter 129: Garrison Val: {:+.3} | Abandoned Val: {:+.3} | Delta: {:+.3}",
         val_garrison_129, val_abandoned_129, penalty_129);
 
-    if let (Some(g_val), Some(a_val)) = (val_garrison_exp002, val_abandoned_exp002) {
+    if let (Some(g_val), Some(a_val)) = (val_garrison_exp002_99, val_abandoned_exp002_99) {
         let penalty_exp002 = a_val - g_val;
-        println!("EXP_ARCH_002 (Iter 99): Garrison Val: {:+.3} | Abandoned Val: {:+.3} | Delta: {:+.3}",
+        println!("EXP_002 Iter 99:  Garrison Val: {:+.3} | Abandoned Val: {:+.3} | Delta: {:+.3}",
+            g_val, a_val, penalty_exp002);
+    }
+    if let (Some(g_val), Some(a_val)) = (val_garrison_exp002_129, val_abandoned_exp002_129) {
+        let penalty_exp002 = a_val - g_val;
+        println!("EXP_002 Iter 129: Garrison Val: {:+.3} | Abandoned Val: {:+.3} | Delta: {:+.3}",
             g_val, a_val, penalty_exp002);
     }
 

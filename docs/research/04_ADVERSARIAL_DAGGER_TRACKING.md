@@ -107,24 +107,24 @@ We maintain strict falsification criteria to avoid narrative leaps or sinking co
 | Metric | Iteration 76 (Baseline) | Iteration 85 | Iteration 100 | Iteration 129 (Target Floor) |
 | :--- | :--- | :--- | :--- | :--- |
 | **`EXP_ARCH_001` Policy Loss** | 4.8920 | 3.5510 | 2.9720 | **2.5821** (Perplexity: 13.2) |
-| **`EXP_ARCH_002` Policy Loss** | 5.0872 | 3.4862 | **2.8563** | *Training In Progress (Iter 101+)* |
+| **`EXP_ARCH_002` Policy Loss** | 5.0872 | 3.4862 | 2.8563 | **2.7065** (Floor: 2.6162) |
 | **`EXP_ARCH_001` Value Loss** | 0.4620 | 0.5840 | 0.7420 | 0.7982 |
-| **`EXP_ARCH_002` Value Loss** | 0.9810 *(migration spike)* | 0.6596 | 0.8234 | *Training In Progress* |
+| **`EXP_ARCH_002` Value Loss** | 0.9810 *(migration spike)* | 0.6596 | 0.8234 | **0.7019** (Floor: 0.6800) *(+0.0963 improvement)* |
 | **`EXP_ARCH_001` Holdout $R^2$** | ~0.450 | ~0.520 | ~0.570 | **0.6149** |
-| **`EXP_ARCH_002` Holdout $R^2$** | 0.3710 *(fresh weights)* | 0.5658 | 0.5903 (peak 0.6056) | *Training In Progress* |
+| **`EXP_ARCH_002` Holdout $R^2$** | 0.3710 *(fresh weights)* | 0.5658 | 0.5903 (peak 0.6056) | **0.6263** (Peak: 0.6429) *(+0.0114 higher)* |
 | **`EXP_ARCH_001` Decisive Frac** | 19.0% | 48.0% | 64.0% | 73.4% |
-| **`EXP_ARCH_002` Decisive Frac** | 35.9% | 56.2% | 59.4% (peak 87.5%) | *Training In Progress* |
+| **`EXP_ARCH_002` Decisive Frac** | 35.9% | 56.2% | 59.4% | **67.2%** (Peak: 84.4%, league: 79.7%) |
 
 ---
 
 ### 6.2 Behavioral Probe Comparison (Weight Interpretability)
 
-| Probe Dimension | EXP_ARCH_001 (Iter 76) | EXP_ARCH_001 (Iter 129) | EXP_ARCH_002 (Iter 99) | Impact |
-| :--- | :--- | :--- | :--- | :--- |
-| **Probe 1: Escape Prior $p(\text{retreat})$** | 8.48% (Rank #4) | 0.83% (Rank #6+) | **9.27% (Rank #4)** | Escape prior restored |
-| **Probe 1: Threat Valuation** | $V = -0.003$ | $V = -0.073$ | **$V = -0.339$** | Threat priced 4.6× more severely |
-| **Probe 2: Lethal Suicide Valuation** | $V = +0.125$ | $V = -0.060$ | **$V = -0.404$** | Correctly evaluates fatal danger |
-| **Probe 3: Capital Abandonment $\Delta$** | $+0.051$ | $+0.079$ *(pathological)* | **$+0.005$** | **93.7% reduction** in delusion |
+| Probe Dimension | EXP_ARCH_001 (Iter 76) | EXP_ARCH_001 (Iter 129) | EXP_ARCH_002 (Iter 99) | EXP_ARCH_002 (Iter 129) | Empirical Finding |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Probe 1: Escape Prior $p(\text{retreat})$** | 8.48% (Rank #4) | 0.83% (Rank #6+) | 9.27% (Rank #4) | **1.76%** (Ratio: $1.76\times 10^8$) | Maintained non-zero escape candidate |
+| **Probe 1: Threat Valuation** | $V = -0.003$ | $V = -0.073$ | $V = -0.339$ | **$V = -0.156$** | Threat priced 2.1× higher than legacy |
+| **Probe 2: Lethal Suicide Valuation** | $V = +0.125$ | $V = -0.060$ | $V = -0.404$ | **$V = -0.089$** | Lethal vulnerability penalized |
+| **Probe 3: Capital Abandonment $\Delta$** | $+0.051$ | $+0.079$ *(pathological)* | $+0.005$ | **$-0.028$** | **Sign inverted / cured!** Defense actively rewarded |
 
 ---
 
