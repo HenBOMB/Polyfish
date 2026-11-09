@@ -79,9 +79,61 @@ def estimate_hourly_rate(gpu_name: str) -> float:
     return 0.50
 
 
+def get_allocated_cpus() -> float:
+    """Detect allocated vCPUs/cores within Docker/RunPod container or host."""
+    # 1. Environment variable override (RunPod / cloud container standards)
+    for env_key in ("RUNPOD_CPU_COUNT", "POD_CPU_COUNT", "CONTAINER_CPUS"):
+        val = os.environ.get(env_key)
+        if val:
+            try:
+                cpus = float(val)
+                if cpus > 0:
+                    return cpus
+            except ValueError:
+                pass
+
+    # 2. Cgroup v2 quota
+    try:
+        if os.path.exists("/sys/fs/cgroup/cpu.max"):
+            with open("/sys/fs/cgroup/cpu.max", "r") as f:
+                parts = f.read().strip().split()
+                if len(parts) >= 2 and parts[0] != "max":
+                    quota = float(parts[0])
+                    period = float(parts[1])
+                    if period > 0:
+                        return quota / period
+    except Exception:
+        pass
+
+    # 3. Cgroup v1 quota
+    try:
+        quota_path = "/sys/fs/cgroup/cpu/cpu.cfs_quota_us"
+        period_path = "/sys/fs/cgroup/cpu/cpu.cfs_period_us"
+        if os.path.exists(quota_path) and os.path.exists(period_path):
+            with open(quota_path, "r") as fq, open(period_path, "r") as fp:
+                quota = float(fq.read().strip())
+                period = float(fp.read().strip())
+                if quota > 0 and period > 0:
+                    return quota / period
+    except Exception:
+        pass
+
+    # 4. CPU affinity
+    if hasattr(os, "sched_getaffinity"):
+        try:
+            affinity_cores = len(os.sched_getaffinity(0))
+            if 0 < affinity_cores < (os.cpu_count() or 1):
+                return float(affinity_cores)
+        except Exception:
+            pass
+
+    return float(os.cpu_count() or 1)
+
+
 def get_cpu_info() -> Dict[str, Any]:
-    """Inspect CPU model and core counts."""
-    count = os.cpu_count() or 1
+    """Inspect CPU model and core counts (both container-allocated and host-total)."""
+    host_count = os.cpu_count() or 1
+    allocated_count = get_allocated_cpus()
     model = "Unknown CPU"
     try:
         if os.path.exists("/proc/cpuinfo"):
@@ -92,7 +144,11 @@ def get_cpu_info() -> Dict[str, Any]:
                         break
     except Exception:
         pass
-    return {"cores": count, "model": model}
+    return {
+        "cores": int(allocated_count) if allocated_count.is_integer() else round(allocated_count, 1),
+        "host_cores": host_count,
+        "model": model,
+    }
 
 
 def get_ram_info() -> Dict[str, float]:
@@ -155,6 +211,30 @@ def read_proc_stat_cpu() -> tuple[int, int]:
     except Exception:
         pass
     return 0, 0
+
+
+def read_container_cpu_usage_sec() -> Optional[float]:
+    """Read container CPU cumulative usage in seconds from cgroup v2 or v1."""
+    # Cgroup v2
+    try:
+        if os.path.exists("/sys/fs/cgroup/cpu.stat"):
+            with open("/sys/fs/cgroup/cpu.stat", "r") as f:
+                for line in f:
+                    if line.startswith("usage_usec"):
+                        return float(line.split()[1]) / 1_000_000.0
+    except Exception:
+        pass
+
+    # Cgroup v1
+    for p in ("/sys/fs/cgroup/cpu/cpuacct.usage", "/sys/fs/cgroup/cpuacct/cpuacct.usage"):
+        try:
+            if os.path.exists(p):
+                with open(p, "r") as f:
+                    return float(f.read().strip()) / 1_000_000_000.0
+        except Exception:
+            pass
+
+    return None
 
 
 class SamplerProcess:
@@ -255,20 +335,41 @@ class SamplerProcess:
         threading.Thread(target=_upload_task, daemon=True).start()
 
     def run(self):
+        allocated_cpus = get_allocated_cpus()
+        host_cpus = os.cpu_count() or 1
+        last_cgroup_sec = read_container_cpu_usage_sec()
         last_work, last_total = read_proc_stat_cpu()
+        last_cpu_time = time.time()
         start_time = time.time()
         last_stream = 0.0
 
         while not self.stop_event.is_set():
             time.sleep(self.interval_sec)
             now = time.time()
+            dt = max(1e-4, now - last_cpu_time)
+            last_cpu_time = now
 
-            # CPU
-            cur_work, cur_total = read_proc_stat_cpu()
-            d_work = cur_work - last_work
-            d_total = cur_total - last_total
-            cpu_pct = (100.0 * d_work / max(1, d_total)) if d_total > 0 else 0.0
-            last_work, last_total = cur_work, cur_total
+            # CPU: Prefer container cgroup usage if available, else fallback to host proc stat scaled by core allocation
+            cur_cgroup_sec = read_container_cpu_usage_sec()
+            if cur_cgroup_sec is not None and last_cgroup_sec is not None:
+                d_cgroup = max(0.0, cur_cgroup_sec - last_cgroup_sec)
+                last_cgroup_sec = cur_cgroup_sec
+                # Utilization relative to allocated container cores (0.0% to 100.0%)
+                cpu_pct = (100.0 * d_cgroup) / (dt * max(0.1, allocated_cpus))
+                cpu_pct = max(0.0, min(100.0, cpu_pct))
+            else:
+                last_cgroup_sec = cur_cgroup_sec
+                cur_work, cur_total = read_proc_stat_cpu()
+                d_work = cur_work - last_work
+                d_total = cur_total - last_total
+                last_work, last_total = cur_work, cur_total
+                if d_total > 0:
+                    host_pct = (100.0 * d_work) / d_total
+                    # Scale host utilization up if container is limited to a fraction of host cores
+                    scale = host_cpus / max(0.1, allocated_cpus) if allocated_cpus < host_cpus else 1.0
+                    cpu_pct = max(0.0, min(100.0, host_pct * scale))
+                else:
+                    cpu_pct = 0.0
 
             # RAM
             ram = get_ram_info()
@@ -302,26 +403,26 @@ def diagnose_bottleneck(gpu_avg: float, cpu_avg: float, vram_used: float, vram_t
     if gpu_avg == 0.0 and vram_total == 0.0:
         return "CPU_ONLY", "Running purely on CPU. No CUDA GPU active."
 
-    if gpu_avg < 35.0 and cpu_avg > 85.0:
+    if cpu_avg >= 75.0 and gpu_avg < 60.0:
         return (
             "CPU_BOTTLENECK",
-            "⚠️ Severe CPU throttle. GPU is idling (<35%) while CPU is pegged (>85%). "
-            "You are overpaying for GPU compute! Upgrade to faster/more CPU cores, or switch to RTX 4090/3090.",
+            f"⚠️ CPU bottleneck ({cpu_avg:.1f}% CPU). GPU is under-fed ({gpu_avg:.1f}%). "
+            "Do NOT increase actors (-a); upgrade to faster/more CPU cores or reduce -a to lower contention.",
         )
-    elif gpu_avg >= 80.0:
+    elif gpu_avg >= 75.0:
         return (
             "GPU_SATURATED",
-            "🏆 Optimal. GPU compute is highly saturated (>=80%). Highest throughput per dollar.",
+            "🏆 Optimal. GPU compute is highly saturated (>=75%). Highest throughput per dollar.",
         )
-    elif gpu_avg >= 50.0:
+    elif gpu_avg >= 45.0:
         return (
             "BALANCED",
-            "⚡ Balanced execution. GPU is doing real work (50-80%). Increase --actors (-a) to push it higher.",
+            "⚡ Balanced execution. GPU is doing real work (45-75%). System throughput is healthy.",
         )
-    elif gpu_avg < 40.0 and cpu_avg < 50.0:
+    elif gpu_avg < 45.0 and cpu_avg < 60.0:
         return (
             "UNDER_SUBSCRIBED",
-            "⚠️ Under-utilized. Both CPU and GPU are low (<50%). Increase parallel games (-g) or actors (-a).",
+            "⚠️ Under-utilized. Both CPU and GPU have headroom. Increase parallel games (-g) or actors (-a).",
         )
     else:
         return "MODERATE", "Moderate load. GPU and CPU shared evenly."
@@ -367,7 +468,10 @@ def cmd_probe():
     print("==============================================================================")
     print(" 🖥️  HARDWARE PROBE & FINANCIAL AUDIT")
     print("==============================================================================")
-    print(f" CPU:   {cpu['model']} ({cpu['cores']} logical cores)")
+    cpu_cores_str = f"{cpu['cores']} allocated vCPUs" if cpu.get("host_cores") and cpu["host_cores"] != cpu["cores"] else f"{cpu['cores']} logical cores"
+    if cpu.get("host_cores") and cpu["host_cores"] != cpu["cores"]:
+        cpu_cores_str += f" ({cpu['host_cores']} host cores)"
+    print(f" CPU:   {cpu['model']} ({cpu_cores_str})")
     print(f" RAM:   {ram['used_mb']:.0f} MB used / {ram['total_mb']:.0f} MB total ({ram['used_mb']/max(1, ram['total_mb'])*100:.1f}%)")
     if gpus:
         for g in gpus:
