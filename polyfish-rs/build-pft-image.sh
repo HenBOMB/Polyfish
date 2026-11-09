@@ -34,16 +34,21 @@ echo "Generating Cargo.docker.toml (stripping tests and examples)..."
 trap 'rm -f Cargo.docker.toml' EXIT
 sed -e '/^\[\[test\]\]/,$d' -e '/^\[\[example\]\]/,$d' Cargo.toml > Cargo.docker.toml
 
+DOCKER="docker"
+if ! docker info >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+    DOCKER="sudo docker"
+fi
+
 echo "Building Docker image ($IMAGE_TAG)..."
-sudo docker build $CAP_ARG -t "$IMAGE_TAG" -f Dockerfile .
+$DOCKER build $CAP_ARG -t "$IMAGE_TAG" -f Dockerfile .
 
 echo "Cleaning up Cargo.docker.toml..."
 rm -f Cargo.docker.toml
 
 echo "Pushing Docker image ($IMAGE_TAG)..."
-sudo docker push "$IMAGE_TAG"
+$DOCKER push "$IMAGE_TAG"
 if [ "$IMAGE_TAG" != "henbomb/polyfish:latest" ]; then
-    sudo docker tag "$IMAGE_TAG" henbomb/polyfish:latest
-    sudo docker push henbomb/polyfish:latest
+    $DOCKER tag "$IMAGE_TAG" henbomb/polyfish:latest
+    $DOCKER push henbomb/polyfish:latest
 fi
 echo "✅ Successfully built and pushed $IMAGE_TAG (CUDA sm_${RESOLVED_CAP})"
