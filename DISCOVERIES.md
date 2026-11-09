@@ -173,6 +173,16 @@ Every discovery documented below carries exact citations to the repository files
   - `EXP_ARCH_002 (Iter 129 Full Run)`: Garrison $+0.052$, Abandoned $+0.024 \implies \Delta = \mathbf{-0.028}$ (**Delusion cured: abandoning capital penalized by $-0.028$**)
 * **Global Metric Impact**: Value loss dropped to **0.7019** (an improvement of $+0.0963$ vs `EXP_ARCH_001`'s 0.7982), and holdout $R^2$ reached **0.6263** (peaking at **0.6429** at Iteration 117), confirming that spatial coordinate persistence directly yields higher explained variance and eliminates fatal tactical blind spots.
 
+### 4.8 Level-Pegging Architecture Arena Benchmark: The Defense-Snowball Paradox
+* **Discovered by**: HenBOMB & Antigravity
+* **Citations**: [`polyfish-rs/arena_exp002_iter130_vs_iter129_50games.json`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/arena_exp002_iter130_vs_iter129_50games.json), [`docs/research/04_ADVERSARIAL_DAGGER_TRACKING.md:144-162`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/docs/research/04_ADVERSARIAL_DAGGER_TRACKING.md#L144-L162)
+* **Finding**: When training steps were fully equalized (54 iterations vs 53 iterations from foundation Iteration 76), `EXP_ARCH_002` (Iter 130) achieved **20 wins out of 50 games (40.0%)** against `EXP_ARCH_001` (Iter 129), with 95% Wilson CI $[27.6\%, 53.8\%]$.
+* **Seat Dynamics**: With the policy head compressed to match baseline ($P_{\text{loss}} \approx 2.66$), `EXP_ARCH_002` surged as Player 1 to a **52.0% win rate (13 / 25)** (a +20.0% improvement over Iter 100). Average score jumped by **+495.0 points** to 4147.8, and the deficit against `Iter 129` narrowed by +254.5 points.
+* **The Defense-Snowball Paradox**: Why does an architecturally superior model with a cured, calibrated value head ($\Delta = -0.028$ vs $+0.079$, $V_{\text{loss}} = 0.70$ vs $0.80$, $R^2 = 0.63$ vs $0.61$) score 40% instead of dominating?
+  1. *Frontline Deficit on Tiny 11×11 Maps*: Respecting defensive vulnerability causes `EXP_ARCH_002` to reserve units near the capital or prioritize survivable retreats. `Iter 129`, being spatially blind to its own capital threat, commits 100% of its military assets forward.
+  2. *Tempo Snowballing*: On tiny maps with short fog horizons, reckless aggression frequently snipes contested neutral villages first. Once `Iter 129` secures an extra village, the compound economic bonus (+2 stars/turn) outweighs the tactical defect, snowballing into unit production that overwhelms the sound defender.
+  3. *Residual Policy Entropy Gap*: `EXP_ARCH_001` reached policy loss 2.5821 vs `EXP_ARCH_002`'s 2.6600. In Gumbel MCTS ($k=16$), the 0.08 policy loss difference means the attacker occasionally filters slightly cleaner tactical candidate sets.
+
 ---
 
 ## 5. Strategic Macro Bottlenecks & Elo Autopsies

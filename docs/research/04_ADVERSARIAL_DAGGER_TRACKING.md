@@ -135,9 +135,25 @@ We maintain strict falsification criteria to avoid narrative leaps or sinking co
    * **Result**: **62 - 38 (62.0% Win Rate)**, $Z = 2.40, p = 0.0164$, +829.1 pt margin.
    * **Ledger**: [`polyfish-rs/arena_iter129_vs_iter156_100games.json`](../../polyfish-rs/arena_iter129_vs_iter156_100games.json)
 
-2. **Benchmark 2 (Dual-Path Value Head vs Legacy Global Pooling)**:
+2. **Benchmark 2 (Dual-Path Value Head vs Legacy Global Pooling — Iter 100 Gap)**:
    * **Matchup**: `Iter 100 (EXP_ARCH_002)` vs `Iter 129 (EXP_ARCH_001)`
    * **Result**: **19 - 31 (38.0% Win Rate)**, 95% Wilson CI $[25.9\%, 51.8\%]$.
    * **Diagnosis**: Confounded by 29-iteration training gap ($P_{\text{loss}} = 2.5821$ vs $2.8563$); `EXP_ARCH_002` won 44% as P2 vs 32% as P1 due to increased tactical caution.
    * **Ledger**: [`polyfish-rs/arena_exp002_vs_iter129_50games.json`](../../polyfish-rs/arena_exp002_vs_iter129_50games.json)
+
+3. **Benchmark 3 (Level-Pegging Architecture Showdown: EXP_ARCH_002 vs EXP_ARCH_001)**:
+   * **Matchup**: `Iter 130 (EXP_ARCH_002)` vs `Iter 129 (EXP_ARCH_001)` (54 vs 53 iterations from foundation Iter 76)
+   * **Result**: **20 - 30 (40.0% Win Rate)**, 95% Wilson CI $[27.6\%, 53.8\%]$.
+   * **Seat Dissection**:
+     - Config 1 as Player 1: **52.0% (13 / 25)** (+20.0% improvement over Iter 100's 32.0%)
+     - Config 1 as Player 2: **28.0% (7 / 25)** (-16.0% from Iter 100's 44.0%)
+     - Average Score Config 1: **4147.8** (+495.0 pts over Iter 100)
+     - Average Score Config 2: **4704.2**
+     - Score Margin: **-556.4 pts** (narrowed by +254.5 pts from -810.9)
+     - Decisive Eliminations: **10 / 50 (20.0%)** (3 Config 1, 7 Config 2; down from 14 at Iter 100)
+   * **Falsification Verdict**: Prediction 4 ($\ge 58\%$ win rate) is **FALSIFIED**. Equalizing training steps recovered Player 1 offensive tempo (+20%) and closed the score gap, but did not translate to an overall winning record against the legacy baseline.
+   * **Scientific Mechanism**:
+     1. *Value-Policy Distortion on Tiny 11x11 Maps*: While `EXP_ARCH_002` successfully penalizes capital abandonment ($\Delta = -0.028$), respecting defensive vulnerability causes the network to keep defenders anchored near home. Against a hyper-aggressive opponent (`Iter 129`) that ignores defense and pushes all units forward, the defending agent faces a frontline unit deficit, which on tiny maps leads to rapid territorial snowballing by the attacker.
+     2. *Residual Policy Entropy Gap*: `EXP_ARCH_001` achieved $P_{\text{loss}} = 2.5821$ vs `EXP_ARCH_002`'s $2.6600$. In Gumbel MCTS ($k=16$), a slightly wider policy prior occasionally filters out optimal micro-tactics before tree search commences.
+   * **Ledger**: [`polyfish-rs/arena_exp002_iter130_vs_iter129_50games.json`](../../polyfish-rs/arena_exp002_iter130_vs_iter129_50games.json)
 
