@@ -26,17 +26,12 @@ echo "==========================================================================
 
 CAP_ARG="--build-arg CUDA_COMPUTE_CAP=$RESOLVED_CAP"
 
-# Determine Docker image tag
-if [ -n "$2" ]; then
-    IMAGE_TAG="$2"
-elif command -v resolve_image_tag &>/dev/null; then
-    IMAGE_TAG=$(resolve_image_tag "$INPUT_TARGET" "$RESOLVED_CAP")
-else
-    IMAGE_TAG="henbomb/polyfish:sm${RESOLVED_CAP}"
-fi
+# Keep default image name as henbomb/polyfish:latest unless explicitly provided as $2
+IMAGE_TAG="${2:-henbomb/polyfish:latest}"
 
 echo "Target Image Tag: $IMAGE_TAG"
 echo "Generating Cargo.docker.toml (stripping tests and examples)..."
+trap 'rm -f Cargo.docker.toml' EXIT
 sed -e '/^\[\[test\]\]/,$d' -e '/^\[\[example\]\]/,$d' Cargo.toml > Cargo.docker.toml
 
 echo "Building Docker image ($IMAGE_TAG)..."
@@ -47,4 +42,8 @@ rm -f Cargo.docker.toml
 
 echo "Pushing Docker image ($IMAGE_TAG)..."
 sudo docker push "$IMAGE_TAG"
+if [ "$IMAGE_TAG" != "henbomb/polyfish:latest" ]; then
+    sudo docker tag "$IMAGE_TAG" henbomb/polyfish:latest
+    sudo docker push henbomb/polyfish:latest
+fi
 echo "✅ Successfully built and pushed $IMAGE_TAG (CUDA sm_${RESOLVED_CAP})"
