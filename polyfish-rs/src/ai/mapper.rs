@@ -284,10 +284,29 @@ impl DecomposedMapper {
     }
 
     #[inline]
-    fn tile_to_spatial_idx(tile_idx: usize, map_size: usize) -> usize {
+    pub fn tile_to_spatial_idx(tile_idx: usize, map_size: usize) -> usize {
         let y = tile_idx / map_size;
         let x = tile_idx % map_size;
         y * map_size + x
+    }
+
+    /// Normalizes coordinates across all 11 Polytopia move types and abilities.
+    ///
+    /// Returns `(canonical_source, canonical_target)`:
+    /// - Directed moves (`Step`, `Attack`, `Convert`, etc.): `(Some(src), Some(tgt))`
+    /// - Single-tile moves (`Summon`, `Capture`, `Build`, `Harvest`, `Reward`, etc.): `(None, Some(tile))`
+    ///   Notice `Summon` and `Capture` store coordinates in `source_idx()`, while `Build`, `Harvest`,
+    ///   and `Reward` store coordinates in `target_idx()`. Both are canonicalized to `canonical_target`.
+    /// - Global moves (`Research`, `EndTurn`, `Resign`): `(None, None)`
+    pub fn canonical_spatial_coords(m: &dyn Move, map_size: usize) -> (Option<usize>, Option<usize>) {
+        let src = m.source_idx().ok().map(|idx| Self::tile_to_spatial_idx(idx, map_size));
+        let tgt = m.target_idx().ok().map(|idx| Self::tile_to_spatial_idx(idx, map_size));
+        match (src, tgt) {
+            (Some(s), Some(t)) => (Some(s), Some(t)),
+            (Some(s), None) => (None, Some(s)),
+            (None, Some(t)) => (None, Some(t)),
+            (None, None) => (None, None),
+        }
     }
 
     pub fn map_structure(s: StructureType) -> Option<usize> {
@@ -626,5 +645,72 @@ mod tests {
         // A reward visit with no reward recorded keeps the legacy catch-all slot.
         let t = DecomposedMapper::move_visit_to_targets(&visit(MoveType::Reward), MAP_SIZE);
         assert_eq!(t.target_type, Some(REWARD_FALLBACK_SLOT));
+    }
+
+    #[test]
+    fn test_canonical_spatial_coords_all_move_types() {
+        use crate::moves::*;
+
+        // 1. Directed moves (Step, Attack): both src and tgt preserved
+        let step = StepMove::new(10, 25);
+        assert_eq!(
+            DecomposedMapper::canonical_spatial_coords(&step, MAP_SIZE),
+            (Some(10), Some(25))
+        );
+
+        let attack = AttackMove::new(14, 15);
+        assert_eq!(
+            DecomposedMapper::canonical_spatial_coords(&attack, MAP_SIZE),
+            (Some(14), Some(15))
+        );
+
+        // 2. Single-tile moves stored in source_idx (Summon, Capture) -> canonicalized to target
+        let summon = SummonMove::new(42, UnitType::Warrior);
+        assert_eq!(
+            DecomposedMapper::canonical_spatial_coords(&summon, MAP_SIZE),
+            (None, Some(42))
+        );
+
+        let capture = CaptureMove::new(55);
+        assert_eq!(
+            DecomposedMapper::canonical_spatial_coords(&capture, MAP_SIZE),
+            (None, Some(55))
+        );
+
+        // 3. Single-tile moves stored in target_idx (Build, Harvest, Reward) -> canonicalized to target
+        let build = BuildMove::new(7, StructureType::Port);
+        assert_eq!(
+            DecomposedMapper::canonical_spatial_coords(&build, MAP_SIZE),
+            (None, Some(7))
+        );
+
+        let harvest = HarvestMove::new(19);
+        assert_eq!(
+            DecomposedMapper::canonical_spatial_coords(&harvest, MAP_SIZE),
+            (None, Some(19))
+        );
+
+        let reward = RewardMove::new(88, CityRewardType::CityWall);
+        assert_eq!(
+            DecomposedMapper::canonical_spatial_coords(&reward, MAP_SIZE),
+            (None, Some(88))
+        );
+
+        // 4. Global moves (Research, EndTurn, Resign) -> None, None
+        let research = ResearchMove::new(TechnologyType::Climbing);
+        assert_eq!(
+            DecomposedMapper::canonical_spatial_coords(&research, MAP_SIZE),
+            (None, None)
+        );
+
+        assert_eq!(
+            DecomposedMapper::canonical_spatial_coords(&EndTurnMove, MAP_SIZE),
+            (None, None)
+        );
+
+        assert_eq!(
+            DecomposedMapper::canonical_spatial_coords(&ResignMove, MAP_SIZE),
+            (None, None)
+        );
     }
 }

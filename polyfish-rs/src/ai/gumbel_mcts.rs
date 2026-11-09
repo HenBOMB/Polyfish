@@ -1324,7 +1324,7 @@ fn next_root_hash_for(game: &Game, m: Option<&dyn Move>) -> Option<u64> {
     if preview.state.settings.current_player_turn_id != game.state.settings.current_player_turn_id {
         return None;
     }
-    let mut mcts_preview = preview.clone_for_mcts(preview.current_player_id());
+    let mcts_preview = preview.clone_for_mcts(preview.current_player_id());
     let feat = features::state_to_cpu_features(
         &mcts_preview.state,
         mcts_preview.state.settings.current_player_turn_id,

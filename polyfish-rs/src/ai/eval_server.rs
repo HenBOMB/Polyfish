@@ -270,7 +270,7 @@ impl InferenceBackend {
                     .forward_t(&spatial_tensor, &player_tensor, false)
                     .expect("BUG: eval-server forward_t failed");
 
-                decode_outputs_single_readback(&value_out, &policy_out, batch_size)
+                decode_outputs_single_readback(&value_out, &policy_out, batch_size, network.cached_opt_emb.as_ref())
                     .expect("BUG: single-readback decode failed")
             }
             #[cfg(feature = "tch-eval")]
@@ -834,72 +834,160 @@ pub struct InlineEvalHandle {
     network: Arc<PolyZeroNet>,
 }
 
-/// Read value + progress + 4 policy heads back to CPU in a SINGLE device->CPU
-/// transfer. Concatenates all outputs on-device into one [B, 448] tensor,
+/// Read value + progress + policy heads back to CPU in a SINGLE device->CPU
+/// transfer. Concatenates all outputs on-device into one tensor (EBM: [B, 4144], legacy: [B, 448]),
 /// issues one readback, and unpacks the slice offsets on CPU. Eliminates
-/// 5 redundant PCIe synchronization flushes per forward pass.
+/// redundant PCIe synchronization flushes per forward pass.
 pub fn decode_outputs_single_readback(
     value_out: &crate::ai::network::ValueOutput,
     policy_out: &crate::ai::network::PolicyOutput,
     batch_size: usize,
+    cached_opt_emb: Option<&Arc<Vec<f32>>>,
 ) -> candle_core::Result<(Vec<f32>, Vec<f32>, Vec<RawPolicyOutput>)> {
     if batch_size == 0 {
         return Ok((Vec::new(), Vec::new(), Vec::new()));
     }
 
-    const V_WIN: usize = 1;
-    const V_PROG: usize = 1;
-    const AT: usize = crate::ai::network::NUM_ACTION_TYPES;
-    const SS: usize = crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE;
-    const TS: usize = crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE;
-    const MO: usize = crate::ai::mapper::NUM_MOVE_OPTIONS;
-    const ROW_LEN: usize = V_WIN + V_PROG + AT + SS + TS + MO;
+    if policy_out.src_compat.is_some() {
+        const V_WIN: usize = 1;
+        const V_PROG: usize = 1;
+        const AT: usize = crate::ai::network::NUM_ACTION_TYPES;
+        const SS: usize = crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE;
+        const TS: usize = crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE;
+        const TOK: usize = SS * crate::ai::network::D_COMPAT;
+        const MACRO: usize = crate::ai::network::D_COMPAT;
+        const ROW_LEN: usize = V_WIN + V_PROG + AT + SS + TS + TOK + TOK + MACRO;
 
-    let combined = Tensor::cat(
-        &[
-            &value_out.win_value,
-            &value_out.progress_value,
-            &policy_out.action_type,
-            &policy_out.source_spatial,
-            &policy_out.target_spatial,
-            &policy_out.move_option,
-        ],
-        1,
-    )?;
+        let src_c = policy_out.src_compat.as_ref().unwrap().flatten_from(1)?;
+        let tgt_c = policy_out.tgt_compat.as_ref().unwrap().flatten_from(1)?;
+        let macro_c = policy_out.macro_compat.as_ref().unwrap();
 
-    let flat: Vec<f32> = combined.flatten_all()?.to_vec1()?;
-    debug_assert_eq!(flat.len(), batch_size * ROW_LEN);
+        let combined = Tensor::cat(
+            &[
+                &value_out.win_value,
+                &value_out.progress_value,
+                &policy_out.action_type,
+                &policy_out.source_spatial,
+                &policy_out.target_spatial,
+                &src_c,
+                &tgt_c,
+                macro_c,
+            ],
+            1,
+        )?;
 
-    let mut values = Vec::with_capacity(batch_size);
-    let mut progress = Vec::with_capacity(batch_size);
-    let mut policy_rows = Vec::with_capacity(batch_size);
+        let flat: Vec<f32> = combined.flatten_all()?.to_vec1()?;
+        debug_assert_eq!(flat.len(), batch_size * ROW_LEN);
 
-    for i in 0..batch_size {
-        let base = i * ROW_LEN;
-        values.push(flat[base]);
-        progress.push(flat[base + V_WIN]);
+        let opt_vec = if let Some(arc) = cached_opt_emb {
+            Arc::clone(arc)
+        } else if let Some(ref opt_e) = policy_out.opt_emb {
+            Arc::new(opt_e.flatten_all()?.to_vec1::<f32>()?)
+        } else {
+            Arc::new(Vec::new())
+        };
 
-        let at_off = base + V_WIN + V_PROG;
-        let action_type = flat[at_off..at_off + AT].to_vec();
+        let mut values = Vec::with_capacity(batch_size);
+        let mut progress = Vec::with_capacity(batch_size);
+        let mut policy_rows = Vec::with_capacity(batch_size);
 
-        let ss_off = at_off + AT;
-        let source_spatial = flat[ss_off..ss_off + SS].to_vec();
+        for i in 0..batch_size {
+            let base = i * ROW_LEN;
+            values.push(flat[base]);
+            progress.push(flat[base + V_WIN]);
 
-        let ts_off = ss_off + SS;
-        let target_spatial = flat[ts_off..ts_off + TS].to_vec();
+            let at_off = base + V_WIN + V_PROG;
+            let action_type = flat[at_off..at_off + AT].to_vec();
 
-        let mo_off = ts_off + TS;
-        let move_option = flat[mo_off..mo_off + MO].to_vec();
+            let ss_off = at_off + AT;
+            let source_spatial = flat[ss_off..ss_off + SS].to_vec();
 
-        policy_rows.push(RawPolicyOutput {
-            action_type,
-            source_spatial,
-            target_spatial,
-            move_option,
-        });
+            let ts_off = ss_off + SS;
+            let target_spatial = flat[ts_off..ts_off + TS].to_vec();
+
+            let src_tok_off = ts_off + TS;
+            let src_tokens = flat[src_tok_off..src_tok_off + TOK].to_vec();
+
+            let tgt_tok_off = src_tok_off + TOK;
+            let tgt_tokens = flat[tgt_tok_off..tgt_tok_off + TOK].to_vec();
+
+            let macro_off = tgt_tok_off + TOK;
+            let macro_token = flat[macro_off..macro_off + MACRO].to_vec();
+
+            policy_rows.push(RawPolicyOutput {
+                action_type,
+                source_spatial,
+                target_spatial,
+                move_option: Vec::new(),
+                is_ebm: true,
+                src_tokens,
+                tgt_tokens,
+                macro_token,
+                opt_embeddings: Arc::clone(&opt_vec),
+            });
+        }
+
+        Ok((values, progress, policy_rows))
+    } else {
+        const V_WIN: usize = 1;
+        const V_PROG: usize = 1;
+        const AT: usize = crate::ai::network::NUM_ACTION_TYPES;
+        const SS: usize = crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE;
+        const TS: usize = crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE;
+        const MO: usize = crate::ai::mapper::NUM_MOVE_OPTIONS;
+        const ROW_LEN: usize = V_WIN + V_PROG + AT + SS + TS + MO;
+
+        let combined = Tensor::cat(
+            &[
+                &value_out.win_value,
+                &value_out.progress_value,
+                &policy_out.action_type,
+                &policy_out.source_spatial,
+                &policy_out.target_spatial,
+                &policy_out.move_option,
+            ],
+            1,
+        )?;
+
+        let flat: Vec<f32> = combined.flatten_all()?.to_vec1()?;
+        debug_assert_eq!(flat.len(), batch_size * ROW_LEN);
+
+        let mut values = Vec::with_capacity(batch_size);
+        let mut progress = Vec::with_capacity(batch_size);
+        let mut policy_rows = Vec::with_capacity(batch_size);
+
+        for i in 0..batch_size {
+            let base = i * ROW_LEN;
+            values.push(flat[base]);
+            progress.push(flat[base + V_WIN]);
+
+            let at_off = base + V_WIN + V_PROG;
+            let action_type = flat[at_off..at_off + AT].to_vec();
+
+            let ss_off = at_off + AT;
+            let source_spatial = flat[ss_off..ss_off + SS].to_vec();
+
+            let ts_off = ss_off + SS;
+            let target_spatial = flat[ts_off..ts_off + TS].to_vec();
+
+            let mo_off = ts_off + TS;
+            let move_option = flat[mo_off..mo_off + MO].to_vec();
+
+            policy_rows.push(RawPolicyOutput {
+                action_type,
+                source_spatial,
+                target_spatial,
+                move_option,
+                is_ebm: false,
+                src_tokens: Vec::new(),
+                tgt_tokens: Vec::new(),
+                macro_token: Vec::new(),
+                opt_embeddings: Arc::new(Vec::new()),
+            });
+        }
+
+        Ok((values, progress, policy_rows))
     }
-
-    Ok((values, progress, policy_rows))
 }
 
 impl InlineEvalHandle {
@@ -944,8 +1032,13 @@ impl InlineEvalHandle {
             .forward_t(&spatial_tensor, &player_tensor, false)
             .expect("BUG: inline eval forward_t failed");
 
-        let (values, progress, policy_rows) = decode_outputs_single_readback(&value_out, &policy_out, batch_size)
-            .expect("BUG: inline single-readback decode failed");
+        let (values, progress, policy_rows) = decode_outputs_single_readback(
+            &value_out,
+            &policy_out,
+            batch_size,
+            self.network.cached_opt_emb.as_ref(),
+        )
+        .expect("BUG: inline single-readback decode failed");
 
         values
             .into_iter()
@@ -1009,10 +1102,15 @@ impl DummyEvalHandle {
         let spatial = crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE;
         Self {
             uniform: Arc::new(RawPolicyOutput {
-                action_type: vec![0.0; 11],
+                action_type: vec![0.0; crate::ai::network::NUM_ACTION_TYPES],
                 source_spatial: vec![0.0; spatial],
                 target_spatial: vec![0.0; spatial],
                 move_option: vec![0.0; 192],
+                is_ebm: false,
+                src_tokens: Vec::new(),
+                tgt_tokens: Vec::new(),
+                macro_token: Vec::new(),
+                opt_embeddings: Arc::new(Vec::new()),
             }),
             stats: Arc::new(DummyStats::default()),
             latency: None,

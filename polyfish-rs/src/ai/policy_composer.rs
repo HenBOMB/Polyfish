@@ -4,7 +4,6 @@ use crate::ai::mapper::DecomposedMapper;
 use crate::ai::network::{PolicyOutput, RawPolicyOutput};
 use crate::moves::Move;
 use crate::types::*;
-use candle_core::Tensor;
 
 /// Compute prior probabilities for legal moves from decomposed policy heads
 ///
@@ -17,29 +16,14 @@ pub fn compute_move_priors(
     policy: &PolicyOutput,
     legal_moves: &[Box<dyn Move>],
     map_size: usize,
-    _allow_end_turn: bool,
+    allow_end_turn: bool,
 ) -> Vec<f32> {
-    // Convert tensors to probability distributions (Softmax)
-    let action_probs = softmax_1d(&policy.action_type)
-        .unwrap_or_else(|_| vec![1.0 / (crate::ai::network::NUM_ACTION_TYPES as f32); crate::ai::network::NUM_ACTION_TYPES]);
-    let spatial_size = (features::MAP_SIZE * features::MAP_SIZE) as f32;
-
-    let source_probs = softmax_1d(&policy.source_spatial)
-        .unwrap_or_else(|_| vec![1.0 / spatial_size; spatial_size as usize]);
-    let target_probs = softmax_1d(&policy.target_spatial)
-        .unwrap_or_else(|_| vec![1.0 / spatial_size; spatial_size as usize]);
-
-    // The option head is now 192 slots
-    let option_probs = softmax_1d(&policy.move_option).unwrap_or_else(|_| vec![1.0 / 192.0; 192]);
-
-    compute_move_priors_from_probs(
-        &action_probs,
-        &source_probs,
-        &target_probs,
-        &option_probs,
-        legal_moves,
-        map_size,
-    )
+    if let Ok(rows) = policy.to_raw_rows() {
+        if let Some(first) = rows.first() {
+            return compute_move_priors_raw(first, legal_moves, map_size, allow_end_turn);
+        }
+    }
+    vec![1.0 / legal_moves.len().max(1) as f32; legal_moves.len()]
 }
 
 /// Same as [`compute_move_priors`] but operates on a device-free
@@ -52,19 +36,24 @@ pub fn compute_move_priors_raw(
     map_size: usize,
     _allow_end_turn: bool,
 ) -> Vec<f32> {
-    let action_probs = softmax(&policy.action_type);
-    let source_probs = softmax(&policy.source_spatial);
-    let target_probs = softmax(&policy.target_spatial);
-    let option_probs = softmax(&policy.move_option);
+    if policy.is_ebm {
+        let logits = compute_move_log_probs_ebm_raw(policy, legal_moves, map_size);
+        softmax(&logits)
+    } else {
+        let action_probs = softmax(&policy.action_type);
+        let source_probs = softmax(&policy.source_spatial);
+        let target_probs = softmax(&policy.target_spatial);
+        let option_probs = softmax(&policy.move_option);
 
-    compute_move_priors_from_probs(
-        &action_probs,
-        &source_probs,
-        &target_probs,
-        &option_probs,
-        legal_moves,
-        map_size,
-    )
+        compute_move_priors_from_probs(
+            &action_probs,
+            &source_probs,
+            &target_probs,
+            &option_probs,
+            legal_moves,
+            map_size,
+        )
+    }
 }
 
 fn compute_move_priors_from_probs(
@@ -150,37 +139,22 @@ fn compute_move_priors_from_probs(
     priors
 }
 
-/// Compute log-probabilities for legal moves from decomposed policy heads
+/// Compute log-probabilities for legal moves from policy heads
 ///
-/// Log-prob = log(P(action_type)) + log(P(source)) + log(P(target)) + log(P(option))
-/// These are used as "logits" for Gumbel-Top-k sampling in Gumbel AlphaZero.
+/// Under EBM (EXP_ARCH_003), scores are computed using bilinear action-state compatibility
+/// and normalized via log_softmax over legal moves.
+/// Under legacy heads, log-prob = log P(action) + log P(src) + log P(tgt) + log P(opt).
 pub fn compute_move_log_probs(
     policy: &PolicyOutput,
     legal_moves: &[Box<dyn Move>],
     map_size: usize,
 ) -> Vec<f32> {
-    // Convert tensors to log-probabilities (LogSoftmax)
-    let log_action_unif = -((crate::ai::network::NUM_ACTION_TYPES as f32).ln());
-    let action_logs = log_softmax_1d(&policy.action_type)
-        .unwrap_or_else(|_| vec![log_action_unif; crate::ai::network::NUM_ACTION_TYPES]);
-    let spatial_size = (features::MAP_SIZE * features::MAP_SIZE) as f32;
-    let log_spatial_unif = -(spatial_size.ln());
-
-    let source_logs = log_softmax_1d(&policy.source_spatial)
-        .unwrap_or_else(|_| vec![log_spatial_unif; spatial_size as usize]);
-    let target_logs = log_softmax_1d(&policy.target_spatial)
-        .unwrap_or_else(|_| vec![log_spatial_unif; spatial_size as usize]);
-
-    let option_logs = log_softmax_1d(&policy.move_option).unwrap_or_else(|_| vec![-5.25; 192]);
-
-    compute_move_log_probs_from_logs(
-        &action_logs,
-        &source_logs,
-        &target_logs,
-        &option_logs,
-        legal_moves,
-        map_size,
-    )
+    if let Ok(rows) = policy.to_raw_rows() {
+        if let Some(first) = rows.first() {
+            return compute_move_log_probs_raw(first, legal_moves, map_size);
+        }
+    }
+    vec![-((legal_moves.len().max(1) as f32).ln()); legal_moves.len()]
 }
 
 /// Same as [`compute_move_log_probs`] but operates on a device-free
@@ -191,19 +165,133 @@ pub fn compute_move_log_probs_raw(
     legal_moves: &[Box<dyn Move>],
     map_size: usize,
 ) -> Vec<f32> {
-    let action_logs = log_softmax(&policy.action_type);
-    let source_logs = log_softmax(&policy.source_spatial);
-    let target_logs = log_softmax(&policy.target_spatial);
-    let option_logs = log_softmax(&policy.move_option);
+    if policy.is_ebm {
+        compute_move_log_probs_ebm_raw(policy, legal_moves, map_size)
+    } else {
+        let action_logs = log_softmax(&policy.action_type);
+        let source_logs = log_softmax(&policy.source_spatial);
+        let target_logs = log_softmax(&policy.target_spatial);
+        let option_logs = log_softmax(&policy.move_option);
 
-    compute_move_log_probs_from_logs(
-        &action_logs,
-        &source_logs,
-        &target_logs,
-        &option_logs,
-        legal_moves,
-        map_size,
-    )
+        compute_move_log_probs_from_logs(
+            &action_logs,
+            &source_logs,
+            &target_logs,
+            &option_logs,
+            legal_moves,
+            map_size,
+        )
+    }
+}
+
+#[inline]
+fn dot_16(a: &[f32], b: &[f32]) -> f32 {
+    let mut sum = 0.0f32;
+    for i in 0..16 {
+        sum += a[i] * b[i];
+    }
+    sum
+}
+
+/// EXP_ARCH_003 Bilinear Compatibility Energy Scoring:
+/// Scores each legal move via interactive bilinear terms + unary tile & action biases.
+pub fn compute_move_log_probs_ebm_raw(
+    policy: &RawPolicyOutput,
+    legal_moves: &[Box<dyn Move>],
+    map_size: usize,
+) -> Vec<f32> {
+    let num_moves = legal_moves.len();
+    if num_moves == 0 {
+        return Vec::new();
+    }
+    let mut logits = Vec::with_capacity(num_moves);
+
+    for m in legal_moves {
+        let move_type = m.move_type();
+        let act_idx = DecomposedMapper::move_type_to_idx(move_type);
+        let mut score = policy.action_type.get(act_idx).copied().unwrap_or(0.0);
+
+        let (can_src, can_tgt) = DecomposedMapper::canonical_spatial_coords(m.as_ref(), map_size);
+
+        match (can_src, can_tgt) {
+            (Some(src), Some(tgt)) => {
+                // Directed move (Step, Attack, Convert)
+                if src < policy.source_spatial.len() {
+                    score += policy.source_spatial[src];
+                }
+                if tgt < policy.target_spatial.len() {
+                    score += policy.target_spatial[tgt];
+                }
+                let src_off = src * 16;
+                let tgt_off = tgt * 16;
+                if src_off + 16 <= policy.src_tokens.len() && tgt_off + 16 <= policy.tgt_tokens.len() {
+                    score += dot_16(
+                        &policy.src_tokens[src_off..src_off + 16],
+                        &policy.tgt_tokens[tgt_off..tgt_off + 16],
+                    );
+                }
+            }
+            (None, Some(tgt)) => {
+                // Grounded single-tile move (Build, Harvest, Summon, Capture, Reward, abilities)
+                if tgt < policy.target_spatial.len() {
+                    score += policy.target_spatial[tgt];
+                }
+                let opt_idx = match move_type {
+                    MoveType::Build => m
+                        .structure_type()
+                        .ok()
+                        .and_then(DecomposedMapper::map_structure),
+                    MoveType::Summon => m.unit_type().ok().and_then(DecomposedMapper::map_unit),
+                    MoveType::Ability => m.ability_type().ok().and_then(DecomposedMapper::map_ability),
+                    MoveType::Reward => Some(
+                        m.reward_type()
+                            .ok()
+                            .and_then(DecomposedMapper::map_reward)
+                            .unwrap_or(crate::ai::mapper::REWARD_FALLBACK_SLOT),
+                    ),
+                    _ => None,
+                };
+                if let Some(opt) = opt_idx {
+                    let tgt_off = tgt * 16;
+                    let opt_off = opt * 16;
+                    if tgt_off + 16 <= policy.tgt_tokens.len()
+                        && opt_off + 16 <= policy.opt_embeddings.len()
+                    {
+                        score += dot_16(
+                            &policy.tgt_tokens[tgt_off..tgt_off + 16],
+                            &policy.opt_embeddings[opt_off..opt_off + 16],
+                        );
+                    }
+                }
+            }
+            (None, None) => {
+                // Global move (Research, EndTurn, Resign)
+                if move_type == MoveType::Research {
+                    if let Ok(tech) = m.tech_type() {
+                        if let Some(opt) = DecomposedMapper::map_tech(tech) {
+                            let opt_off = opt * 16;
+                            if 16 <= policy.macro_token.len()
+                                && opt_off + 16 <= policy.opt_embeddings.len()
+                            {
+                                score += dot_16(
+                                    &policy.macro_token[0..16],
+                                    &policy.opt_embeddings[opt_off..opt_off + 16],
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            (Some(src), None) => {
+                if src < policy.source_spatial.len() {
+                    score += policy.source_spatial[src];
+                }
+            }
+        }
+        logits.push(score);
+    }
+
+    log_softmax(&logits)
 }
 
 fn compute_move_log_probs_from_logs(
@@ -282,12 +370,6 @@ fn compute_move_log_probs_from_logs(
     }
 
     move_logs
-}
-
-/// Log-Softmax over 1D tensor
-fn log_softmax_1d(tensor: &Tensor) -> Result<Vec<f32>, candle_core::Error> {
-    let logits = tensor.flatten_all()?.to_vec1::<f32>()?;
-    Ok(log_softmax(&logits))
 }
 
 /// Log-Softmax over a plain logit slice (device-free counterpart of
@@ -377,7 +459,7 @@ fn coord_to_flat_index(idx: usize, map_size: usize) -> usize {
 mod tests {
     use super::*;
     use crate::moves::EndTurnMove;
-    use candle_core::{DType, Device};
+    use candle_core::{DType, Device, Tensor};
 
     /// Build a batch-of-2 synthetic `PolicyOutput` with distinct, non-uniform
     /// logits per row so a row-extraction bug (e.g. wrong stride) would show
@@ -413,6 +495,10 @@ mod tests {
             source_spatial,
             target_spatial,
             move_option,
+            src_compat: None,
+            tgt_compat: None,
+            macro_compat: None,
+            opt_emb: None,
         }
     }
 
@@ -441,6 +527,10 @@ mod tests {
                     .unsqueeze(0)
                     .unwrap(),
                 move_option: policy.move_option.get(row).unwrap().unsqueeze(0).unwrap(),
+                src_compat: None,
+                tgt_compat: None,
+                macro_compat: None,
+                opt_emb: None,
             };
 
             let tensor_priors = compute_move_priors(&row_policy, &legal_moves, map_size, true);
@@ -480,10 +570,67 @@ mod tests {
             assert!((l - expected).abs() < 1e-6);
         }
     }
-}
 
-/// Softmax over 1D tensor
-fn softmax_1d(tensor: &Tensor) -> Result<Vec<f32>, candle_core::Error> {
-    let logits = tensor.flatten_all()?.to_vec1::<f32>()?;
-    Ok(softmax(&logits))
+    #[test]
+    fn test_ebm_city_reward_location_sensitivity() {
+        use std::sync::Arc;
+        use crate::moves::RewardMove;
+        let spatial = features::MAP_SIZE * features::MAP_SIZE;
+        let d = crate::ai::network::D_COMPAT;
+
+        let mut opt_emb = vec![0.0f32; 192 * d];
+        // CityWall slot = 181 (OFFSET_REWARDS + 0)
+        let wall_slot = DecomposedMapper::map_reward(CityRewardType::CityWall).unwrap();
+        // Workshop slot = 183 (OFFSET_REWARDS + 2)
+        let workshop_slot = DecomposedMapper::map_reward(CityRewardType::Workshop).unwrap();
+
+        // CityWall feature vector: [+2.0 at dim 0]
+        opt_emb[wall_slot * d] = 2.0;
+        // Workshop feature vector: [+2.0 at dim 1]
+        opt_emb[workshop_slot * d + 1] = 2.0;
+
+        let mut tgt_tokens = vec![0.0f32; spatial * d];
+        // City 10 is besieged frontline -> dim 0 is high (+1.0)
+        tgt_tokens[10 * d] = 1.0;
+        // City 50 is safe economic core -> dim 1 is high (+1.0)
+        tgt_tokens[50 * d + 1] = 1.0;
+
+        let policy = RawPolicyOutput {
+            action_type: vec![0.0; crate::ai::network::NUM_ACTION_TYPES],
+            source_spatial: vec![0.0; spatial],
+            target_spatial: vec![0.0; spatial],
+            move_option: Vec::new(),
+            is_ebm: true,
+            src_tokens: vec![0.0; spatial * d],
+            tgt_tokens,
+            macro_token: vec![0.0; d],
+            opt_embeddings: Arc::new(opt_emb),
+        };
+
+        // Besieged City 10
+        let moves_city10: Vec<Box<dyn Move>> = vec![
+            Box::new(RewardMove::new(10, CityRewardType::CityWall)),
+            Box::new(RewardMove::new(10, CityRewardType::Workshop)),
+        ];
+        let priors_10 = compute_move_priors_raw(&policy, &moves_city10, features::MAP_SIZE, true);
+        assert!(
+            priors_10[0] > priors_10[1],
+            "City 10 (besieged) must prefer CityWall over Workshop under EBM! Got {:?} vs {:?}",
+            priors_10[0],
+            priors_10[1]
+        );
+
+        // Safe City 50
+        let moves_city50: Vec<Box<dyn Move>> = vec![
+            Box::new(RewardMove::new(50, CityRewardType::CityWall)),
+            Box::new(RewardMove::new(50, CityRewardType::Workshop)),
+        ];
+        let priors_50 = compute_move_priors_raw(&policy, &moves_city50, features::MAP_SIZE, true);
+        assert!(
+            priors_50[1] > priors_50[0],
+            "City 50 (backline) must prefer Workshop over CityWall under EBM! Got {:?} vs {:?}",
+            priors_50[1],
+            priors_50[0]
+        );
+    }
 }

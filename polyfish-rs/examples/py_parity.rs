@@ -70,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|i| player_value(i) as f64)
         .sum();
 
-    let out = serde_json::json!({
+    let mut out = serde_json::json!({
         "batch": BATCH,
         "spatial_check": spatial_check,
         "player_check": player_check,
@@ -84,6 +84,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "target_spatial": policy.target_spatial.flatten_all()?.to_vec1::<f32>()?,
         "move_option": policy.move_option.flatten_all()?.to_vec1::<f32>()?,
     });
+    if let (Some(s), Some(t), Some(m), Some(o)) =
+        (&policy.src_compat, &policy.tgt_compat, &policy.macro_compat, &policy.opt_emb)
+    {
+        out["src_tokens"] = serde_json::to_value(s.flatten_all()?.to_vec1::<f32>()?)?;
+        out["tgt_tokens"] = serde_json::to_value(t.flatten_all()?.to_vec1::<f32>()?)?;
+        out["macro_token"] = serde_json::to_value(m.flatten_all()?.to_vec1::<f32>()?)?;
+        out["opt_emb"] = serde_json::to_value(o.flatten_all()?.to_vec1::<f32>()?)?;
+    }
     println!("{out}");
     Ok(())
 }

@@ -159,13 +159,13 @@ pub struct EvaluatorGenes {
     pub early_perf_fow: f32,
 
     // Early game weights (Domination)
-    #[serde(alias = "early_eco", default)]
+    #[serde(default)]
     pub early_dom_eco: f32,
-    #[serde(alias = "early_mil", default)]
+    #[serde(default)]
     pub early_dom_mil: f32,
-    #[serde(alias = "early_exp", default)]
+    #[serde(default)]
     pub early_dom_exp: f32,
-    #[serde(alias = "early_fow", default)]
+    #[serde(default)]
     pub early_dom_fow: f32,
 
     // Mid game weights (Perfection)

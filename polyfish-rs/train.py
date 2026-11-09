@@ -170,6 +170,13 @@ class PolyZeroNet(nn.Module):
         # 3. Spatial Heads (Source and Target tile selection)
         self.pi_source = nn.Conv2d(self.filters, 1, 1)
         self.pi_target = nn.Conv2d(self.filters, 1, 1)
+
+        # --- EXP_ARCH_003: Bilinear Compatibility Energy Heads (D=16) ---
+        self.d_compat = 16
+        self.p_src_proj = nn.Conv2d(self.filters, self.d_compat, 1)
+        self.p_tgt_proj = nn.Conv2d(self.filters, self.d_compat, 1)
+        self.p_macro_proj = nn.Linear(self.filters, self.d_compat)
+        self.p_opt_emb = nn.Parameter(torch.randn(192, self.d_compat) * 0.02)
         
         # --- Value Heads ---
         # Dual-path value head (EXP_ARCH_002): Local spatial projection (1x1 conv to 2 channels,
@@ -214,6 +221,13 @@ class PolyZeroNet(nn.Module):
         policy['move_option'] = self.pi_option(p_latent)
         policy['source_spatial'] = self.pi_source(x).flatten(1)
         policy['target_spatial'] = self.pi_target(x).flatten(1)
+
+        # --- EXP_ARCH_003: Bilinear Compatibility Heads ---
+        # Spatial tokens: [B, H*W, D] = [B, 121, 16]
+        policy['src_tokens'] = self.p_src_proj(x).flatten(2).transpose(1, 2)
+        policy['tgt_tokens'] = self.p_tgt_proj(x).flatten(2).transpose(1, 2)
+        policy['macro_token'] = self.p_macro_proj(p_latent)  # [B, 16]
+        policy['opt_emb'] = self.p_opt_emb                  # [192, 16]
         
         # --- Value Heads (EXP_ARCH_002) ---
         v_input = x.detach() if DETACH_VALUE_TRUNK else x
@@ -273,6 +287,69 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target):
             pred = policy_pred[head_name]
             head_loss = soft_cross_entropy(pred, target)
             total_policy_loss += head_loss * weights.get(head_name, 1.0)
+
+    # --- EXP_ARCH_003: Bilinear Compatibility Losses ---
+    # 1. Unit Moves (Step, Attack): Pairwise outer product between source and target
+    if 'src_tokens' in policy_pred and 'tgt_tokens' in policy_pred:
+        src_t = policy_targets.get('source_spatial')
+        tgt_t = policy_targets.get('target_spatial')
+        if src_t is not None and tgt_t is not None:
+            unit_mask = (src_t.sum(dim=1) > 0.01) & (tgt_t.sum(dim=1) > 0.01)
+            if unit_mask.any():
+                s_sub = src_t[unit_mask] / src_t[unit_mask].sum(dim=1, keepdim=True).clamp(min=1e-6)
+                t_sub = tgt_t[unit_mask] / tgt_t[unit_mask].sum(dim=1, keepdim=True).clamp(min=1e-6)
+                target_pair = torch.bmm(s_sub.unsqueeze(2), t_sub.unsqueeze(1)).flatten(1)
+                
+                src_tok = policy_pred['src_tokens'][unit_mask]  # [N, 121, 16]
+                tgt_tok = policy_pred['tgt_tokens'][unit_mask]  # [N, 121, 16]
+                pred_pair = torch.bmm(src_tok, tgt_tok.transpose(1, 2)).flatten(1) # [N, 14641]
+                
+                loss_compat_unit = -(target_pair * torch.nn.functional.log_softmax(pred_pair, dim=1)).sum(dim=1).mean()
+                total_policy_loss += 1.0 * loss_compat_unit
+
+    # 2. Grounded Option Moves (Reward, Build, Summon): Interaction between tile and option embedding
+    if 'tgt_tokens' in policy_pred and 'opt_emb' in policy_pred:
+        opt_t = policy_targets.get('move_option')
+        tgt_t = policy_targets.get('target_spatial')
+        src_t = policy_targets.get('source_spatial')
+        if opt_t is not None and (tgt_t is not None or src_t is not None):
+            t_base = tgt_t if tgt_t is not None else torch.zeros_like(src_t)
+            s_base = src_t if src_t is not None else torch.zeros_like(tgt_t)
+            tile_t = (t_base + s_base).clamp(max=1.0)
+            
+            tile_has = tile_t.sum(dim=1) > 0.01
+            opt_has = opt_t.sum(dim=1) > 0.01
+            gr_mask = tile_has & opt_has
+            if gr_mask.any():
+                tile_sub = tile_t[gr_mask] / tile_t[gr_mask].sum(dim=1, keepdim=True).clamp(min=1e-6)
+                opt_sub = opt_t[gr_mask] / opt_t[gr_mask].sum(dim=1, keepdim=True).clamp(min=1e-6)
+                target_grounded = torch.bmm(tile_sub.unsqueeze(2), opt_sub.unsqueeze(1)).flatten(1)
+                
+                tgt_tok = policy_pred['tgt_tokens'][gr_mask]    # [N, 121, 16]
+                opt_emb = policy_pred['opt_emb']                # [192, 16]
+                pred_grounded = torch.matmul(tgt_tok, opt_emb.t()).flatten(1) # [N, 23232]
+                
+                loss_compat_grounded = -(target_grounded * torch.nn.functional.log_softmax(pred_grounded, dim=1)).sum(dim=1).mean()
+                total_policy_loss += 1.0 * loss_compat_grounded
+
+    # 3. Macro Moves (Research): Global macro token with option embedding
+    if 'macro_token' in policy_pred and 'opt_emb' in policy_pred:
+        opt_t = policy_targets.get('move_option')
+        if opt_t is not None:
+            tgt_t = policy_targets.get('target_spatial')
+            src_t = policy_targets.get('source_spatial')
+            tile_t = (tgt_t if tgt_t is not None else 0) + (src_t if src_t is not None else 0)
+            if isinstance(tile_t, torch.Tensor):
+                macro_mask = (opt_t.sum(dim=1) > 0.01) & (tile_t.sum(dim=1) <= 0.01)
+            else:
+                macro_mask = opt_t.sum(dim=1) > 0.01
+            if macro_mask.any():
+                opt_sub = opt_t[macro_mask] / opt_t[macro_mask].sum(dim=1, keepdim=True).clamp(min=1e-6)
+                macro_tok = policy_pred['macro_token'][macro_mask] # [N, 16]
+                opt_emb = policy_pred['opt_emb']                   # [192, 16]
+                pred_macro = torch.matmul(macro_tok, opt_emb.t())  # [N, 192]
+                loss_compat_macro = -(opt_sub * torch.nn.functional.log_softmax(pred_macro, dim=1)).sum(dim=1).mean()
+                total_policy_loss += 0.5 * loss_compat_macro
             
     loss_win = nn.MSELoss()(values_pred['win'], value_target['win'])
 
@@ -404,6 +481,23 @@ def _migrate_checkpoint(state_dict, model, player_state_dim):
                 [pi_b, torch.zeros(NUM_ACTION_TYPES - old_n, dtype=pi_b.dtype)], dim=0
             )
         migrations.append(f"pi_action: padded {old_n} → {NUM_ACTION_TYPES} action types")
+
+    # ------------------------------------------------------------------
+    # 6. Policy-head upgrade: EXP_ARCH_003 Bilinear Compatibility Heads (D=16)
+    #    p_src_proj, p_tgt_proj, p_macro_proj, p_opt_emb
+    # ------------------------------------------------------------------
+    needs_ebm_migration = "p_src_proj.weight" not in state_dict or "p_opt_emb" not in state_dict
+    if needs_ebm_migration:
+        state_dict["p_src_proj.weight"] = model.p_src_proj.weight.clone()
+        state_dict["p_src_proj.bias"] = model.p_src_proj.bias.clone()
+        state_dict["p_tgt_proj.weight"] = model.p_tgt_proj.weight.clone()
+        state_dict["p_tgt_proj.bias"] = model.p_tgt_proj.bias.clone()
+        state_dict["p_macro_proj.weight"] = model.p_macro_proj.weight.clone()
+        state_dict["p_macro_proj.bias"] = model.p_macro_proj.bias.clone()
+        state_dict["p_opt_emb"] = model.p_opt_emb.clone()
+        migrations.append(
+            "policy-head (EXP_ARCH_003): initialised bilinear compatibility heads (p_src_proj, p_tgt_proj, p_macro_proj, p_opt_emb [192, 16])"
+        )
 
     return state_dict, migrations
 

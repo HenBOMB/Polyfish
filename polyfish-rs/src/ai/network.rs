@@ -6,8 +6,10 @@ use crate::ai::mapper::{DecomposedMapper, NUM_MOVE_OPTIONS, REWARD_FALLBACK_SLOT
 use crate::types::MoveType;
 use candle_core::{Module, ModuleT, Result, Tensor};
 use candle_nn::{Conv2d, GroupNorm, LayerNorm, Linear, VarBuilder};
+use std::sync::Arc;
 
 pub const NUM_ACTION_TYPES: usize = 12;
+pub const D_COMPAT: usize = 16;
 
 const FILTERS: usize = 64;
 const RES_BLOCKS: usize = 6;
@@ -246,6 +248,13 @@ pub struct PolyZeroNet {
     v_fc2: Linear,
     v_win: Linear,
     v_progress: Linear,
+
+    // EXP_ARCH_003: Bilinear Compatibility Energy Heads
+    pub p_src_proj: Option<Conv2d>,
+    pub p_tgt_proj: Option<Conv2d>,
+    pub p_macro_proj: Option<Linear>,
+    pub p_opt_emb: Option<Tensor>,
+    pub cached_opt_emb: Option<Arc<Vec<f32>>>,
 }
 
 impl PolyZeroNet {
@@ -324,6 +333,28 @@ impl PolyZeroNet {
         let v_fc2 = candle_nn::linear(filters, filters, vs.pp("v_fc2"))?;
         let v_win = candle_nn::linear(filters, 1, vs.pp("v_win"))?;
         let v_progress = candle_nn::linear(filters, 1, vs.pp("v_progress"))?;
+
+        // EXP_ARCH_003: Bilinear Compatibility Head (D=16)
+        // Projects source tokens, target tokens, and macro state to low-rank metric space.
+        // Option embedding maps 192 structures/units/techs/abilities/rewards to 16 dims.
+        // Backward-compatible: if missing from checkpoint, p_src_proj is None (legacy fallback).
+        let (p_src_proj, p_tgt_proj, p_macro_proj, p_opt_emb, cached_opt_emb) = match (
+            conv(filters, D_COMPAT, 1, 1, 0, vs.pp("p_src_proj")),
+            conv(filters, D_COMPAT, 1, 1, 0, vs.pp("p_tgt_proj")),
+            candle_nn::linear(filters, D_COMPAT, vs.pp("p_macro_proj")),
+            vs.get((NUM_MOVE_OPTIONS, D_COMPAT), "p_opt_emb"),
+        ) {
+            (Ok(src_p), Ok(tgt_p), Ok(macro_p), Ok(opt_e)) => {
+                let cached = opt_e
+                    .flatten_all()
+                    .ok()
+                    .and_then(|t| t.to_vec1::<f32>().ok())
+                    .map(Arc::new);
+                (Some(src_p), Some(tgt_p), Some(macro_p), Some(opt_e), cached)
+            }
+            _ => (None, None, None, None, None),
+        };
+
         Ok(Self {
             conv1,
             norm1,
@@ -344,6 +375,11 @@ impl PolyZeroNet {
             v_fc2,
             v_win,
             v_progress,
+            p_src_proj,
+            p_tgt_proj,
+            p_macro_proj,
+            p_opt_emb,
+            cached_opt_emb,
         })
     }
 
@@ -407,11 +443,36 @@ impl PolyZeroNet {
         let pi_source = self.pi_source.forward(&shared)?.flatten_from(1)?;
         let pi_target = self.pi_target.forward(&shared)?.flatten_from(1)?;
 
+        let (src_compat, tgt_compat, macro_compat, opt_emb) = if let (
+            Some(src_proj),
+            Some(tgt_proj),
+            Some(macro_proj),
+            Some(opt_e),
+        ) = (
+            &self.p_src_proj,
+            &self.p_tgt_proj,
+            &self.p_macro_proj,
+            &self.p_opt_emb,
+        ) {
+            let s_proj = src_proj.forward(&shared)?;
+            let s_compat = s_proj.flatten_from(2)?.transpose(1, 2)?.contiguous()?;
+            let t_proj = tgt_proj.forward(&shared)?;
+            let t_compat = t_proj.flatten_from(2)?.transpose(1, 2)?.contiguous()?;
+            let m_compat = macro_proj.forward(&p_latent)?;
+            (Some(s_compat), Some(t_compat), Some(m_compat), Some(opt_e.clone()))
+        } else {
+            (None, None, None, None)
+        };
+
         let policy_output = PolicyOutput {
             action_type: pi_action,
             source_spatial: pi_source,
             target_spatial: pi_target,
             move_option: pi_option,
+            src_compat,
+            tgt_compat,
+            macro_compat,
+            opt_emb,
         };
 
         // 5. Value Heads (EXP_ARCH_002):
@@ -458,6 +519,11 @@ impl PolyZeroNet {
     pub fn is_legacy_batch_norm(&self) -> bool {
         self.norm1.is_batch()
     }
+
+    /// True if EXP_ARCH_003 action-level bilinear compatibility heads are present
+    pub fn is_ebm(&self) -> bool {
+        self.p_src_proj.is_some()
+    }
 }
 
 // Output structures
@@ -467,6 +533,10 @@ pub struct PolicyOutput {
     pub source_spatial: Tensor, // [B, H*W]
     pub target_spatial: Tensor, // [B, H*W]
     pub move_option: Tensor,    // [B, 192]
+    pub src_compat: Option<Tensor>, // [B, 121, 16]
+    pub tgt_compat: Option<Tensor>, // [B, 121, 16]
+    pub macro_compat: Option<Tensor>, // [B, 16]
+    pub opt_emb: Option<Tensor>,    // [192, 16]
 }
 
 #[derive(Debug)]
@@ -488,6 +558,11 @@ pub struct RawPolicyOutput {
     pub source_spatial: Vec<f32>,
     pub target_spatial: Vec<f32>,
     pub move_option: Vec<f32>,
+    pub is_ebm: bool,
+    pub src_tokens: Vec<f32>,
+    pub tgt_tokens: Vec<f32>,
+    pub macro_token: Vec<f32>,
+    pub opt_embeddings: Arc<Vec<f32>>,
 }
 
 #[cfg(test)]
@@ -533,6 +608,36 @@ mod tests {
         assert_eq!(policy.target_spatial.dims(), &[2, MAP_SIZE * MAP_SIZE]);
         assert_eq!(value.win_value.dims(), &[2, 1]);
         assert_eq!(value.progress_value.dims(), &[2, 1]);
+
+        // EXP_ARCH_003 Bilinear head dimensions
+        assert!(policy.src_compat.is_some());
+        assert_eq!(
+            policy.src_compat.as_ref().unwrap().dims(),
+            &[2, MAP_SIZE * MAP_SIZE, D_COMPAT]
+        );
+        assert!(policy.tgt_compat.is_some());
+        assert_eq!(
+            policy.tgt_compat.as_ref().unwrap().dims(),
+            &[2, MAP_SIZE * MAP_SIZE, D_COMPAT]
+        );
+        assert!(policy.macro_compat.is_some());
+        assert_eq!(
+            policy.macro_compat.as_ref().unwrap().dims(),
+            &[2, D_COMPAT]
+        );
+        assert!(policy.opt_emb.is_some());
+        assert_eq!(
+            policy.opt_emb.as_ref().unwrap().dims(),
+            &[NUM_MOVE_OPTIONS, D_COMPAT]
+        );
+
+        let raw_rows = policy.to_raw_rows().unwrap();
+        assert_eq!(raw_rows.len(), 2);
+        assert!(raw_rows[0].is_ebm);
+        assert_eq!(raw_rows[0].src_tokens.len(), MAP_SIZE * MAP_SIZE * D_COMPAT);
+        assert_eq!(raw_rows[0].tgt_tokens.len(), MAP_SIZE * MAP_SIZE * D_COMPAT);
+        assert_eq!(raw_rows[0].macro_token.len(), D_COMPAT);
+        assert_eq!(raw_rows[0].opt_embeddings.len(), NUM_MOVE_OPTIONS * D_COMPAT);
     }
 
     /// EXP_ARCH_002 Verification: Spatial coordinates break permutation symmetry in the value head.
@@ -694,15 +799,46 @@ impl PolicyOutput {
         let move_option = self.move_option.to_vec2::<f32>()?;
 
         let batch = action_type.len();
-        let mut rows = Vec::with_capacity(batch);
-        for i in 0..batch {
-            rows.push(RawPolicyOutput {
-                action_type: action_type[i].clone(),
-                source_spatial: source_spatial[i].clone(),
-                target_spatial: target_spatial[i].clone(),
-                move_option: move_option[i].clone(),
-            });
+        if let (Some(src_c), Some(tgt_c), Some(macro_c), Some(opt_e)) =
+            (&self.src_compat, &self.tgt_compat, &self.macro_compat, &self.opt_emb)
+        {
+            let src_vec = src_c.flatten_from(1)?.to_vec2::<f32>()?;
+            let tgt_vec = tgt_c.flatten_from(1)?.to_vec2::<f32>()?;
+            let macro_vec = macro_c.to_vec2::<f32>()?;
+            let opt_vec = Arc::new(opt_e.flatten_all()?.to_vec1::<f32>()?);
+
+            let mut rows = Vec::with_capacity(batch);
+            for i in 0..batch {
+                rows.push(RawPolicyOutput {
+                    action_type: action_type[i].clone(),
+                    source_spatial: source_spatial[i].clone(),
+                    target_spatial: target_spatial[i].clone(),
+                    move_option: move_option[i].clone(),
+                    is_ebm: true,
+                    src_tokens: src_vec[i].clone(),
+                    tgt_tokens: tgt_vec[i].clone(),
+                    macro_token: macro_vec[i].clone(),
+                    opt_embeddings: Arc::clone(&opt_vec),
+                });
+            }
+            Ok(rows)
+        } else {
+            let empty_arc = Arc::new(Vec::new());
+            let mut rows = Vec::with_capacity(batch);
+            for i in 0..batch {
+                rows.push(RawPolicyOutput {
+                    action_type: action_type[i].clone(),
+                    source_spatial: source_spatial[i].clone(),
+                    target_spatial: target_spatial[i].clone(),
+                    move_option: move_option[i].clone(),
+                    is_ebm: false,
+                    src_tokens: Vec::new(),
+                    tgt_tokens: Vec::new(),
+                    macro_token: Vec::new(),
+                    opt_embeddings: Arc::clone(&empty_arc),
+                });
+            }
+            Ok(rows)
         }
-        Ok(rows)
     }
 }

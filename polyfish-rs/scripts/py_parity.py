@@ -126,6 +126,11 @@ def main():
     ]
     if "progress" in values:
         pairs.append(("progress", flat(values["progress"])))
+    if "src_tokens" in rust:
+        pairs.append(("src_tokens", flat(policy["src_tokens"])))
+        pairs.append(("tgt_tokens", flat(policy["tgt_tokens"])))
+        pairs.append(("macro_token", flat(policy["macro_token"])))
+        pairs.append(("opt_emb", flat(policy["opt_emb"])))
 
     worst_name, worst = None, 0.0
     failures = []

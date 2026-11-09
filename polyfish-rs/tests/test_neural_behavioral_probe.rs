@@ -13,15 +13,16 @@ use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
 use polyfish::ai::features::state_to_cpu_features;
 use polyfish::ai::gumbel_mcts::GumbelMctsAgent;
 use polyfish::ai::network::PolyZeroNet;
-use polyfish::ai::policy_composer::compute_move_priors_raw;
+use polyfish::ai::policy_composer::{compute_move_log_probs_raw, compute_move_priors_raw};
 use polyfish::coords::Coords;
 use polyfish::functions::get_adjacent_indices;
 use polyfish::game::Game;
 use polyfish::mapgen::{generate, MapGenSettings};
 use polyfish::moves::attack::AttackMove;
+use polyfish::moves::reward::RewardMove;
 use polyfish::moves::step::StepMove;
 use polyfish::moves::Move;
-use polyfish::types::{MapSize, MapType, MoveType, TerrainType, TribeType, UnitType};
+use polyfish::types::{CityRewardType, MapSize, MapType, MoveType, TerrainType, TribeType, UnitType};
 use std::sync::Arc;
 
 fn load_network(path: &str) -> Arc<PolyZeroNet> {
@@ -485,5 +486,113 @@ fn probe_3_capital_defense_abandonment() {
     }
 
     println!("Capital defense sensitivity multiplier: {:.2}x", penalty_129 / penalty_76);
+}
+
+#[test]
+fn probe_4_city_reward_location_sensitivity() {
+    println!("\n=======================================================");
+    println!("PROBE 4: City Level-Up Location Sensitivity (0-Search)");
+    println!("=======================================================");
+
+    let mut game = make_game(11);
+    let size = game.state.settings.size;
+    let c1_idx = game.state.tribes[&1].cities[0].idx;
+
+    // Pick an interior tile sufficiently far away to found or place City 2
+    let c2_idx = (0..size * size)
+        .find(|&idx| {
+            idx != c1_idx
+                && !polyfish::functions::get_adjacent_indices(&game.state, c1_idx, 2).contains(&idx)
+                && matches!(
+                    game.state.tiles[&idx].terrain_type,
+                    TerrainType::Field | TerrainType::Forest
+                )
+        })
+        .expect("suitable tile for City 2");
+
+    // Add City 2 to Player 1's tribe
+    {
+        let p1 = game.state.tribes.get_mut(&1).unwrap();
+        let city2 = polyfish::states::CityState {
+            owner: 1,
+            name: "City2".to_string(),
+            idx: c2_idx,
+            level: 2,
+            production: 2,
+            ..Default::default()
+        };
+        p1.cities.push(city2);
+
+        // Also ensure City 1 is level 2 with rewards available
+        p1.cities[0].level = 2;
+        p1.cities[0].rewards.clear();
+    }
+
+    // Place an enemy Warrior adjacent to City 1 (besiegement threat!)
+    let adj_c1 = get_adjacent_indices(&game.state, c1_idx, 1);
+    let t_enemy = adj_c1[0];
+    {
+        let p2 = game.state.tribes.get_mut(&2).unwrap();
+        p2.units.truncate(1);
+        p2.units[0].unit_type = UnitType::Warrior;
+        p2.units[0].health = 10.0;
+        p2.units[0].coords = Coords::from_index(t_enemy, size);
+        p2.units[0].prev_coords = p2.units[0].coords.clone();
+    }
+    game.post_load();
+
+    let candidate_models = [
+        ("Iter 76 (ExpArch001)", "model_dagger_foundation.safetensors"),
+        ("Iter 129 (ExpArch001)", "model_iter129.safetensors"),
+        ("Iter 130 (ExpArch002)", "model_exp002_iter130.safetensors"),
+        ("Foundation (ExpArch003)", "model_exp003_foundation.safetensors"),
+    ];
+
+    let r_c1_wall: Box<dyn Move> = Box::new(RewardMove::new(c1_idx, CityRewardType::CityWall));
+    let r_c1_shop: Box<dyn Move> = Box::new(RewardMove::new(c1_idx, CityRewardType::Workshop));
+    let r_c2_wall: Box<dyn Move> = Box::new(RewardMove::new(c2_idx, CityRewardType::CityWall));
+    let r_c2_shop: Box<dyn Move> = Box::new(RewardMove::new(c2_idx, CityRewardType::Workshop));
+
+    let probe_moves = vec![r_c1_wall, r_c1_shop, r_c2_wall, r_c2_shop];
+
+    for (label, path) in candidate_models {
+        if !std::path::Path::new(path).exists() {
+            println!("{label} ({path}): Not found locally, skipping.");
+            continue;
+        }
+
+        let net = load_network(path);
+        let handle = InlineEvalHandle::new(Arc::clone(&net));
+        let feat = state_to_cpu_features(&game.state, 1).expect("feature extraction");
+        let results = handle.evaluate(vec![feat]);
+        let (_, _, raw_policy) = &results[0];
+
+        let log_probs = compute_move_log_probs_raw(raw_policy, &probe_moves, size as usize);
+        let log_diff_c1 = log_probs[0] - log_probs[1];
+        let log_diff_c2 = log_probs[2] - log_probs[3];
+        let delta_log = (log_diff_c1 - log_diff_c2).abs();
+
+        let ratio_c1 = (log_diff_c1).exp();
+        let ratio_c2 = (log_diff_c2).exp();
+
+        println!(
+            "{label}: Frontline City 1 (Wall/Shop Ratio = {:.4}) | Backline City 2 (Wall/Shop Ratio = {:.4}) | ΔLogRatio = {:.6} (EBM: {})",
+            ratio_c1, ratio_c2, delta_log, net.is_ebm()
+        );
+
+        if !net.is_ebm() {
+            // Under legacy factored architectures, log_diff_c1 and log_diff_c2 are mathematically identical!
+            assert!(
+                delta_log < 1e-4,
+                "Decomposed legacy policy MUST have identical reward ratio regardless of city location (proves factored defect)"
+            );
+        } else {
+            // Under EBM, bilinear interaction breaks the spatial symmetry!
+            assert!(
+                delta_log > 1e-5,
+                "EBM policy MUST show spatial sensitivity between frontline and backline city rewards"
+            );
+        }
+    }
 }
 

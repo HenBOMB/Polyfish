@@ -122,6 +122,28 @@ def migrate_model(file_path):
             )
         migrated = True
 
+    # ------------------------------------------------------------------
+    # 6. Policy-head upgrade: EXP_ARCH_003 Bilinear Compatibility Heads (D=16)
+    # ------------------------------------------------------------------
+    D_COMPAT = 16
+    needs_ebm = "p_src_proj.weight" not in state_dict or "p_opt_emb" not in state_dict
+    if needs_ebm:
+        print(f"  Initialising p_src_proj (Conv2d({filters}, {D_COMPAT}, 1)) fresh")
+        state_dict["p_src_proj.weight"] = (torch.randn(D_COMPAT, filters, 1, 1) * 0.01).to(target_dtype)
+        state_dict["p_src_proj.bias"] = torch.zeros(D_COMPAT, dtype=target_dtype)
+
+        print(f"  Initialising p_tgt_proj (Conv2d({filters}, {D_COMPAT}, 1)) fresh")
+        state_dict["p_tgt_proj.weight"] = (torch.randn(D_COMPAT, filters, 1, 1) * 0.01).to(target_dtype)
+        state_dict["p_tgt_proj.bias"] = torch.zeros(D_COMPAT, dtype=target_dtype)
+
+        print(f"  Initialising p_macro_proj (Linear({filters}, {D_COMPAT})) fresh")
+        state_dict["p_macro_proj.weight"] = (torch.randn(D_COMPAT, filters) * 0.01).to(target_dtype)
+        state_dict["p_macro_proj.bias"] = torch.zeros(D_COMPAT, dtype=target_dtype)
+
+        print(f"  Initialising p_opt_emb (Parameter [192, {D_COMPAT}]) fresh")
+        state_dict["p_opt_emb"] = (torch.randn(192, D_COMPAT) * 0.02).to(target_dtype)
+        migrated = True
+
     if not migrated:
         print("Checkpoint is already up-to-date. No changes needed.")
         return
@@ -137,7 +159,9 @@ def migrate_model(file_path):
 
 
 if __name__ == "__main__":
-    if os.path.exists("model.safetensors"):
-        migrate_model("model.safetensors")
+    import sys
+    target = sys.argv[1] if len(sys.argv) > 1 else "model.safetensors"
+    if os.path.exists(target):
+        migrate_model(target)
     else:
-        print("model.safetensors not found in current directory.")
+        print(f"{target} not found in current directory.")

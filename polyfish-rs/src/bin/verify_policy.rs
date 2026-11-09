@@ -30,7 +30,7 @@ fn main() -> anyhow::Result<()> {
     // 2. Generate mock policy heads (Random weights)
     // We use deterministic rand-like values for reproducibility
     let map_dim = polyfish::ai::features::MAP_SIZE * polyfish::ai::features::MAP_SIZE;
-    let action_type = Tensor::from_vec(vec![0.1f32; 11], (1, 11), &device)?;
+    let action_type = Tensor::from_vec(vec![0.1f32; polyfish::ai::network::NUM_ACTION_TYPES], (1, polyfish::ai::network::NUM_ACTION_TYPES), &device)?;
     let source_spatial = Tensor::from_vec(vec![0.1f32; map_dim], (1, map_dim), &device)?;
     let target_spatial = Tensor::from_vec(vec![0.1f32; map_dim], (1, map_dim), &device)?;
     let move_option = Tensor::from_vec(vec![0.1f32; 192], (1, 192), &device)?;
@@ -40,6 +40,10 @@ fn main() -> anyhow::Result<()> {
         source_spatial,
         target_spatial,
         move_option,
+        src_compat: None,
+        tgt_compat: None,
+        macro_compat: None,
+        opt_emb: None,
     };
 
     // 3. Get legal moves
