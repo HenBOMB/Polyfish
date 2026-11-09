@@ -422,3 +422,53 @@ it to what the root player can currently see.
 Both changes are registered as EXP_SEARCH_001 and EXP_SEARCH_002 in
 `hypothesis_driven_improvements.md` and **neither has been measured** — there is
 no gauge reading on the repaired instrument yet.
+
+---
+
+## EXP_ARCH_003: Action-Level Bilinear Compatibility Head & Pre-Flight Notes
+*Nov 9, 2026*
+
+### The Factored Policy Defect (Probe 4 Discovery)
+The policy factored into independent marginals:
+$\pi(a \mid s) = P(\text{action}) \times P(\text{source}) \times P(\text{target}) \times P(\text{option})$.
+For city level-ups (`RewardMove`), the probability of selecting an option $o$ at city $c$ was:
+$P(\text{Reward}) \times P_{\text{target}}(c) \times P_{\text{option}}(o)$.
+Taking the ratio between two options (e.g., City Wall vs. Workshop) at any city $c$:
+$$\frac{P(\text{Wall at } c)}{P(\text{Workshop at } c)} = \frac{P(\text{Reward}) \cdot P_{\text{target}}(c) \cdot P_{\text{option}}(\text{Wall})}{P(\text{Reward}) \cdot P_{\text{target}}(c) \cdot P_{\text{option}}(\text{Workshop})} = \frac{P_{\text{option}}(\text{Wall})}{P_{\text{option}}(\text{Workshop})}$$
+Because $P_{\text{target}}(c)$ canceled out completely, the ratio was mathematically identical for every single city on the map ($\Delta\text{LogRatio} = 0.000000$). The policy could never prefer walls on a frontline city while preferring workshops in safe rear cities.
+
+### The 35,000x Option-Suppression Trap (Iter 130 vs. Iter 76)
+Measuring the raw logits across checkpoints revealed a catastrophic pathology:
+- **Iter 76**: Frontline City Wall/Shop Ratio = `0.3461` (healthy prior from teacher).
+- **Iter 130**: Frontline City Wall/Shop Ratio = `0.000028` (`p_wall = 2.66e-6` vs `p_shop = 9.24e-2`).
+Because walls could not be targeted to threatened cities under the factored architecture, the network learned over 54 self-play iterations that choosing City Wall was almost always a waste of stars compared to workshops. As a result, `CityWall` was buried under a $-10$ logit deficit in `pi_option`.
+
+**Why `--resume-from 76` beats `--resume-from 130`**:
+If we resumed from Iter 130, our new bilinear compatibility term ($T \cdot E \sim \mathcal{N}(0, 0.01)$) would have to climb a $10$-logit hill just to bring `CityWall` back to parity on frontline cities. By starting from **Iter 76**, the bilinear compatibility head and the unary heads learn in tandem from day 1, preventing the anti-wall pathology from ever forming.
+
+### Architecture Implementation ($D = 16$)
+We projected the 64-channel spatial trunk into low-rank 16-dim token maps:
+- `p_src_proj`: Conv2D($64 \to 16, 1\times 1$)
+- `p_tgt_proj`: Conv2D($64 \to 16, 1\times 1$)
+- `p_macro_proj`: Linear($64 \to 16$)
+- `p_opt_emb`: Learnable Parameter matrix ($192 \times 16$)
+
+Scoring evaluates:
+- Directed moves: $U_{\text{src}} + U_{\text{tgt}} + T_{\text{src}} \cdot T_{\text{tgt}}$
+- Grounded options: $U_{\text{tgt}} + T_{\text{tgt}} \cdot E_{\text{opt}}$
+- Macro actions: $U_{\text{act}} + G_{\text{macro}} \cdot E_{\text{opt}}$
+
+In Candle, inference is decoded into flat CPU buffers in a single PCIe readback ($B \times 4144$ floats) and scored via SIMD `dot_16` loops. On CPU, the overhead was measured in `arena` at only **1.04x** (38.9 ms/move vs 37.5 ms/move).
+
+### Pre-Flight Verification Results
+1. **Parity**: PyTorch vs Candle forward parity verified with worst $\Delta < 6.8 \times 10^{-4}$ (spatial heads) and $\Delta < 1.1 \times 10^{-6}$ (bilinear tokens).
+2. **Behavioral Probe 4**: Legacy checkpoints confirmed blind ($\Delta = 0.000000$); newly migrated EBM weights broke symmetry ($\Delta\text{LogRatio} = 0.001369$).
+3. **Rust Suite**: All 77 unit tests + 41 integration test suites passed.
+4. **Arena Sanity**: 2 games played with 0 panics, 0 NaNs.
+
+### Pod Monitoring Invariants
+When monitoring training on an RTX 5090 pod:
+- Inspect `/proc/net/dev` to check active download rates before assuming a container build or script is frozen.
+- Check process CPU accumulation (`top`, `ps`) to confirm worker activity.
+- Verify `git show -s --format="%ci" HEAD` against `ps -o lstart` before interrupting builds.
+

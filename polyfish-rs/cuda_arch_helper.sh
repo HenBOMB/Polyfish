@@ -14,9 +14,10 @@ resolve_cuda_cap() {
         return 1
     fi
 
-    # Lowercase and strip whitespace, underscores, dashes
+    # Lowercase and strip whitespace, underscores, dashes, and leading "sm"
     local clean
     clean=$(echo "$input" | tr '[:upper:]' '[:lower:]' | tr -d ' _-')
+    clean="${clean#sm}"
 
     case "$clean" in
         *5090*|*5080*|*blackwell*|120|12.0)
@@ -53,22 +54,29 @@ resolve_cuda_cap() {
 # Generates clean, predictable Docker image tags based on the input GPU or capability
 resolve_image_tag() {
     local input="${1:-}"
-    local cap="$2"
+    local cap="${2:-}"
 
     local clean
     clean=$(echo "$input" | tr '[:upper:]' '[:lower:]' | tr -d ' _-')
+    clean="${clean#sm}"
 
     case "$clean" in
-        *5090*) echo "henbomb/polyfish:5090" ;;
-        *4090*) echo "henbomb/polyfish:4090" ;;
-        *3090*) echo "henbomb/polyfish:3090" ;;
+        *5090*|*5080*|*blackwell*) echo "henbomb/polyfish:5090" ;;
+        *4090*|*4080*|*4070*) echo "henbomb/polyfish:4090" ;;
+        *3090*|*3080*|*3070*) echo "henbomb/polyfish:3090" ;;
         *a6000*) echo "henbomb/polyfish:a6000" ;;
         *a40*) echo "henbomb/polyfish:a40" ;;
-        *h100*) echo "henbomb/polyfish:h100" ;;
-        120) echo "henbomb/polyfish:5090" ;;
-        89) echo "henbomb/polyfish:4090" ;;
-        86) echo "henbomb/polyfish:3090" ;;
-        90) echo "henbomb/polyfish:h100" ;;
-        *) echo "henbomb/polyfish:sm${cap}" ;;
+        *h100*|*h200*|*hopper*) echo "henbomb/polyfish:h100" ;;
+        *a100*) echo "henbomb/polyfish:a100" ;;
+        *)
+            case "$cap" in
+                120) echo "henbomb/polyfish:5090" ;;
+                89) echo "henbomb/polyfish:4090" ;;
+                86) echo "henbomb/polyfish:3090" ;;
+                90) echo "henbomb/polyfish:h100" ;;
+                80) echo "henbomb/polyfish:a100" ;;
+                *) echo "henbomb/polyfish:sm${cap}" ;;
+            esac
+            ;;
     esac
 }

@@ -766,3 +766,81 @@ behaviour change is never mistaken for noise:
   same game. Previously all three draw sites used the thread-local generator,
   so no test could pin search behaviour (audit T3). Not behaviour-affecting on
   its own — the default path is still seeded from OS entropy.
+
+---
+
+## EXP_ARCH_002: Dual-Path Spatial & Global Value Trunk (370 Inputs)
+*Nov 7, 2026 · COMMITTED (trained iter 76 → 130)*
+
+### Motivation & Problem
+Under `EXP_ARCH_001`, the value head pooled spatial trunk activations into a single 64-dim global vector via global average pooling before scoring game win probability. Consequently, localized tactical threats (e.g., an enemy catapult sieging a border city 2 tiles away while overall army strength was equal) were smoothed out, leading to catastrophic value blindness in endgames.
+
+### Architecture & Mechanics
+Added a dual-path projection into `v_fc1`:
+1. **Local Spatial Path**: 1x1 conv (`v_spatial_conv`) reducing trunk features ($64 \to 2$ channels), flattened to $2 \times 11 \times 11 = 242$ localized spatial dimensions.
+2. **Global Pooled Path**: Channel-wise mean and max pooling ($64 + 64 = 128$ dimensions).
+3. **Input Dimension**: $242 + 128 = 370$ concatenated features fed into `v_fc1` (Linear $370 \to 64$).
+
+### Results & Verdict
+Trained for 54 iterations (Iter 76 → 130). Value loss stabilized cleanly, and neural behavioral probe 2 (`probe_2_fatal_suicide_attack_discouragement`) and probe 3 (`probe_3_capital_defense_abandonment`) confirmed the model internalized tactical positioning and capital threats. **Verdict: COMMITTED.**
+
+---
+
+## EXP_ARCH_003: Action-Level Bilinear Compatibility Energy-Based Policy Head
+*Nov 9, 2026 · REGISTERED & PRE-FLIGHT VERIFIED (Deployment Target: RTX 5090, Iter 76 → 176)*
+
+### Motivation & Core Problem
+Under both `EXP_ARCH_001` and `EXP_ARCH_002`, the policy factored as an independent product of marginal distributions:
+$$\pi(a \mid s) = P(\text{action}) \times P(\text{source}) \times P(\text{target}) \times P(\text{option})$$
+Because $P(\text{option})$ was conditioned solely on the pooled global trunk, options (such as `CityRewardType::CityWall` vs. `Workshop`, or structure builds) were evaluated with **zero spatial grounding**. 
+
+In **Neural Behavioral Probe 4** (`test_neural_behavioral_probe.rs`), we proved this defect empirically:
+- **Iter 76**: Frontline City Wall/Shop Ratio = `0.3461`, Backline City Wall/Shop Ratio = `0.3461` ($\Delta\text{LogRatio} = 0.000000$).
+- **Iter 129**: Frontline City Wall/Shop Ratio = `0.0041`, Backline City Wall/Shop Ratio = `0.0041` ($\Delta\text{LogRatio} = 0.000000$).
+- **Iter 130**: Frontline City Wall/Shop Ratio = `0.0000`, Backline City Wall/Shop Ratio = `0.0000` ($\Delta\text{LogRatio} = 0.000001$).
+
+The network was mathematically incapable of preferring a City Wall on a besieged frontline city while choosing a Workshop in a safe interior city. Furthermore, over 54 iterations of factored training, `pi_option` learned that without spatial grounding, walls were globally wasteful, severely suppressing `CityWall` down to $p = 2.66 \times 10^{-6}$ (a **35,000x penalty** relative to Workshop).
+
+### Architectural Solution
+Implement an Action-Level Energy-Based Model (EBM) parameterized by low-rank bilinear compatibility projections ($D = 16$):
+1. **Source Spatial Token**: $T_{\text{src}} = \text{Conv2D}(64 \to 16, 1\times 1)(x) \in \mathbb{R}^{B \times 121 \times 16}$
+2. **Target Spatial Token**: $T_{\text{tgt}} = \text{Conv2D}(64 \to 16, 1\times 1)(x) \in \mathbb{R}^{B \times 121 \times 16}$
+3. **Macro Action Token**: $G_{\text{macro}} = \text{Linear}(64 \to 16)(p_{\text{latent}}) \in \mathbb{R}^{B \times 16}$
+4. **Option Embeddings**: $E_{\text{opt}} \in \mathbb{R}^{192 \times 16}$
+
+**Energy Scoring Function**:
+- **Directed Moves** (`Step`, `Attack`, `Convert`):
+  $$\mathcal{E}(a, s) = U_{\text{act}}[\text{act}] + U_{\text{src}}[\text{src}] + U_{\text{tgt}}[\text{tgt}] + T_{\text{src}}[\text{src}] \cdot T_{\text{tgt}}[\text{tgt}]$$
+- **Grounded Single-Tile Moves** (`Reward`, `Build`, `Summon`, `Harvest`, `Capture`, abilities):
+  $$\mathcal{E}(a, s) = U_{\text{act}}[\text{act}] + U_{\text{tgt}}[\text{tile}] + T_{\text{tgt}}[\text{tile}] \cdot E_{\text{opt}}[\text{opt}]$$
+- **Macro Actions** (`Research`):
+  $$\mathcal{E}(a, s) = U_{\text{act}}[\text{Research}] + G_{\text{macro}} \cdot E_{\text{opt}}[\text{tech}]$$
+
+Normalized via log-softmax over all legal moves in state $s$:
+$$\pi(a \mid s) = \frac{\exp(\mathcal{E}(a, s))}{\sum_{a' \in \mathcal{A}(s)} \exp(\mathcal{E}(a', s))}$$
+
+### Training Loss Formulation
+Trained via batched outer-product matrix multiplications ($\text{bmm}$) directly on the existing replay buffer schema:
+$$\mathcal{L}_{\text{unit}} = -\sum \left( (s \otimes t) \cdot \log \text{softmax}(\text{bmm}(T_{\text{src}}, T_{\text{tgt}}^T)) \right)$$
+$$\mathcal{L}_{\text{grounded}} = -\sum \left( (t \otimes \text{opt}) \cdot \log \text{softmax}(T_{\text{tgt}} E_{\text{opt}}^T) \right)$$
+$$\mathcal{L}_{\text{macro}} = -\sum \left( \text{opt} \cdot \log \text{softmax}(G_{\text{macro}} E_{\text{opt}}^T) \right)$$
+
+### Pre-Flight Verification Gates Passed
+1. **Forward Parity**: Candle CPU vs. PyTorch CPU raw logit delta $< 6.8 \times 10^{-4}$ on spatial heads; EBM tokens $\Delta < 1.1 \times 10^{-6}$; $E_{\text{opt}}$ $\Delta = 0.000$.
+2. **Behavioral Probe 4 Foundation Check**: On freshly migrated weights, $\Delta\text{LogRatio} = 0.001369 > 0$ (symmetry broken!).
+3. **Rust Test Suite**: All 77 unit tests and 41 integration test suites passed cleanly.
+4. **Arena Sanity Check**: 2 games played in 19.4s with 0 panics, 0 NaNs, and only **1.04x** runtime overhead vs legacy.
+
+### Deployment Strategy: Why `--resume-from 76` Instead of 130
+- **Negative Transfer Avoidance**: Iter 130 has baked a $-10$ logit anti-wall penalty into `pi_option` over 54 iterations of factored training. Resuming from 130 forces the new $D=16$ projection head to fight this entrenched prior.
+- **Clean Baseline**: Iter 76 (DAgger Foundation) maintains a balanced prior ($0.3461$ wall/shop ratio). Starting from 76 allows bilinear compatibility and unary biases to co-adapt from day 1.
+- **Compute Feasibility**: On an RTX 5090 (Blackwell `sm_120`), 100 iterations (76 → 176) takes only $\sim$3.0 to 3.5 hours total.
+
+### Pre-Registered Goals & Falsification Criteria
+1. **Probe 4 Sensitivity Goal**: $\Delta\text{LogRatio}$ between frontline and backline city rewards grows from $0.001369 \to \ge 0.35$ by Iteration 150, with frontline cities prioritizing `CityWall` and backline cities prioritizing `Workshop`/`Park`.
+   - *Falsification Threshold*: If $\Delta\text{LogRatio} < 0.05$ after 20 iterations (at Iter 96), bilinear learning rate or loss weight $\lambda_{\text{grounded}}$ is insufficient.
+2. **Head-to-Head Arena Strength Goal**: By Iteration 150, EXP 003 achieves $\ge 60\%$ win rate (+70 Elo) in paired-seed matches against the EXP 002 (Iter 130) baseline.
+   - *Falsification Threshold*: If win rate plateaus $\le 52\%$ against Iter 130 after 20 iterations, action-level compatibility is insufficient without turn-level sequential scoring.
+3. **Siege Survivability**: Average turns-to-elimination in besieged positions increases by $\ge 15\%$ due to localized defensive builds and unit spawns.
+4. **Compatibility Loss Convergence**: `loss_compat_unit` and `loss_compat_grounded` decline smoothly from $\sim 8.0$ (uniform init) to $\sim 2.5 - 3.5$ within 15 iterations without value loss destabilization.
+

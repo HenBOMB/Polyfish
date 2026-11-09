@@ -26,8 +26,19 @@ echo "==========================================================================
 
 CAP_ARG="--build-arg CUDA_COMPUTE_CAP=$RESOLVED_CAP"
 
-# Keep default image name as henbomb/polyfish:latest unless explicitly provided as $2
-IMAGE_TAG="${2:-henbomb/polyfish:latest}"
+# Determine Docker image tag
+TAG_LATEST="${TAG_LATEST:-0}"
+if [ -n "$2" ]; then
+    IMAGE_TAG="$2"
+elif [ -z "${1:-}" ]; then
+    # No target provided: default baseline build tagged directly as latest
+    IMAGE_TAG="henbomb/polyfish:latest"
+    TAG_LATEST=1
+elif command -v resolve_image_tag &>/dev/null; then
+    IMAGE_TAG=$(resolve_image_tag "$INPUT_TARGET" "$RESOLVED_CAP")
+else
+    IMAGE_TAG="henbomb/polyfish:sm${RESOLVED_CAP}"
+fi
 
 echo "Target Image Tag: $IMAGE_TAG"
 echo "Generating Cargo.docker.toml (stripping tests and examples)..."
@@ -47,7 +58,7 @@ rm -f Cargo.docker.toml
 
 echo "Pushing Docker image ($IMAGE_TAG)..."
 $DOCKER push "$IMAGE_TAG"
-if [ "$IMAGE_TAG" != "henbomb/polyfish:latest" ]; then
+if [ "${TAG_LATEST:-0}" = "1" ] && [ "$IMAGE_TAG" != "henbomb/polyfish:latest" ]; then
     $DOCKER tag "$IMAGE_TAG" henbomb/polyfish:latest
     $DOCKER push henbomb/polyfish:latest
 fi
