@@ -416,6 +416,9 @@ if [ "$START_ITER" -gt 1 ] && [ ! -f "model.safetensors" ]; then
     fi
 fi
 .venv/bin/python3 init_model.py
+if [ -f "model.safetensors" ]; then
+    .venv/bin/python3 migrate_model.py model.safetensors
+fi
 
 for ((i=START_ITER; i<START_ITER+ITERATIONS; i++))
 do

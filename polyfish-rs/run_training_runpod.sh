@@ -423,6 +423,8 @@ else
 fi
 if [ ! -f "model.safetensors" ]; then
     .venv/bin/python3 init_model.py
+else
+    .venv/bin/python3 migrate_model.py model.safetensors
 fi
 
 echo "Starting backend server in background (dashboard on :3000)..."
