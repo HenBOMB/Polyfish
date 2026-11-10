@@ -141,9 +141,11 @@ We maintain strict falsification criteria to avoid narrative leaps or sinking co
    * **Diagnosis**: Confounded by 29-iteration training gap ($P_{\text{loss}} = 2.5821$ vs $2.8563$); `EXP_ARCH_002` won 44% as P2 vs 32% as P1 due to increased tactical caution.
    * **Ledger**: [`polyfish-rs/arena_exp002_vs_iter129_50games.json`](../../polyfish-rs/arena_exp002_vs_iter129_50games.json)
 
-3. **Benchmark 3 (Level-Pegging Architecture Showdown: EXP_ARCH_002 vs EXP_ARCH_001)**:
+3. **Benchmark 3 (Level-Pegging Architecture Showdown: EXP_ARCH_002 vs EXP_ARCH_001 — INVALIDATED / MEASUREMENT ARTIFACT)**:
+   > [!WARNING]
+   > **Measurement Artifact**: This benchmark was run under the legacy `arena.rs` condition `moves < 500`. 40 out of 50 games (80%) were non-decisive and truncated prematurely at Turn ~20–23 instead of Turn 45, artificially awarding wins to the reckless forward attacker on early village points. Fixed in commit `c813641a`.
    * **Matchup**: `Iter 130 (EXP_ARCH_002)` vs `Iter 129 (EXP_ARCH_001)` (54 vs 53 iterations from foundation Iter 76)
-   * **Result**: **20 - 30 (40.0% Win Rate)**, 95% Wilson CI $[27.6\%, 53.8\%]$.
+   * **Result**: **20 - 30 (40.0% Win Rate)**, 95% Wilson CI $[27.6\%, 53.8\%]$. (Premature adjudication artifact).
    * **Seat Dissection**:
      - Config 1 as Player 1: **52.0% (13 / 25)** (+20.0% improvement over Iter 100's 32.0%)
      - Config 1 as Player 2: **28.0% (7 / 25)** (-16.0% from Iter 100's 44.0%)
