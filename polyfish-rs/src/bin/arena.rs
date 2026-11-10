@@ -326,7 +326,14 @@ fn play_match(
     let mut moves_config2: u64 = 0;
 
     let mut last_sampled_turn = i32::MIN;
-    while !polyfish::functions::is_game_over(&game.state) && moves < 500 {
+    while !polyfish::functions::is_game_over(&game.state) {
+        if moves >= 50_000 {
+            eprintln!(
+                "[Game seed {}] Move count exceeded 50,000 (Safety Break)",
+                seed
+            );
+            break;
+        }
         let current_pid = game.state.settings.current_player_turn_id;
 
         if current_pid == 1 && game.state.settings.turn != last_sampled_turn {
@@ -861,6 +868,8 @@ fn main() -> anyhow::Result<()> {
                 "mcts1": mcts1,
                 "mcts2": mcts2,
                 "max_turns": args.max_turns,
+                "turns": r.turns,
+                "moves": r.moves,
                 "mode": args.gamemode,
                 "decisive": r.decisive,
                 "seed": r.seed,
