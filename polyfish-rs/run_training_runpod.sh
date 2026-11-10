@@ -142,6 +142,7 @@ while [[ $# -gt 0 ]]; do
     --idle) IDLE=true; shift ;;
     --benchmark) BENCHMARK=true; shift ;;
     --supabase) SYNC_SUPABASE=true; shift ;;
+    --no-supabase) SYNC_SUPABASE=false; shift ;;
     --shutdown) SHUTDOWN=true; shift ;;
     --pod-shutdown-test) POD_SHUTDOWN_TEST=true; shift ;;
     --cores|--vcpu)
@@ -384,7 +385,8 @@ if [ -n "$OVERRIDE_CORES" ]; then
 fi
 
 SERVER_PID=""
-trap '.venv/bin/python3 training_log.py finish-run 2>/dev/null || true; [ -n "$SERVER_PID" ] && kill $SERVER_PID 2>/dev/null; rm -f .training.pid' EXIT
+SYNC_PID=""
+trap '.venv/bin/python3 training_log.py finish-run 2>/dev/null || true; [ -n "$SERVER_PID" ] && kill $SERVER_PID 2>/dev/null; [ -n "$SYNC_PID" ] && wait $SYNC_PID 2>/dev/null || true; rm -f .training.pid' EXIT
 
 portable_shuf() {
     local n=$1
@@ -570,12 +572,13 @@ do
     echo "  -> META: Decisive Frac: $DECISIVE_FRAC | VLab WL Share: $VLAB_WL"
 
     # 4. Checkpoint
+    CP_FLAG=""
     if [ $((i % CHECKPOINT_EVERY)) -eq 0 ]; then
         TS=$(date +%Y%m%d_%H%M%S)
         CP_NAME="checkpoints/model_checkpoint_iter${i}_${TS}.safetensors"
         echo "Creating checkpoint for iteration $i (Timestamp: $TS)..."
         cp model.safetensors "$CP_NAME"
-        .venv/bin/python3 supabase_sync.py upload "$CP_NAME"
+        CP_FLAG="--checkpoint $CP_NAME"
     fi
 
     # 4b. Cleanup: move played games to archive so train.py sees only fresh
@@ -584,19 +587,15 @@ do
     mv games_*.safetensors archive/ 2>/dev/null || true
     ls -t archive/games_*.safetensors 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm
 
-    # Supabase: Backup the new model weights, training logs, elo ratings, and hardware analytics
-    if [ "$SYNC_SUPABASE" = true ]; then
-        .venv/bin/python3 supabase_sync.py backup-pod
-        .venv/bin/python3 supabase_sync.py upload model.safetensors
-        if [ -f hardware_telemetry.csv ]; then .venv/bin/python3 supabase_sync.py upload hardware_telemetry.csv; fi
-        if [ -f hardware_status.json ]; then .venv/bin/python3 supabase_sync.py upload hardware_status.json; fi
-    else
-        .venv/bin/python3 supabase_sync.py upload model.safetensors
-        if [ -f training_log.csv ]; then .venv/bin/python3 supabase_sync.py upload training_log.csv; fi
-        if [ -f elo_ratings.json ]; then .venv/bin/python3 supabase_sync.py upload elo_ratings.json; fi
-        if [ -f matches.jsonl ]; then .venv/bin/python3 supabase_sync.py upload matches.jsonl; fi
-        if [ -f hardware_telemetry.csv ]; then .venv/bin/python3 supabase_sync.py upload hardware_telemetry.csv; fi
-        if [ -f hardware_status.json ]; then .venv/bin/python3 supabase_sync.py upload hardware_status.json; fi
+    # Supabase: Fast asynchronous sync of model weights, checkpoints, logs, and telemetry
+    # Non-blocking in background so next iteration's self-play begins immediately on GPU!
+    if [ "$SYNC_SUPABASE" = true ] || [ -f ".env" ]; then
+        if [ -n "$SYNC_PID" ]; then
+            wait "$SYNC_PID" 2>/dev/null || true
+        fi
+        echo "☁️ Launching asynchronous Supabase sync for iteration $i (non-blocking)..."
+        (.venv/bin/python3 supabase_sync.py sync-iteration $CP_FLAG) > /tmp/supabase_sync.log 2>&1 &
+        SYNC_PID=$!
     fi
 
     # Smart pruning: last 10 + every MILESTONE_EVERY-th + iter 1
@@ -615,6 +614,12 @@ do
         done
     fi
 done
+
+# Wait for final iteration sync to complete before rating / shutting down
+if [ -n "$SYNC_PID" ]; then
+    echo "Waiting for final background Supabase sync to finish..."
+    wait "$SYNC_PID" 2>/dev/null || true
+fi
 
 # ============================================================================
 # Final Elo Rating

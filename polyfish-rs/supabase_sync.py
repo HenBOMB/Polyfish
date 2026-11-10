@@ -17,43 +17,31 @@ def get_client() -> Client:
         sys.exit(0)
     return create_client(url, key)
 
+def _upload_file(supabase: Client, file_path: str, bucket: str = "models", path_in_bucket: str = None) -> bool:
+    if not os.path.exists(file_path):
+        return False
+    filename = path_in_bucket or os.path.basename(file_path)
+    try:
+        with open(file_path, 'rb') as f:
+            supabase.storage.from_(bucket).upload(
+                file=f,
+                path=filename,
+                file_options={"cacheControl": "3600", "upsert": "true"}
+            )
+        return True
+    except Exception as e:
+        print(f"⚠️ Failed to upload {filename} to Supabase: {e}")
+        return False
+
 def upload(file_path: str, bucket: str = "models"):
     if not os.path.exists(file_path):
         print(f"File {file_path} not found. Skipping upload.")
         sys.exit(0)
     
     supabase = get_client()
-    filename = os.path.basename(file_path)
     print(f"⬆️ Uploading {file_path} to Supabase bucket '{bucket}'...")
-    
-    try:
-        with open(file_path, 'rb') as f:
-            # We use upsert to overwrite the existing latest model
-            supabase.storage.from_(bucket).upload(
-                file=f,
-                path=filename,
-                file_options={"cacheControl": "3600", "upsert": "true"}
-            )
+    if _upload_file(supabase, file_path, bucket=bucket):
         print("✅ Supabase upload complete.")
-        
-        # --- NEW: Also upload the latest checkpoint so we keep history ---
-        if filename == "model.safetensors":
-            import glob
-            checkpoints = glob.glob("checkpoints/model_checkpoint_iter*.safetensors")
-            if checkpoints:
-                latest_cp = max(checkpoints, key=os.path.getmtime)
-                cp_name = os.path.basename(latest_cp)
-                print(f"⬆️ Backing up latest checkpoint: {cp_name} to Supabase...")
-                with open(latest_cp, 'rb') as f_cp:
-                    supabase.storage.from_(bucket).upload(
-                        file=f_cp,
-                        path=cp_name,
-                        file_options={"cacheControl": "3600", "upsert": "true"}
-                    )
-                print(f"✅ Checkpoint {cp_name} backed up.")
-                
-    except Exception as e:
-        print(f"⚠️ Failed to upload to Supabase: {e}")
 
 def download(file_path: str, bucket: str = "models"):
     if os.path.exists(file_path):
@@ -146,7 +134,7 @@ def download_all_checkpoints(bucket: str = "models", min_iter: int = 0, matches_
     except Exception as e:
         print(f"⚠️ Failed to sync checkpoints: {e}")
 
-def backup_pod(bucket: str = "models"):
+def backup_pod(bucket: str = "models", sync_games: bool = False):
     import subprocess
     print("📦 Creating pod_state.tar.gz...")
     files_to_backup = [
@@ -169,10 +157,16 @@ def backup_pod(bucket: str = "models"):
         print("⚠️ No state files found to backup.")
         return
         
-    subprocess.run(["tar", "-czf", "pod_state.tar.gz"] + existing_files)
+    subprocess.run(["tar", "-czf", "pod_state.tar.gz"] + existing_files, check=True)
     upload("pod_state.tar.gz", bucket)
 
-    # Sync archive games individually (compressed with gzip) to avoid 50MB payload limits
+    if sync_games:
+        sync_archive_games(bucket)
+
+def sync_archive_games(bucket: str = "models"):
+    """Sync archive games individually (compressed with gzip) to avoid 50MB payload limits.
+    NOTE: Heavy operation (~35MB upload per game). Do NOT run synchronously in the hot loop.
+    """
     import glob
     import gzip
     import shutil
@@ -206,7 +200,46 @@ def backup_pod(bucket: str = "models"):
     except Exception as e:
         print(f"⚠️ Failed to sync archive games: {e}")
 
-def restore_pod(bucket: str = "models"):
+def sync_iteration(checkpoint: str = None, bucket: str = "models"):
+    """Fast, single-connection post-iteration upload.
+    Designed to run non-blocking in the background so the GPU is never idle.
+    Uploads:
+      - pod_state.tar.gz (packed state & telemetry, ~300KB)
+      - model.safetensors
+      - checkpoint file (if new milestone/checkpoint created)
+      - unbundled telemetry/dashboard files for real-time monitoring
+    """
+    supabase = get_client()
+    
+    # 1. State archive (lightweight ~300KB)
+    backup_pod(bucket=bucket, sync_games=False)
+    
+    # 2. Latest model weights
+    if os.path.exists("model.safetensors"):
+        print("⬆️ Syncing model.safetensors...")
+        _upload_file(supabase, "model.safetensors", bucket)
+        
+    # 3. Checkpoint (only if supplied for this iteration)
+    if checkpoint and os.path.exists(checkpoint):
+        cp_name = os.path.basename(checkpoint)
+        print(f"⬆️ Syncing checkpoint: {cp_name}...")
+        _upload_file(supabase, checkpoint, bucket)
+        
+    # 4. Individual files for dashboards / monitoring
+    dashboard_files = [
+        "training_log.csv",
+        "hardware_telemetry.csv",
+        "hardware_status.json",
+        "elo_ratings.json",
+        "matches.jsonl"
+    ]
+    for fname in dashboard_files:
+        if os.path.exists(fname):
+            _upload_file(supabase, fname, bucket)
+            
+    print("✅ Fast iteration sync complete.")
+
+def restore_pod(bucket: str = "models", restore_games: bool = False):
     import subprocess
     download("pod_state.tar.gz", bucket)
     if os.path.exists("pod_state.tar.gz"):
@@ -216,33 +249,34 @@ def restore_pod(bucket: str = "models"):
     else:
         print("⚠️ No pod_state.tar.gz found to restore.")
         
-    print("📦 Restoring archive games individually...")
-    import gzip
-    supabase = get_client()
-    try:
-        files = supabase.storage.from_(bucket).list()
-        os.makedirs("archive", exist_ok=True)
-        for f in files:
-            name = f.get("name", "")
-            if name.startswith("games_") and (name.endswith(".safetensors.gz") or name.endswith(".safetensors")):
-                is_gz = name.endswith(".safetensors.gz")
-                local_filename = name[:-3] if is_gz else name
-                local_path = os.path.join("archive", local_filename)
-                if not os.path.exists(local_path):
-                    print(f"⬇️ Downloading missing archive game: {name}...")
-                    data = supabase.storage.from_(bucket).download(name)
-                    with open(local_path, 'wb') as out_f:
-                        if is_gz:
-                            out_f.write(gzip.decompress(data))
-                        else:
-                            out_f.write(data)
-        print("✅ Archive games restore complete.")
-    except Exception as e:
-        print(f"⚠️ Failed to restore archive games: {e}")
+    if restore_games:
+        print("📦 Restoring archive games individually...")
+        import gzip
+        supabase = get_client()
+        try:
+            files = supabase.storage.from_(bucket).list()
+            os.makedirs("archive", exist_ok=True)
+            for f in files:
+                name = f.get("name", "")
+                if name.startswith("games_") and (name.endswith(".safetensors.gz") or name.endswith(".safetensors")):
+                    is_gz = name.endswith(".safetensors.gz")
+                    local_filename = name[:-3] if is_gz else name
+                    local_path = os.path.join("archive", local_filename)
+                    if not os.path.exists(local_path):
+                        print(f"⬇️ Downloading missing archive game: {name}...")
+                        data = supabase.storage.from_(bucket).download(name)
+                        with open(local_path, 'wb') as out_f:
+                            if is_gz:
+                                out_f.write(gzip.decompress(data))
+                            else:
+                                out_f.write(data)
+            print("✅ Archive games restore complete.")
+        except Exception as e:
+            print(f"⚠️ Failed to restore archive games: {e}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python supabase_sync.py [upload|download|download-checkpoint-iter|download-all-checkpoints] [file_path]")
+        print("Usage: python supabase_sync.py [upload|download|download-checkpoint-iter|download-all-checkpoints|sync-iteration|backup-pod|restore-pod|sync-archive] [file_path]")
         sys.exit(1)
     
     action = sys.argv[1]
@@ -271,7 +305,17 @@ if __name__ == "__main__":
         if len(sys.argv) > 3:
             matches_file = sys.argv[3]
         download_all_checkpoints(min_iter=min_iter, matches_file=matches_file)
+    elif action == "sync-iteration":
+        cp_arg = None
+        for idx, arg in enumerate(sys.argv):
+            if arg == "--checkpoint" and idx + 1 < len(sys.argv):
+                cp_arg = sys.argv[idx + 1]
+        sync_iteration(checkpoint=cp_arg)
     elif action == "backup-pod":
-        backup_pod()
+        include_games = "--include-games" in sys.argv
+        backup_pod(sync_games=include_games)
+    elif action == "sync-archive":
+        sync_archive_games()
     elif action == "restore-pod":
-        restore_pod()
+        include_games = "--include-games" in sys.argv
+        restore_pod(restore_games=include_games)
