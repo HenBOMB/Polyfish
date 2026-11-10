@@ -9,8 +9,8 @@ Every discovery documented below carries exact citations to the repository files
 ## 1. Search & MCTS Tree Dynamics
 
 ### 1.1 The Value Backpropagation Sign Error
-* **Discovered by**: Diagnosed by Claude Fable ([expert_review.md:11-13](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/expert_review.md#L11-L13)); Verified & Fixed by Verdi Kapuku ([notes.md:79-87](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes.md#L79-L87))
-* **Citations**: [expert_review.md:11-13, 72-99](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/expert_review.md#L11-L13), [notes.md:79-87](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes.md#L79-L87)
+* **Discovered by**: Diagnosed by Claude Fable ([expert_review.md:11-13](expert_review.md#L11-L13)); Verified & Fixed by Verdi Kapuku ([notes.md:79-87](notes.md#L79-L87))
+* **Citations**: [expert_review.md:11-13, 72-99](expert_review.md#L11-L13), [notes.md:79-87](notes.md#L79-L87)
 * **Finding**: In standard two-player games (like Chess), acting players alternate every move. In Polytopia, a player makes ~8–15 sequential moves per turn before calling `EndTurn`. MCTS backpropagation was negating the value sign on every tree edge (`value = -value`). As a consequence, during selection parents frequently preferred children whose evaluations were destructive to the acting player.
 * **Fix**: Value polarity was anchored to player ID transitions across `EndTurn` boundaries rather than edge depth parity.
 
@@ -22,7 +22,7 @@ Every discovery documented below carries exact citations to the repository files
 
 ### 1.3 Search Depth Limits on Turn Horizons (~8 Plies per Turn)
 * **Discovered by**: Verdi Kapuku
-* **Citations**: [notes.md:74-75](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes.md#L74-L75), [notes.md:180-186](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes.md#L180-L186), [hypothesis_driven_improvements.md:43-53](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/hypothesis_driven_improvements.md#L43-L53) (EXP 3)
+* **Citations**: [notes.md:74-75](notes.md#L74-L75), [notes.md:180-186](notes.md#L180-L186), [hypothesis_driven_improvements.md:43-53](hypothesis_driven_improvements.md#L43-L53) (EXP 3)
 * **Finding**: Branching factor analysis revealed that Polytopia has a narrow but very deep search tree within each turn (~8 plies to complete one turn). At 64 MCTS simulations, the search tree only reaches 2–3 plies deep. In EXP 3, quadrupling the budget from 64 to 256 simulations failed to speed up first-village capture times (7.9 $\to$ 7.3 turns) while reducing throughput by 2.3×.
 * **Lesson**: Reaching a village is a multi-turn walk beyond single-turn search horizons. Deepening single-ply search cannot replace directional priors and multi-turn value guidance.
 
@@ -32,21 +32,21 @@ Every discovery documented below carries exact citations to the repository files
 
 ### 2.1 Unanchored Self-Play Passivity Collapse
 * **Discovered by**: Verdi Kapuku
-* **Citation**: [notes.md:174-187](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes.md#L174-L187)
+* **Citation**: [notes.md:174-187](notes.md#L174-L187)
 * **Finding**: In run `1783285900`, pure outcome-driven self-play without heuristics suffered a catastrophic passivity collapse: captures plummeted from 6.5 to 3.2, attacks halved from 31 to 15, and average moves per game dropped from 592 to 460—even while policy cross-entropy loss *fell* from 3.12 to 2.70.
 * **Lesson**: The network learned to play mutual non-aggression and passivity because neither player knew how to close games. Unanchored self-play confidently reinforced its own degraded habits.
 
 ### 2.2 Behavior Cloning (BC) Bootstrap Unlock
 * **Discovered by**: Verdi Kapuku
-* **Citation**: [notes.md:188-205](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes.md#L188-L205)
+* **Citation**: [notes.md:188-205](notes.md#L188-L205)
 * **Finding**: To escape the passivity collapse, 1,024 games were generated using the network-free heuristic backend and pre-trained directly into fresh weights via supervised cross-entropy.
 * **Outcome**: Examination of the resulting model showed captures jumped to 7.72 per game and first village capture speed dropped to 6.9 turns. Behavior Cloning baked opening competence directly into the weights at full gradient strength.
 
 ### 2.3 The "Empty Label" & Min-Max Q-Noise Amplification
 * **Discovered by**: Verdi Kapuku
-* **Citation**: [notes.md:250-329](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes.md#L250-L329)
+* **Citation**: [notes.md:250-329](notes.md#L250-L329)
 * **Finding**: Per-decision trace logging revealed that relative score delta labels in mirror matches produced near-zero signal ($\approx 0$) because both identical copies of the model expanded at the same speed. Simultaneously, `sigma_completed_q` min-max normalized interior Q-values into $[0, 1]$, which multiplied residual noise by 5–6 logits during Sequential Halving. Search was actively destroying correct prior predictions.
-* **Fix**: Added anchor games against heuristic opponents ([notes.md:338-343](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes.md#L338-L343)) and introduced the in-tree trust gate $\beta_{\text{tree}}$ to scale Q-values.
+* **Fix**: Added anchor games against heuristic opponents ([notes.md:338-343](notes.md#L338-L343)) and introduced the in-tree trust gate $\beta_{\text{tree}}$ to scale Q-values.
 
 ### 2.4 The Breakthrough Run (First Legitimate Beat of Greedy)
 * **Discovered by**: HenBOMB
@@ -96,22 +96,22 @@ Every discovery documented below carries exact citations to the repository files
 
 ### 3.1 Doorstep Flight (Chebyshev vs. Manhattan Bug)
 * **Discovered by**: Verdi Kapuku
-* **Citation**: [hypothesis_driven_improvements.md:65-74](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/hypothesis_driven_improvements.md#L65-L74) (EXP 5)
+* **Citation**: [hypothesis_driven_improvements.md:65-74](hypothesis_driven_improvements.md#L65-L74) (EXP 5)
 * **Finding**: Units located two tiles away from a neutral village walked away 50% of the time. Investigation revealed distance math used Manhattan geometry ($|x_1 - x_2| + |y_1 - y_2|$) while Polytopia units move diagonally on a Chebyshev metric ($\max(|x_1 - x_2|, |y_1 - y_2|)$), causing distance calculations to misguide unit priorities.
 
 ### 3.2 Capture Outranking Attack
 * **Discovered by**: Verdi Kapuku
-* **Citation**: [hypothesis_driven_improvements.md:76-85](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/hypothesis_driven_improvements.md#L76-L85) (EXP 6)
+* **Citation**: [hypothesis_driven_improvements.md:76-85](hypothesis_driven_improvements.md#L76-L85) (EXP 6)
 * **Finding**: Best attack moves were scored at 110.0 while village captures were scored at 99.8 in move ordering. Units standing directly on villages frequently attacked passing enemies rather than securing the city. Village capture scores were elevated above all attack scores, raising village conversion to 100%.
 
 ### 3.3 Frontier Resource Beacon
 * **Discovered by**: Verdi Kapuku
-* **Citation**: [hypothesis_driven_improvements.md:98-108](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/hypothesis_driven_improvements.md#L98-L108) (EXP 8)
+* **Citation**: [hypothesis_driven_improvements.md:98-108](hypothesis_driven_improvements.md#L98-L108) (EXP 8)
 * **Finding**: In Polytopia, natural resources only spawn adjacent to villages. A resource on the edge of the fog indicates an undiscovered village. Adding a heuristic pull toward resources touching fog accelerated blind exploration, lowering conditional capture turn to 5.97.
 
 ### 3.4 Greedy Anchor Replacement
 * **Discovered by**: Verdi Kapuku
-* **Citation**: [hypothesis_driven_improvements.md:87-96](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/hypothesis_driven_improvements.md#L87-L96) (EXP 7)
+* **Citation**: [hypothesis_driven_improvements.md:87-96](hypothesis_driven_improvements.md#L87-L96) (EXP 7)
 * **Finding**: The anchor teacher seat originally ran rollout MCTS, which added noise and obscured tuned heuristics. Replacing the rollout teacher with pure greedy move scoring yielded the largest single jump in capture speed (8.9 $\to$ 6.47 turns).
 
 ### 3.5 Negative Population Income Penalty
@@ -125,29 +125,29 @@ Every discovery documented below carries exact citations to the repository files
 
 ### 4.1 Fog-of-War Memory Channels
 * **Discovered by**: HenBOMB
-* **Citations**: [notes-memory.md:1-145](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes-memory.md#L1-L145), [features.rs:116-128](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/features.rs#L116-L128), commit `88dcb24c`
+* **Citations**: [notes-memory.md:1-145](notes-memory.md#L1-L145), [features.rs:116-128](polyfish-rs/src/ai/features.rs#L116-L128), commit `88dcb24c`
 * **Finding**: In standard AlphaZero representations, units stepping into unexplored fog vanish instantly from the input tensor, creating complete tactical amnesia.
 * **Implementation**: Added 6 observation channels (`CH_MEM_ENEMY_SEEN`, `CH_MEM_ENEMY_HP`, `CH_MEM_ENEMY_ATTACK`, `CH_MEM_ENEMY_RANGED`, `CH_MEM_ENEMY_NAVAL`, `CH_MEM_ATTACKED_HERE`) with exponential decay ($0.85^{\Delta t}$) computed over an 8-turn horizon.
 
 ### 4.2 BatchNorm to GroupNorm Migration
 * **Discovered by**: Verdi Kapuku
-* **Citations**: [CLAUDE.md:150-153](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/CLAUDE.md#L150-L153), commit `d8e45d12`
+* **Citations**: [CLAUDE.md:150-153](CLAUDE.md#L150-L153), commit `d8e45d12`
 * **Finding**: BatchNorm created severe evaluation-time discrepancies due to mismatched running statistics between single-leaf inference and large training batches. Replaced with GroupNorm (`GN_GROUPS = 8`), unifying forward pass behavior across training and self-play.
 
 ### 4.3 Linear Pooling Paths (Dying ReLU Prevention)
 * **Discovered by**: HenBOMB
-* **Citation**: [CLAUDE.md:150-153](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/CLAUDE.md#L150-L153), commit `7c994745`
+* **Citation**: [CLAUDE.md:150-153](CLAUDE.md#L150-L153), commit `7c994745`
 * **Finding**: The 1-channel spatial pooling convolutions (`p_pool_conv`) originally used un-normalized ReLU activations, which caused irreversible dead-neuron collapse. Kept the pooling convs fully linear (no norm, no activation).
 
 ### 4.4 The Spatial Erasure Flaw of Global Pooling (EXP_ARCH_001)
 * **Discovered by**: HenBOMB & Antigravity
-* **Citations**: [`polyfish-rs/src/ai/network.rs:304-307`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/network.rs#L304-L307), [`polyfish-rs/tests/test_neural_behavioral_probe.rs:165-212`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/test_neural_behavioral_probe.rs#L165-L212)
+* **Citations**: [`polyfish-rs/src/ai/network.rs:304-307`](polyfish-rs/src/ai/network.rs#L304-L307), [`polyfish-rs/tests/test_neural_behavioral_probe.rs:165-212`](polyfish-rs/tests/test_neural_behavioral_probe.rs#L165-L212)
 * **Finding**: In `EXP_ARCH_001`, the value head replaced the original 1-channel bottleneck with global mean and max pooling across all 121 map tiles (`v_mean = v_spatial.mean(2)`, `v_max = v_spatial.amax(2)`). While this widened feature capacity, global average pooling across spatial dimensions is mathematically permutation-invariant ($P(\pi(X)) = P(X)$). It collapsed all local coordinate information: a threat or structure at coordinate $(x, y)$ was averaged into the entire board, diluting its signal by a factor of $\frac{1}{121} \approx 0.0083$.
 * **Pathology**: When an acting player stepped off their own capital to scout fog, the move revealed 3–4 new tiles, adding positive macro exploration features to the global sum. Because the capital loss was diluted by 121 while exploration gains summed across multiple tiles, the neural value head evaluated an undefended, threatened capital *higher* ($-0.029$) than an occupied, defended capital ($-0.109$). The network was architecturally incapable of associating state value with coordinate-specific vulnerabilities.
 
 ### 4.5 Dual-Path Value Head with Spatial Coordinate Awareness (EXP_ARCH_002)
 * **Discovered by**: HenBOMB & Antigravity
-* **Citations**: [`polyfish-rs/src/ai/network.rs:244,305-323,371-381`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/network.rs#L244), [`polyfish-rs/train.py:173-178,218-223`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/train.py#L173-L178), [`polyfish-rs/migrate_model.py:38-66`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/migrate_model.py#L38-L66)
+* **Citations**: [`polyfish-rs/src/ai/network.rs:244,305-323,371-381`](polyfish-rs/src/ai/network.rs#L244), [`polyfish-rs/train.py:173-178,218-223`](polyfish-rs/train.py#L173-L178), [`polyfish-rs/migrate_model.py:38-66`](polyfish-rs/migrate_model.py#L38-L66)
 * **Finding & Architecture**: To eliminate spatial coordinate erasure without resorting to ad-hoc domain heuristics, `EXP_ARCH_002` introduced a Dual-Path Value Head:
   1. **Path A (Local Spatial Coordinates)**: A $1\times 1$ convolution (`v_spatial_conv`, $64 \to 2$ channels) preserving the full $11\times 11$ coordinate grid, flattened to $2 \times 11 \times 11 = 242$ dimensions. Channel 0 learns friendly structure and garrison presence; Channel 1 learns hostile tactical threat zones.
   2. **Path B (Global Macro Context)**: Global mean and max pooling over the 64 trunk filters ($2 \times 64 = 128$ dimensions), retaining aggregate macro information (economy, tech level, total unit counts).
@@ -156,7 +156,7 @@ Every discovery documented below carries exact citations to the repository files
 
 ### 4.6 The Asymmetric Training Gap in Head-to-Head Architecture Evaluation
 * **Discovered by**: HenBOMB & Antigravity
-* **Citations**: [`polyfish-rs/arena_exp002_vs_iter129_50games.json`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/arena_exp002_vs_iter129_50games.json), [`polyfish-rs/tests/test_neural_behavioral_probe.rs:174-210,350-410`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/test_neural_behavioral_probe.rs)
+* **Citations**: [`polyfish-rs/arena_exp002_vs_iter129_50games.json`](polyfish-rs/arena_exp002_vs_iter129_50games.json), [`polyfish-rs/tests/test_neural_behavioral_probe.rs:174-210,350-410`](polyfish-rs/tests/test_neural_behavioral_probe.rs)
 * **Finding**: In a 50-game symmetric arena showdown, `EXP_ARCH_002` (Iter 100) lost to `EXP_ARCH_001` (Iter 129) **19 to 31 (38.0% win rate)**. 
 * **Forensic Diagnosis**:
   1. *Training Step Confounding*: `Iter 129` trained for 53 iterations from Iteration 76, compressing its policy loss to 2.5821 ($\text{perplexity} \approx 13.2$). `Iter 100` trained for only 24 iterations, leaving policy loss at 2.8563 ($\text{perplexity} \approx 17.4$).
@@ -165,7 +165,7 @@ Every discovery documented below carries exact citations to the repository files
 
 ### 4.7 Inversion of the Capital Abandonment Delusion ($\Delta < 0$) Under EXP_ARCH_002
 * **Discovered by**: HenBOMB & Antigravity
-* **Citations**: [`polyfish-rs/tests/test_neural_behavioral_probe.rs:439-470`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/test_neural_behavioral_probe.rs#L439-L470), [`polyfish-rs/model_exp002_iter129.safetensors`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/model_exp002_iter129.safetensors)
+* **Citations**: [`polyfish-rs/tests/test_neural_behavioral_probe.rs:439-470`](polyfish-rs/tests/test_neural_behavioral_probe.rs#L439-L470), [`polyfish-rs/model_exp002_iter129.safetensors`](polyfish-rs/model_exp002_iter129.safetensors)
 * **Finding**: As training progressed to Iteration 129 (53 training iterations from Iteration 76 foundation), the Dual-Path Value Head officially inverted the sign of the capital abandonment pathology:
   - `EXP_ARCH_001 (Iter 76 Baseline)`: Garrison $-0.123$, Abandoned $-0.072 \implies \Delta = \mathbf{+0.051}$
   - `EXP_ARCH_001 (Iter 129 Final)`: Garrison $-0.109$, Abandoned $-0.029 \implies \Delta = \mathbf{+0.079}$ (Delusion worsened by 54%)
@@ -175,7 +175,7 @@ Every discovery documented below carries exact citations to the repository files
 
 ### 4.8 Level-Pegging Architecture Arena Benchmark: The Defense-Snowball Paradox
 * **Discovered by**: HenBOMB & Antigravity
-* **Citations**: [`polyfish-rs/arena_exp002_iter130_vs_iter129_50games.json`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/arena_exp002_iter130_vs_iter129_50games.json), [`docs/research/04_ADVERSARIAL_DAGGER_TRACKING.md:144-162`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/docs/research/04_ADVERSARIAL_DAGGER_TRACKING.md#L144-L162)
+* **Citations**: [`polyfish-rs/arena_exp002_iter130_vs_iter129_50games.json`](polyfish-rs/arena_exp002_iter130_vs_iter129_50games.json), [`docs/research/04_ADVERSARIAL_DAGGER_TRACKING.md:144-162`](docs/research/04_ADVERSARIAL_DAGGER_TRACKING.md#L144-L162)
 * **Finding**: When training steps were fully equalized (54 iterations vs 53 iterations from foundation Iteration 76), `EXP_ARCH_002` (Iter 130) achieved **20 wins out of 50 games (40.0%)** against `EXP_ARCH_001` (Iter 129), with 95% Wilson CI $[27.6\%, 53.8\%]$.
 * **Seat Dynamics**: With the policy head compressed to match baseline ($P_{\text{loss}} \approx 2.66$), `EXP_ARCH_002` surged as Player 1 to a **52.0% win rate (13 / 25)** (a +20.0% improvement over Iter 100). Average score jumped by **+495.0 points** to 4147.8, and the deficit against `Iter 129` narrowed by +254.5 points.
 * **The Defense-Snowball Paradox**: Why does an architecturally superior model with a cured, calibrated value head ($\Delta = -0.028$ vs $+0.079$, $V_{\text{loss}} = 0.70$ vs $0.80$, $R^2 = 0.63$ vs $0.61$) score 40% instead of dominating?
@@ -189,12 +189,12 @@ Every discovery documented below carries exact citations to the repository files
 
 ### 5.1 The Strength Blind Spot
 * **Discovered by**: Verdi Kapuku
-* **Citation**: [hypothesis_driven_improvements.md:136-170](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/hypothesis_driven_improvements.md#L136-L170) (EXP 10)
+* **Citation**: [hypothesis_driven_improvements.md:136-170](hypothesis_driven_improvements.md#L136-L170) (EXP 10)
 * **Finding**: While behavioral metrics (first capture speed, SPT) steadily improved, the frozen-anchor Elo ladder revealed the network still lost ~2:1 against the greedy heuristic (25–34% win rate). Opening speed optimization had masked mid-game tactical incompetence.
 
 ### 5.2 Mid-Game Loss Autopsy (The Tech Trap)
 * **Discovered by**: Verdi Kapuku
-* **Citation**: [hypothesis_driven_improvements.md:187-205](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/hypothesis_driven_improvements.md#L187-L205) (EXP_ELO_001)
+* **Citation**: [hypothesis_driven_improvements.md:187-205](hypothesis_driven_improvements.md#L187-L205) (EXP_ELO_001)
 * **Finding**: Detailed telemetry identified the exact causal chain behind losses against Greedy:
   1. *Unit Production Deficit*: Model produced 1.8 units by turn 4 vs. Greedy's 3.0.
   2. *Expansion Stagnation*: Model grabbed one village and stopped, reaching a 3rd city in only 39% of games vs. Greedy's 81%.
@@ -211,7 +211,7 @@ Every discovery documented below carries exact citations to the repository files
 
 ### 6.1 Apple Metal Pipelined Inference Scaling (31 $\to$ 578 moves/sec)
 * **Discovered by**: Verdi Kapuku
-* **Citations**: [notes.md:128-142](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/notes.md#L128-L142), [expert_boost_throughput.md:28-40](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/expert_boost_throughput.md#L28-L40)
+* **Citations**: [notes.md:128-142](notes.md#L128-L142), [expert_boost_throughput.md:28-40](expert_boost_throughput.md#L28-L40)
 * **Finding**: Profiled Candle's Metal performance and identified severe CPU-GPU synchronization stalls from repeated `.to_device(Cpu)` readbacks. Replaced with MPSGraph, cached executables, and pipelined workers, accelerating self-play throughput from 31 to ~578–650 moves/sec.
 
 ### 6.2 Autonomous RunPod All-Local Pipeline

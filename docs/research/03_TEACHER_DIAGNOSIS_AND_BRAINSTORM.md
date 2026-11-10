@@ -46,7 +46,7 @@ To enable genuine adversarial lookahead, the search engine must realistically mo
 
 ### 3.1 Belief-State In-Tree Opponent Modeling
 Under Fog of War (FOW), the root player cannot see through the fog. Therefore, an in-tree opponent cannot play with global knowledge without cheating.
-- **Current Foundation**: [`clone_for_mcts(pov)`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/game.rs#L345) constructs a belief-state projection containing only information revealed to the root player.
+- **Current Foundation**: [`clone_for_mcts(pov)`](../../polyfish-rs/src/game.rs#L345) constructs a belief-state projection containing only information revealed to the root player.
 - **Turn Handover**: When `adversarial_search` is active, `simulate_move(EndTurn)` switches `current_player_turn_id` to the opponent instead of deleting the turn.
 
 ### 3.2 In-Tree Opponent Policy Selection

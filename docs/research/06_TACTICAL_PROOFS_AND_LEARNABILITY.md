@@ -16,7 +16,7 @@ This document catalogues the formal **Proof Suite** implemented in `polyfish-rs`
 All proofs listed below are covered by deterministic integration tests in the repository and run as part of CI (`cargo test`).
 
 ### Proof #1: Instant Fatal Retaliation
-* **Test:** [`polyfish-rs/tests/adversarial_search.rs::proof_adversarial_tactics_retaliation_and_bad_trades`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/adversarial_search.rs#L318)
+* **Test:** [`polyfish-rs/tests/adversarial_search.rs::proof_adversarial_tactics_retaliation_and_bad_trades`](../../polyfish-rs/tests/adversarial_search.rs#L318)
 * **Mechanic:** In Polytopia, combat damage is calculated simultaneously. The defender retaliates immediately during the attacker's own turn using its current health and defense multiplier.
 * **Deterministic Verification:**
   - Setup: A 3.0 HP Warrior attacks a 15.0 HP Defender.
@@ -27,7 +27,7 @@ All proofs listed below are covered by deterministic integration tests in the re
 ---
 
 ### Proof #2: In-Tree Adversarial Punishment (Unfavorable Trades)
-* **Test:** [`polyfish-rs/tests/adversarial_search.rs::proof_adversarial_tactics_retaliation_and_bad_trades`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/adversarial_search.rs#L368)
+* **Test:** [`polyfish-rs/tests/adversarial_search.rs::proof_adversarial_tactics_retaliation_and_bad_trades`](../../polyfish-rs/tests/adversarial_search.rs#L368)
 * **Mechanic:** Attacking a high-defense unit with a full-health unit often leaves the attacker crippled. The fatal blow does not happen on turn 1, but on the opponent's counter-attack on turn 2.
 * **Deterministic Verification:**
   - Setup: 10.0 HP Warrior attacks a 15.0 HP Defender.
@@ -42,8 +42,8 @@ All proofs listed below are covered by deterministic integration tests in the re
 ---
 
 ### Proof #3: Rider Hit-and-Run (Escape Mechanic)
-* **Test:** [`polyfish-rs/tests/adversarial_search.rs::proof_adversarial_tactics_rider_hit_and_run_escape`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/adversarial_search.rs#L468)
-* **Mechanic:** Units with `SkillType::Escape` (e.g. Riders) have `moved` reset to `false` after attacking ([`actions/units.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/actions/units.rs#L1470)). This permits a subsequent `StepMove` on the same turn.
+* **Test:** [`polyfish-rs/tests/adversarial_search.rs::proof_adversarial_tactics_rider_hit_and_run_escape`](../../polyfish-rs/tests/adversarial_search.rs#L468)
+* **Mechanic:** Units with `SkillType::Escape` (e.g. Riders) have `moved` reset to `false` after attacking ([`actions/units.rs`](../../polyfish-rs/src/actions/units.rs#L1470)). This permits a subsequent `StepMove` on the same turn.
 * **Deterministic Verification:**
   - Setup: P1 Rider at $(x, y)$, P2 Warrior at $(x+1, y)$ (distance 1), safe retreat tile at $(x-1, y)$ (distance 2 from Warrior).
   - **Branch A (Attack and Stay):**
@@ -62,7 +62,7 @@ All proofs listed below are covered by deterministic integration tests in the re
 ---
 
 ### Proof #4: City/Capital Infiltration Threat
-* **Test:** [`polyfish-rs/tests/adversarial_search.rs::in_tree_opponent_can_threaten_an_undefended_city`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/adversarial_search.rs#L226)
+* **Test:** [`polyfish-rs/tests/adversarial_search.rs::in_tree_opponent_can_threaten_an_undefended_city`](../../polyfish-rs/tests/adversarial_search.rs#L226)
 * **Mechanic:** Walking a defender off a city when an enemy unit is nearby allows the enemy to step onto and capture/siege the city on the very next turn.
 * **Deterministic Verification:**
   - In adversarial mode, moving off the capital and playing `EndTurn` immediately exposes legal enemy moves (`Step`, `Attack`, `Capture`) targeting the capital tile.
@@ -72,7 +72,7 @@ All proofs listed below are covered by deterministic integration tests in the re
 ---
 
 ### Proof #5: Non-Viable Technology Pruning
-* **Test:** [`polyfish-rs/tests/test_tech_pruning.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/test_tech_pruning.rs)
+* **Test:** [`polyfish-rs/tests/test_tech_pruning.rs`](../../polyfish-rs/tests/test_tech_pruning.rs)
 * **Mechanic:** Physical impossibilities (e.g. Sailing on waterless maps, Farming with 0 crops) and unactivatable Tier 2 investments (Trade without 5 stars liquid capital) waste search budget.
 * **Deterministic Verification:**
   - Waterless maps mask Sailing/Aquatism to $-f32::\text{INFINITY}$, removing them from MCTS prior candidates entirely.
@@ -82,7 +82,7 @@ All proofs listed below are covered by deterministic integration tests in the re
 ---
 
 ### Proof #6: Fog-of-War Horizon Barrier (POMDP Observation Erasure)
-* **Test:** [`polyfish-rs/tests/test_category_2_proofs.rs::proof_category_2_item_1_fow_horizon_barrier`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/test_category_2_proofs.rs#L34)
+* **Test:** [`polyfish-rs/tests/test_category_2_proofs.rs::proof_category_2_item_1_fow_horizon_barrier`](../../polyfish-rs/tests/test_category_2_proofs.rs#L34)
 * **Mechanic:** In POMDPs, the agent cannot learn from what it cannot observe. `clone_for_mcts` completely blanks out unexplored terrain, structures, and units under fog.
 * **Deterministic Verification:**
   - Real game state contains hidden villages and ruins.
@@ -93,7 +93,7 @@ All proofs listed below are covered by deterministic integration tests in the re
 ---
 
 ### Proof #7: Top-K Gumbel Candidate Displacement
-* **Test:** [`polyfish-rs/tests/test_category_2_proofs.rs::proof_category_2_item_2_top_k_gumbel_displacement`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/test_category_2_proofs.rs#L85)
+* **Test:** [`polyfish-rs/tests/test_category_2_proofs.rs::proof_category_2_item_2_top_k_gumbel_displacement`](../../polyfish-rs/tests/test_category_2_proofs.rs#L85)
 * **Mechanic:** Gumbel noise $g \sim \text{Gumbel}(0, 1)$ exhibits heavy right-tail extremes across large legal move sets ($N=50$). When dead moves are unpruned, extreme tail draws displace high-value moves from the Top-$K$ ($K=4$) candidate cut.
 * **Deterministic Verification:**
   - Simulated 1,000 trials with 49 unpruned junk moves ($\ell = 0.0$) and 1 critical move ($\ell = 1.5$).
@@ -105,7 +105,7 @@ All proofs listed below are covered by deterministic integration tests in the re
 ---
 
 ### Proof #8: Teacher Poisoning Under Supervised DAgger Distillation
-* **Test:** [`polyfish-rs/tests/test_category_2_proofs.rs::proof_category_2_item_3_teacher_poisoning_dagger`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/test_category_2_proofs.rs#L182)
+* **Test:** [`polyfish-rs/tests/test_category_2_proofs.rs::proof_category_2_item_3_teacher_poisoning_dagger`](../../polyfish-rs/tests/test_category_2_proofs.rs#L182)
 * **Mechanic:** When training under DAgger imitation learning, the student is supervised by the heuristic teacher's target distribution $\pi^*_{\text{teacher}}$. If the teacher has an inverted heuristic (preferring PopGrowth over BorderGrowth for city territory $\ge 10$), the student is punished for selecting the superior move.
 * **Deterministic Verification:**
   - Heuristic teacher scores PopGrowth at $208.0$ and BorderGrowth at $205.0$ ($\Delta = +3.0$), yielding $\pi^*_{\text{teacher}}(\text{PopGrowth}) = 0.953$ and $\pi^*_{\text{teacher}}(\text{BorderGrowth}) = 0.047$.

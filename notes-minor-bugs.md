@@ -8,9 +8,9 @@ This document catalogs minor bugs, technical debt, and compiler/Clippy warnings 
 
 - **Severity**: Low / Platform-specific
 - **Files**:
-  - [`polyfish-rs/src/ai/metal_network.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/metal_network.rs#L645-L666)
-  - [`polyfish-rs/examples/metal_parity.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/examples/metal_parity.rs)
-  - [`polyfish-rs/tests/test_backend_weight_keys.py`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/test_backend_weight_keys.py)
+  - [`polyfish-rs/src/ai/metal_network.rs`](polyfish-rs/src/ai/metal_network.rs#L645-L666)
+  - [`polyfish-rs/examples/metal_parity.rs`](polyfish-rs/examples/metal_parity.rs)
+  - [`polyfish-rs/tests/test_backend_weight_keys.py`](polyfish-rs/tests/test_backend_weight_keys.py)
 - **Description**:
   The Metal backend (`PolyZeroMetalNet`) was not migrated when the dual-path value head architecture (`EXP_ARCH_002`) was introduced. It lacks `v_spatial_conv` (a 1x1 Conv2d with 2 filters) and still expects `v_fc1` to take `2 * filters = 128` inputs (from pooled mean and max) rather than `dual_path_in_dim = 370` inputs (`242` spatial + `128` pooled).
 - **Why It Does NOT Impact Exp 2**:
@@ -24,7 +24,7 @@ This document catalogs minor bugs, technical debt, and compiler/Clippy warnings 
 
 - **Severity**: Low / Test Harness
 - **Files**:
-  - [`polyfish-rs/tests/test_neural_behavioral_probe.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/tests/test_neural_behavioral_probe.rs#L27-L33)
+  - [`polyfish-rs/tests/test_neural_behavioral_probe.rs`](polyfish-rs/tests/test_neural_behavioral_probe.rs#L27-L33)
   - Lines: 174–175, 320–321, 387–388
 - **Description**:
   The zero-search tactical interpretability probe test directly executes `load_network("model_iter129.safetensors")` and `load_network("model_dagger_foundation.safetensors")` without verifying whether those checkpoint files exist on disk, panicking if they are missing.
@@ -39,11 +39,11 @@ This document catalogs minor bugs, technical debt, and compiler/Clippy warnings 
 
 - **Severity**: Low / Dead Code & Clippy Warning
 - **Files**:
-  - [`polyfish-rs/src/ai/mcts_zero.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/mcts_zero.rs#L289) (`pub const TEMPERATURE_MOVE_THRESHOLD: usize = 0;`)
-  - [`polyfish-rs/src/ai/mcts_zero.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/mcts_zero.rs#L388)
-  - [`polyfish-rs/src/ai/gumbel_mcts.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/gumbel_mcts.rs#L394)
-  - [`polyfish-rs/src/ai/heuristic_mcts.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/heuristic_mcts.rs#L217)
-  - [`polyfish-rs/src/ai/gene_agent.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/gene_agent.rs#L162)
+  - [`polyfish-rs/src/ai/mcts_zero.rs`](polyfish-rs/src/ai/mcts_zero.rs#L289) (`pub const TEMPERATURE_MOVE_THRESHOLD: usize = 0;`)
+  - [`polyfish-rs/src/ai/mcts_zero.rs`](polyfish-rs/src/ai/mcts_zero.rs#L388)
+  - [`polyfish-rs/src/ai/gumbel_mcts.rs`](polyfish-rs/src/ai/gumbel_mcts.rs#L394)
+  - [`polyfish-rs/src/ai/heuristic_mcts.rs`](polyfish-rs/src/ai/heuristic_mcts.rs#L217)
+  - [`polyfish-rs/src/ai/gene_agent.rs`](polyfish-rs/src/ai/gene_agent.rs#L162)
 - **Description**:
   `TEMPERATURE_MOVE_THRESHOLD` is statically set to `0: usize`. Comparisons of the form `if move_count < TEMPERATURE_MOVE_THRESHOLD` are always false because an unsigned `usize` cannot be strictly less than zero. Clippy warns:
   `comparison involving the minimum or maximum element for this type contains a case that is always true or always false`.
@@ -58,7 +58,7 @@ This document catalogs minor bugs, technical debt, and compiler/Clippy warnings 
 
 - **Severity**: Low / Deserialization Shadowing
 - **Files**:
-  - [`polyfish-rs/src/ai/genes.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/genes.rs#L162-L169)
+  - [`polyfish-rs/src/ai/genes.rs`](polyfish-rs/src/ai/genes.rs#L162-L169)
 - **Description**:
   In `EvaluatorGenes`, lines 152–159 specify:
   ```rust
@@ -89,7 +89,7 @@ This document catalogs minor bugs, technical debt, and compiler/Clippy warnings 
 
 - **Severity**: Low / Code Smells
 - **Files**:
-  - [`polyfish-rs/src/ai/mcts_zero.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/mcts_zero.rs#L504-L547)
+  - [`polyfish-rs/src/ai/mcts_zero.rs`](polyfish-rs/src/ai/mcts_zero.rs#L504-L547)
 - **Description**:
   A `loop { ... }` construct around root child selection unconditionally exits via `break Some(...)` or `break None`. The loop never executes more than one iteration. Clippy warns:
   `this loop could be written as a block or an if`.
@@ -104,7 +104,7 @@ This document catalogs minor bugs, technical debt, and compiler/Clippy warnings 
 
 - **Severity**: Low / Compiler Deprecation Warnings
 - **Files**:
-  - [`polyfish-rs/src/ai/genes.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/genes.rs#L750-L757, #L879-L959)
+  - [`polyfish-rs/src/ai/genes.rs`](polyfish-rs/src/ai/genes.rs#L750-L757, #L879-L959)
 - **Description**:
   Uses `rand::thread_rng()` (renamed to `rng()`), `rng.r#gen()` (renamed to `random()` to avoid keyword collision in Rust 2024), and `rng.gen_range()` (renamed to `random_range()`).
 - **Why It Does NOT Impact Exp 2**:
@@ -118,9 +118,9 @@ This document catalogs minor bugs, technical debt, and compiler/Clippy warnings 
 
 - **Severity**: Low / Hygiene
 - **Files**:
-  - [`polyfish-rs/src/bin/self_play.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/bin/self_play.rs#L9, #L30, #L50-L57, #L99)
-  - [`polyfish-rs/src/bin/extract_versions.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/bin/extract_versions.rs#L4)
-  - [`polyfish-rs/src/ai/gumbel_mcts.rs`](file:///mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/src/ai/gumbel_mcts.rs#L1330) (`unused_mut`)
+  - [`polyfish-rs/src/bin/self_play.rs`](polyfish-rs/src/bin/self_play.rs#L9, #L30, #L50-L57, #L99)
+  - [`polyfish-rs/src/bin/extract_versions.rs`](polyfish-rs/src/bin/extract_versions.rs#L4)
+  - [`polyfish-rs/src/ai/gumbel_mcts.rs`](polyfish-rs/src/ai/gumbel_mcts.rs#L1330) (`unused_mut`)
 - **Description**:
   Unused constants (`NEAR_DELTA_TURNS`, `NEAR_DELTA_NORM_FRAC`, `NEAR_DELTA_NORM_FLOOR`, `NEAR_DELTA_W`), unused imports (`BackendSpec`, `IntoEnumIterator`, `PathBuf`), and an unnecessary `mut` qualifier.
 - **Why It Does NOT Impact Exp 2**:
