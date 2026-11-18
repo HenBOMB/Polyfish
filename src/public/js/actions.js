@@ -1,11 +1,9 @@
 
 function playMove(move) {
+    if (REPLAY_MODE) return;
     renderer.clearMoveHighlight();
     document.querySelectorAll('.move-overlay').forEach(el => el.remove());
     document.querySelectorAll('.combat-preview').forEach(el => el.remove());
-
-    // Reset pending state whenever a move is played
-    resetMctsButton();
 
     if (graphicalMatch) {
         playGraphicalMove(move);
@@ -35,32 +33,11 @@ function playMove(move) {
         })
         .finally(() => {
             document.querySelectorAll('.rts-btn').forEach(b => b.disabled = false);
+            const tribe = GAME_STATE.tribes[GAME_STATE.settings.currentPlayerTurnId];
+            if (tribe) updateTurnIndicator(tribe);
         });
 }
 
-
-async function pollTrainingStatus() {
-    try {
-        const res = await fetch('/train/status');
-        if (!res.ok) return;
-        const data = await res.json();
-
-        if (data.pid) {
-            trainingStatusHUD.classList.remove('hidden');
-            if (data.isRunning) {
-                trainingStatusHUD.textContent = "TRAINING...";
-                trainingStatusHUD.className = "training-led active";
-            } else {
-                trainingStatusHUD.textContent = "FINISHED";
-                trainingStatusHUD.className = "training-led";
-            }
-        } else {
-            trainingStatusHUD.classList.add('hidden');
-        }
-    } catch (e) {
-        console.error("Status check failed", e);
-    }
-}
 
 async function simulateExplorer(startIdx) {
     try {

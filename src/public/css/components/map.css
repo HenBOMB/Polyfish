@@ -400,7 +400,7 @@
     border-radius: 4px;
     font-weight: bold;
     font-size: 0.9em;
-    margin-left: 10px;
+    margin: 0;
     display: inline-flex;
     align-items: center;
     white-space: nowrap;
@@ -408,10 +408,9 @@
 }
 
 #ai-turn-indicator.your-turn {
-    border-color: var(--neon-green);
-    color: var(--neon-green);
+    border-color: var(--rts-green);
+    color: var(--rts-green);
     background: rgba(0, 255, 0, 0.1);
-    animation: pulse-green 2s infinite;
 }
 
 .hidden {

@@ -60,7 +60,12 @@ function enterReplayMode(data, filename) {
     document.getElementById('replay-controls').classList.remove('hidden');
     document.getElementById('replay-title').textContent =
         data.metadata?.gameId || filename || 'Replay';
+    currentLegalMoves = [];
+    renderer.clear();
+    aiTurnIndicator.textContent = 'Replay';
+    aiTurnIndicator.classList.remove('your-turn');
     applyReplayState(data);
+    focusCamera();
 }
 
 function exitReplayMode() {

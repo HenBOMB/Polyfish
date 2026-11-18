@@ -4,9 +4,7 @@ let graphicalBusy = false;
 const researchSetup = document.getElementById('research-setup');
 const researchForm = researchSetup.querySelector('form');
 const researchSetupError = document.getElementById('research-setup-error');
-const classicControls = document.querySelectorAll(
-    '#btn-fow, #btn-predictions, #btn-rng, #btn-save, #btn-interactive, #btn-train-mode, #btn-train, .ai-panel, #mcts-panel, #eval-bar'
-);
+const fogControl = document.getElementById('btn-fow');
 let learnedAvailable = false;
 
 async function researchRequest(path, body) {
@@ -20,16 +18,14 @@ async function researchRequest(path, body) {
 }
 
 function showGraphicalTurn() {
-    classicControls.forEach(control => control.classList.toggle('hidden', Boolean(graphicalMatch)));
-    const endTurn = document.getElementById('btn-end-turn');
-    if (!graphicalMatch) {
-        endTurn.disabled = false;
-        return false;
-    }
+    fogControl.classList.toggle('hidden', Boolean(graphicalMatch));
+    fogControl.setAttribute('aria-pressed', ENABLE_FOW);
+    if (!graphicalMatch) return false;
 
     const { botTurn, opponent, result } = graphicalMatch;
     const finished = result.status !== 'inProgress';
-    endTurn.disabled = graphicalBusy || botTurn || finished;
+    document.getElementById('btn-end-turn').disabled = graphicalBusy || botTurn || finished
+        || !currentLegalMoves.some(move => move?.moveType === 10);
     aiTurnIndicator.classList.remove('hidden');
     aiTurnIndicator.classList.toggle('your-turn', !botTurn && !finished);
     if (result.status === 'won') {
