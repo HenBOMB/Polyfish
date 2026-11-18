@@ -394,7 +394,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     // 3. Terrain Generation
     let land_ratio = match settings.map_type {
         MapType::None => 0.5,
-        MapType::Drylands => 0.95,
+        MapType::Drylands => 1.0,
         MapType::Lakes => 0.72,
         MapType::Continents => 0.45,
         MapType::Pangea => 0.78,
@@ -407,22 +407,10 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         }
     }
 
-    let target_land = (tile_count as f32 * land_ratio) as usize;
-    let mut current_land = is_land.iter().filter(|&&l| l).count();
-
     if settings.map_type == MapType::Drylands {
-        // Drylands is almost entirely land
-        let max_attempts = tile_count as usize * 10;
-        let mut attempts = 0;
-        while current_land < target_land && attempts < max_attempts {
-            let idx = rng.random_range(0..tile_count) as usize;
-            if !is_land[idx] {
-                is_land[idx] = true;
-                current_land += 1;
-            }
-            attempts += 1;
-        }
+        is_land.fill(true);
     } else {
+        let target_land = (tile_count as f32 * land_ratio) as usize;
         // Polytopia-style 2D Procedural Noise Pipeline (GenerateNoise -> SmoothNoise -> SetTerrainFromNoise)
         let mut noise = vec![0.0f32; tile_count as usize];
 
@@ -1176,29 +1164,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                         }
                     }
                     _ => {}
-                }
-            }
-        }
-    }
-
-    // Drylands: Kickoo/Aquarion capitals get 2 water tiles with fish
-    if settings.map_type == MapType::Drylands {
-        for &cap in &capital_cells {
-            let tribe = map[cap as usize]
-                .tribe_affinity
-                .unwrap_or(TribeType::Imperius);
-            if tribe == TribeType::Kickoo || tribe == TribeType::Aquarion {
-                let neighbors = plus_sign(cap, size);
-                let mut placed = 0;
-                for n in neighbors {
-                    if placed >= 2 {
-                        break;
-                    }
-                    if map[n as usize].terrain_type != TerrainType::Water {
-                        map[n as usize].terrain_type = TerrainType::Water;
-                        map[n as usize].above = Some("fish".to_string());
-                        placed += 1;
-                    }
                 }
             }
         }

@@ -8,7 +8,7 @@ From `polyfish-rs/`, start the Rust server and visit [the simulator](http://127.
 POLYFISH_LISTEN=127.0.0.1:3000 cargo run --locked --release --no-default-features --bin polyfish
 ```
 
-Select a board size, tribes, and opponent. Enter a seed to reproduce the map or leave it blank for a random one. Select one of your units and a highlighted destination, or choose a move in the action panel. Use the save and replay controls to open a local state or canonical replay. A compatible `model.safetensors` in the server's working directory enables the learned opponent on an 11×11 board.
+Select a board size and opponent. Both tribes default to Random, which uses the match seed to choose among Xin-Xi, Imperius, Bardur, and Oumaji. Enter a seed to reproduce the matchup and map or leave it blank for a random one. New Drylands maps start on land, with fishing tiles for tribes that require them. Select one of your units and a highlighted destination, or choose a move in the action panel. Use the save and replay controls to open a local state or canonical replay. A compatible `model.safetensors` in the server's working directory enables the learned opponent on an 11×11 board.
 
 To generate a model-free replay, run:
 
@@ -23,6 +23,8 @@ For checkpoint training, run `self_play --opponent-preset easy|normal|expert` wi
 ## Reproduce the pilots
 
 Pin [GAIGResearch/Tribes](https://github.com/GAIGResearch/Tribes) to `015a551d1a6be69b5931788fcc418e4c51eb8ea1`. A local JDK and the corresponding [JavaFX Base](https://repo.maven.apache.org/maven2/org/openjfx/javafx-base/22.0.2/) platform jar are required. The paired pilot builds both sources and records elapsed times, legal-action counts, and runtime details.
+
+The archived native match timings in [engine-pilot.json](results/engine-pilot.json) used the Drylands generator at `c038708d`. The current Drylands generator produces different maps from those seeds. [simulator-smoke.jsonl](results/simulator-smoke.jsonl) records the current browser and headless match verification.
 
 ```sh
 python3 research/run_engine_pilot.py /path/to/Tribes /path/to/javafx-base.jar /tmp/engine-pilot.json

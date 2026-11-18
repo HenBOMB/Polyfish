@@ -4,7 +4,7 @@ use polyfish::moves::EndTurnMove;
 use polyfish::research::{
     self, EXPERT_BUDGET, MatchConfig, MatchResult, Opponent, OpponentPreset, observation,
 };
-use polyfish::types::{MapSize, ModeType, ResourceType, TerrainType, TribeType};
+use polyfish::types::{MapSize, ModeType, ResourceType, StructureType, TerrainType, TribeType};
 
 fn fixture(size: MapSize) -> Game {
     research::new_match(
@@ -13,6 +13,64 @@ fn fixture(size: MapSize) -> Game {
         42,
         MatchConfig::new(Opponent::Expert, 2),
     )
+}
+
+#[test]
+fn drylands_uses_the_selected_climates_without_open_water() {
+    for size in [MapSize::Tiny, MapSize::Small, MapSize::Normal] {
+        let game = fixture(size);
+        for tile in game.state.tiles.values() {
+            assert!(matches!(
+                tile.climate,
+                TribeType::Imperius | TribeType::Bardur
+            ));
+            assert!(!matches!(
+                tile.terrain_type,
+                TerrainType::Water | TerrainType::Ocean
+            ));
+            if tile.owner > 0 {
+                assert_eq!(tile.climate, game.state.tribes[&tile.owner].tribe_type);
+            }
+        }
+    }
+}
+
+#[test]
+fn drylands_keeps_two_fishing_tiles_for_water_tribes() {
+    for tribe in [TribeType::Kickoo, TribeType::Aquarion] {
+        for seed in 0..12 {
+            let game = research::new_match(
+                MapSize::Tiny,
+                [TribeType::Imperius, tribe],
+                seed,
+                MatchConfig::new(Opponent::Human, 2),
+            );
+            let water: Vec<_> = game
+                .state
+                .tiles
+                .values()
+                .filter(|tile| matches!(tile.terrain_type, TerrainType::Water | TerrainType::Ocean))
+                .collect();
+            assert_eq!(water.len(), 2, "{tribe:?}, seed {seed}");
+            for tile in water {
+                let index = tile.coords.idx;
+                assert_eq!(tile.owner, 2);
+                assert_eq!(tile.terrain_type, TerrainType::Water);
+                assert_eq!(
+                    game.state.resources[&index].as_ref().unwrap().resource_type,
+                    ResourceType::Fish
+                );
+                assert_ne!(
+                    game.state
+                        .structures
+                        .get(&index)
+                        .and_then(Option::as_ref)
+                        .map(|structure| structure.structure_type),
+                    Some(StructureType::Lighthouse)
+                );
+            }
+        }
+    }
 }
 
 fn turn(game: &mut Game, preset: OpponentPreset) -> Vec<serde_json::Value> {

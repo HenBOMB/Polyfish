@@ -421,18 +421,16 @@ function updateSelectionInfo(clickX = null, clickY = null) {
     } else {
         const city = Object.values(GAME_STATE.tribes).flatMap(t => t.cities || []).find(c => (c.idx) === idx);
         if (city) {
-            const tribeName = TRIBE_ID_2_NAME[city.tribe?.type || GAME_STATE.tribes[city.owner]?.type];
+            const tribeType = city.tribe?.type || GAME_STATE.tribes[city.owner]?.type;
+            const tribeName = TRIBE_ID_2_NAME[tribeType];
             title = city.name || (tile.capitalOf > 0 ? "Capital" : "City");
             subtitle = `${tribeName} Territory`;
-            const climateIndex = CLIMATE_IDS[tribeName];
+            const climateIndex = terrainTextureIndex(tribeType);
             thumbFile = `buildings/${tribeName}/Default/Houses/House_${climateIndex}_5`;
         } else {
             title = resourceName ? `${terrainName}, ${resourceName}` : terrainName;
             subtitle = resourceName ? "Extract this resource to upgrade your city" : "A sturdy foundation for your empire";
-            thumbFile = `terrain/tiles/ground_${tile.climate === 17 ? 16 : tile.climate}`;
-            if (tile.type === 1) thumbFile = 'terrain/water/water';
-            if (tile.type === 2) thumbFile = 'terrain/water/ocean';
-            if (resourceVisible) thumbFile = getResourceFile(resource.type, tile.climate === 17 ? 16 : tile.climate);
+            thumbFile = resourceVisible ? getResourceFile(resource.type, tile.climate) : getGroundFile(tile.type, tile.climate);
         }
     }
 
@@ -828,21 +826,24 @@ function getUnitAt(idx) {
 }
 
 function getStructureFile(type, climate) {
+    const tribeName = TRIBE_ID_2_NAME[climate];
+    const textureIndex = terrainTextureIndex(climate);
     const map = {
         1: `buildings/common/Tribe`,
         2: `terrain/misc/ResourceGFX_ruin`,
         3: `misc/Road`,
         5: `buildings/common/Farm`,
-        6: `buildings/common/Windmill`,
+        6: 'buildings/common/Windmill_0',
         8: `buildings/common/Port`,
         12: `buildings/common/Lumber Hut`,
-        13: `buildings/common/Sawmill`,
+        13: 'buildings/common/Sawmill_1',
         21: `buildings/common/Mine`,
-        22: `buildings/common/Forge`,
-        27: `buildings/${CLIMATE_IDS[climate]}/Default/Monuments/Monument5_${climate - 1}`,
-        28: `buildings/${CLIMATE_IDS[climate]}/Default/Monuments/Monument6_${climate - 1}`,
-        29: `buildings/${CLIMATE_IDS[climate]}/Default/Monuments/Monument7_${climate - 1}`,
+        22: 'buildings/common/Forge_1',
+        27: `buildings/${tribeName}/Default/Monuments/Monument5_${textureIndex}`,
+        28: `buildings/${tribeName}/Default/Monuments/Monument6_${textureIndex}`,
+        29: `buildings/${tribeName}/Default/Monuments/Monument7_${textureIndex}`,
         37: `buildings/Cymanti/Default/Unique/spores_4`,
+        47: 'misc/lighthouse',
     };
     !map[type] && console.log(`MISSING STRUCTURE: ${type}`);
 
@@ -850,12 +851,13 @@ function getStructureFile(type, climate) {
 }
 
 function getResourceFile(type, climate) {
+    const textureIndex = terrainTextureIndex(climate);
     const map = {
-        1: `animals/${CLIMATE_TO_ANIMAL[climate]}`,
+        1: `animals/${TEXTURE_INDEX_TO_ANIMAL[textureIndex]}`,
         2: `terrain/misc/ResourceGFX_crop`,
         3: `animals/fish`,
         5: `terrain/misc/ResourceGFX_metal`,
-        6: `fruits/ResourceGFX_fruit_${climate === 17 ? 16 : climate}`,
+        6: `fruits/ResourceGFX_fruit_${textureIndex}`,
         // 7: `buildings/Cymanti/Default/Unique/spores_4`, // requires different texture
         8: `terrain/misc/ResourceGFX_starfish`
     };

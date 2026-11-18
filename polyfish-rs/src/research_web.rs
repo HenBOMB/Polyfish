@@ -11,6 +11,7 @@ use polyfish::replay::{Replay, ReplayPlayback};
 use polyfish::research::{self, MatchConfig, MatchResult, Opponent};
 use polyfish::states::GameState;
 use polyfish::types::TribeType;
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -57,23 +58,30 @@ pub(super) fn reset(state: &AppState, req: &ResetRequest) -> WebResult {
             "The learned opponent needs an 11×11 map and a compatible checkpoint",
         ));
     }
-    let tribe = |value: Option<&str>, default| {
-        value.map_or(Ok(default), |name| {
-            research::research_tribe(name)
-                .ok_or_else(|| bad_request(format!("Unsupported tribe: {name}")))
-        })
-    };
-    let tribes = [
-        tribe(req.tribe1.as_deref(), TribeType::Imperius)?,
-        tribe(req.tribe2.as_deref(), TribeType::Imperius)?,
+    let seed = req.seed.unwrap_or_else(rand::random);
+    let mut tribe_rng = StdRng::seed_from_u64(seed as u64);
+    let starters = [
+        TribeType::XinXi,
+        TribeType::Imperius,
+        TribeType::Bardur,
+        TribeType::Oumaji,
     ];
+    let mut tribe = |value: Option<&str>| match value {
+        Some(name) if name.eq_ignore_ascii_case("random") => {
+            Ok(starters[tribe_rng.random_range(0..starters.len())])
+        }
+        Some(name) => research::research_tribe(name)
+            .ok_or_else(|| bad_request(format!("Unsupported tribe: {name}"))),
+        None => Ok(TribeType::Imperius),
+    };
+    let tribes = [tribe(req.tribe1.as_deref())?, tribe(req.tribe2.as_deref())?];
     if req.max_turns.is_some_and(|turns| turns < 1) {
         return Err(bad_request("The turn limit must be positive"));
     }
     let mut game = research::new_match(
         size,
         tribes,
-        req.seed.unwrap_or_else(rand::random),
+        seed,
         MatchConfig::new(opponent, 2),
     );
     if let Some(max_turns) = req.max_turns {

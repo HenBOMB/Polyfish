@@ -128,3 +128,11 @@ window.getCityProduction = getCityProduction;
 window.getAdjacentIndices = getAdjacentIndices;
 window.getStructureAt = getStructureAt;
 window.getEnemyAt = getEnemyAt;
+function getGroundFile(terrain, climate) {
+    const fixed = {
+        1: 'terrain/water/water',
+        2: 'terrain/water/ocean',
+        6: 'terrain/tiles/ice'
+    };
+    return fixed[terrain] || `terrain/tiles/ground_${terrainTextureIndex(climate)}`;
+}

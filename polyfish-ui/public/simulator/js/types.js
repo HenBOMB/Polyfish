@@ -1,41 +1,3 @@
-const CLIMATE_IDS = {
-    0: null,
-    1: "Nature",
-    2: "Xin-xi",
-    3: "Imperius",
-    4: "Bardur",
-    5: "Oumaji",
-    6: "Kickoo",
-    7: "Hoodrick",
-    8: "Luxidoor",
-    9: "Vengir",
-    10: "Zebasi",
-    11: "Ai-Mo",
-    12: "Aquarion",
-    13: "Quetzali",
-    14: "∑∫ỹriȱŋ",
-    15: "Yădakk",
-    16: "Polaris",
-    17: "Cymanti",
-    "Nature": 0,
-    "Xin-xi": 1,
-    "Imperius": 2,
-    "Bardur": 3,
-    "Oumaji": 4,
-    "Kickoo": 5,
-    "Hoodrick": 6,
-    "Luxidoor": 7,
-    "Vengir": 8,
-    "Zebasi": 9,
-    "Ai-Mo": 10,
-    "Aquarion": 11,
-    "Quetzali": 12,
-    "∑∫ỹriȱŋ": 13,
-    "Yădakk": 14,
-    "Polaris": 15,
-    "Cymanti": 16,
-};
-
 const TRIBE_ID_2_NAME = [
     null, 'Nature', 'Ai-Mo', 'Aquarion', 'Bardur',
     '∑∫ỹriȱŋ', 'Hoodrick', 'Imperius', 'Kickoo',
@@ -95,7 +57,7 @@ const ClassNameToId = {
     45: "Juggernaut",
 };
 
-const CLIMATE_TO_ANIMAL = [
+const TEXTURE_INDEX_TO_ANIMAL = [
     'Invalid',
     'horse0001', // xinxi,
     'horse0002', // imperius,
@@ -115,9 +77,14 @@ const CLIMATE_TO_ANIMAL = [
     'lytheti', // cymanti
 ]
 
-const OWNER_TO_ID_INDEX = [
+// Tile climate IDs use the tribe enum, while sprite filenames use the artwork order.
+const TRIBE_TEXTURE_INDEX = [
     null, 0, 10, 11, 3, 13, 6, 2, 5, 7, 4, 12, 8, 1, 14, 9, 15, 16
 ]
+
+function terrainTextureIndex(climate) {
+    return TRIBE_TEXTURE_INDEX[climate] || 2;
+}
 
 const TerrainType = {
     0: "None",

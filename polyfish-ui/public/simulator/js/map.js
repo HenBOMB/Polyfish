@@ -205,22 +205,19 @@ class MapRenderer {
             return;
         }
 
-        // Ground
-        const tilefile = [null, 'terrain/water/water', 'terrain/water/ocean', null, null, null, 'terrain/tiles/ice'][tile.type]
-            || `terrain/tiles/ground_${tile.climate === 17 ? 16 : tile.climate}`;
-
-        const groundEl = this.updateLayer(idx, 'ground', tilefile, pos, 0, ['ground']);
+        const textureIndex = terrainTextureIndex(tile.climate);
+        const tileFile = getGroundFile(tile.type, tile.climate);
+        const groundEl = this.updateLayer(idx, 'ground', tileFile, pos, 0, ['ground']);
         groundEl.dataset.tileIdx = idx;
 
         groundEl.classList.remove('fog');
 
         // Ambient (Mountains/Forests)
         if (tile.type === 4) { // Mountain
-            const climate = tile.climate === 17 ? 16 : tile.climate;
-            const classes = climate === 8 ? ['mountain', 'kickoo-mountain'] : ['mountain'];
-            this.updateLayer(idx, 'ambient', `terrain/mountains/mountain_${climate}`, pos, 1200, classes);
+            const classes = tile.climate === 8 ? ['mountain', 'kickoo-mountain'] : ['mountain'];
+            this.updateLayer(idx, 'ambient', `terrain/mountains/mountain_${textureIndex}`, pos, 1200, classes);
         } else if (tile.type === 5) { // Forest
-            this.updateLayer(idx, 'ambient', `terrain/forests/Forest_${tile.climate === 17 ? 16 : tile.climate}`, pos, 2000, ['forest']);
+            this.updateLayer(idx, 'ambient', `terrain/forests/Forest_${textureIndex}`, pos, 2000, ['forest']);
         } else {
             this.removeLayer(idx, 'ambient');
         }
@@ -857,15 +854,12 @@ class MapRenderer {
                 const overlay = document.createElement('div');
                 overlay.classList.add('tile', 'predicted-terrain');
 
-                // Map terrain type to texture
-                // 1: Water, 2: Ocean, 3: Field, 4: Mountain, 5: Forest, 6: Ice
-                const tilefile = [null, 'terrain/water/water', 'terrain/water/ocean', null, 'terrain/mountains/mountain', 'terrain/forests/Forest', 'terrain/tiles/ice'][terrainType]
-                    || `terrain/tiles/ground_${climate === 17 ? 16 : climate}`;
-
-                // Handle specific suffixes for mountain/forest
-                let finalFile = tilefile;
-                if (terrainType === 4) finalFile = `terrain/mountains/mountain_${climate}`;
-                if (terrainType === 5) finalFile = `terrain/forests/Forest_${climate}`;
+                const textureIndex = terrainTextureIndex(climate);
+                const terrainFile = {
+                    4: `terrain/mountains/mountain_${textureIndex}`,
+                    5: `terrain/forests/Forest_${textureIndex}`,
+                };
+                const finalFile = terrainFile[terrainType] || getGroundFile(terrainType, climate);
 
                 overlay.style.backgroundImage = `url('textures/${finalFile}.png')`;
                 overlay.style.left = `${pos.x}px`;

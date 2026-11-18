@@ -2,10 +2,10 @@ const byId = (id) => document.getElementById(id);
 const setup = byId('setup');
 const board = byId('board');
 const viewport = byId('viewport');
-const tribes = [['xin-xi', 'Xin-Xi'], ['imperius', 'Imperius'], ['bardur', 'Bardur'], ['oumaji', 'Oumaji']];
-for (const [field, initial] of [['tribe1', 'imperius'], ['tribe2', 'bardur']]) {
+const tribes = [['random', 'Random'], ['xin-xi', 'Xin-Xi'], ['imperius', 'Imperius'], ['bardur', 'Bardur'], ['oumaji', 'Oumaji']];
+for (const field of ['tribe1', 'tribe2']) {
   for (const [value, name] of tribes) {
-    setup.elements[field].add(new Option(name, value, false, value === initial));
+    setup.elements[field].add(new Option(name, value));
   }
 }
 
