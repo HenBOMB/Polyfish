@@ -26,7 +26,7 @@ def browser_key(command):
     return key
 
 
-def verify(base_url, binary, size, preset, output):
+def verify(base_url, binary, size, preset, output, full_api):
     def request(path, data=None):
         body = None if data is None else json.dumps(data).encode()
         try:
@@ -70,6 +70,22 @@ def verify(base_url, binary, size, preset, output):
         assert request("/research/save")["history"][start:] == expected
         if pass_index == 0:
             game = request("/research/load", saved)
+
+    if full_api:
+        for replay_turn in replay["turns"][2:]:
+            assert game["turn"] == replay_turn["turnNumber"]
+            assert game["active"] == replay_turn["playerId"]
+            if game["botTurn"]:
+                start = game["revision"]
+                for _ in replay_turn["commands"]:
+                    assert game["botTurn"], "Browser bot finished before the replay turn"
+                    game = request("/research/bot", {})
+                expected = [browser_key(command) for command in replay_turn["commands"]]
+                assert request("/research/save")["history"][start:] == expected
+            else:
+                for command in replay_turn["commands"]:
+                    game = request("/research/move", {"revision": game["revision"], "action": browser_key(command)})
+        assert game["result"] == result["result"]
     playback = request("/research/replay", replay)
     final = request("/research/replay/seek", {"position": playback["replay"]["total"]})
     assert final["result"] == result["result"]
@@ -80,10 +96,11 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("binary", type=Path)
     p.add_argument("--server", default="http://127.0.0.1:3000")
+    p.add_argument("--full-api", action="store_true", help="Replay all decisions through the live browser API")
     args = p.parse_args()
     with tempfile.TemporaryDirectory(prefix="polyfish-smoke-") as tmp:
         for size, preset in itertools.product((121, 196, 256), ("easy", "normal", "expert")):
-            verify(args.server, args.binary.resolve(), size, preset, Path(tmp) / "match.json")
+            verify(args.server, args.binary.resolve(), size, preset, Path(tmp) / "match.json", args.full_api)
 
 
 if __name__ == "__main__":

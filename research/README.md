@@ -30,10 +30,10 @@ python3 research/run_engine_pilot.py /path/to/Tribes /path/to/javafx-base.jar /t
 
 For the historical tournament, compile the Tribes source using that jar and the repository's `lib` directory on the classpath. From the pinned Tribes checkout, run `Tournament` in a headless JVM with the absolute path to `research/tribes-pilot.json` as its argument. The original tournament runner generates game and agent seeds from the clock. The records under `results/` retain those seeds and the level seeds.
 
-With the research server running in a separate terminal, exercise the browser API, compare the first complete bot turn to a headless match, and reconstruct each full replay:
+With the research server running in a separate terminal, exercise the browser API, compare all bot turns to the headless matches, and reconstruct each full replay:
 
 ```sh
-python3 research/verify_surface.py polyfish-rs/target/release/research_match
+python3 research/verify_surface.py polyfish-rs/target/release/research_match --full-api
 ```
 
 See the [literature and asset audit](AUDIT.md) and [paper draft](PAPER.md). The versioned source archive is generated from a committed tree:

@@ -4,15 +4,18 @@ Polyfish v1 targets two-player Might on Drylands with fog of war at 121, 196, an
 
 ## Acceptance checklist
 
-- [ ] Record the Tribes citation search, available implementations, research settings, and evidence of downstream use. Compare Java Tribes, tribes-rl, and PolyEnv.
-- [ ] Verify an upstream source build, audit both browser entry points and asset provenance, and pin the commercial reference version.
-- [ ] Make `/simulator/` the primary play surface and verify sizing, hit targets, navigation, and the full play workflow across the three sizes.
-- [ ] Add validated size and opponent configuration to new games. Preserve it through save and replay. Verify Might ends when the opponent's original capital is captured.
-- [ ] Ship Easy and Normal rule-based presets and an Expert Rolling Horizon Evolution preset from the published Tribes algorithms. Verify the same seeded decisions in the browser and model-free headless runner. Keep the learned agent available at 121 tiles.
-- [ ] Add an opt-in opponent preset to 11×11 training. Alternate the learner's seat, keep bot actions in game and reward transitions, and write only learner training samples. Exercise existing checkpoint and anchor modes.
-- [ ] Verify legal play, deterministic full turns, fog isolation, live and loaded games, and training data. Reproduce the historical Java RHEA-versus-MCTS experiment where recoverable and validate the Rust adaptation on equivalent fixtures.
-- [ ] Compare headless Java and Rust performance on semantically matched workloads. Document native whole-game throughput and interface workflows as separate measurements.
-- [ ] Prepare the paper for AIIDE 2027 and build a reproducible release with citation metadata, a Zenodo record, a model-free quickstart, and the experiment inputs, scripts, and raw outputs. Review authorship, claims, and asset provenance before publication.
+- [x] Verify an upstream source build, audit the browser entry points and assets, and pin commercial reference version 2.16.8.
+- [x] Make `/simulator/` the primary play surface. Check browser play, mobile board fit, zoom, saves, and replay stepping.
+- [x] Add map-size and opponent settings, preserve them in saves and replays, and verify original-capital victory under Might.
+- [x] Add Easy, Normal, and Expert. Verify nine complete matches through the browser API, headless runner, and replay player, covering all three board sizes. Validate fog isolation and rolling-horizon advance counts.
+- [x] Add opt-in 11×11 preset training with alternating seats and learner-only samples. Exercise the checkpoint-opponent and anchor paths.
+- [x] Run the pinned four-game Java Tribes pilot and fixed-board timing pilot. Record native whole-game timings separately.
+- [x] Draft the AIIDE paper and prepare the model-free source archive, citation metadata, quickstart, scripts, and pilot records.
+- [ ] Finish the citation audit. The OpenAlex snapshot and primary sources are recorded, and Google Scholar returned HTTP 403.
+- [ ] Complete the commercial workflow comparison and expand the Java/Rust comparison to equivalent mid- and late-game workloads.
+- [ ] Review authorship and claims, confirm CI, and register the reviewed artifact with Zenodo.
+
+The [research quickstart](research/README.md), [audit](research/AUDIT.md), [paper draft](research/PAPER.md), and [pilot results](research/results/) live alongside the implementation.
 
 ## References
 

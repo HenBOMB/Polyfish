@@ -1,0 +1,587 @@
+{
+  "fixture": "flat two-capital opening, same board size and end-turn action",
+  "ratios": "descriptive Java/Rust ratios; differing candidate sets are not a matched legal workload",
+  "tribesCommit": "015a551d1a6be69b5931788fcc418e4c51eb8ea1",
+  "polyfishCommit": "ae4d614bd385945e1225726cba423ec4a45a8694",
+  "polyfishTrackedSourceDirty": false,
+  "machine": "Apple M3 Max",
+  "platform": "macOS-26.5-arm64-arm-64bit-Mach-O",
+  "java": "java 22.0.1 2024-04-16\nJava(TM) SE Runtime Environment (build 22.0.1+8-16)\nJava HotSpot(TM) 64-Bit Server VM (build 22.0.1+8-16, mixed mode, sharing)",
+  "rust": "rustc 1.96.1 (31fca3adb 2026-06-26)",
+  "measurements": [
+    {
+      "engine": "tribes",
+      "size": 11,
+      "iterations": 3000,
+      "legal": 13,
+      "cloneNs": 15426646,
+      "viewNs": 15374769,
+      "legalNs": 18763577,
+      "endTurnNs": 2079728,
+      "repeat": 0
+    },
+    {
+      "cloneNs": 6313995,
+      "endTurnNs": 5687207,
+      "engine": "polyfish",
+      "iterations": 3000,
+      "legal": 15,
+      "legalNs": 59954388,
+      "size": 11,
+      "viewNs": 14149487,
+      "repeat": 0
+    },
+    {
+      "engine": "tribes",
+      "size": 11,
+      "iterations": 3000,
+      "legal": 13,
+      "cloneNs": 14614236,
+      "viewNs": 14859893,
+      "legalNs": 17838533,
+      "endTurnNs": 2086789,
+      "repeat": 1
+    },
+    {
+      "cloneNs": 6189578,
+      "endTurnNs": 5516077,
+      "engine": "polyfish",
+      "iterations": 3000,
+      "legal": 15,
+      "legalNs": 57601461,
+      "size": 11,
+      "viewNs": 13880587,
+      "repeat": 1
+    },
+    {
+      "engine": "tribes",
+      "size": 11,
+      "iterations": 3000,
+      "legal": 13,
+      "cloneNs": 18428411,
+      "viewNs": 17485937,
+      "legalNs": 20397603,
+      "endTurnNs": 2239955,
+      "repeat": 2
+    },
+    {
+      "cloneNs": 6233433,
+      "endTurnNs": 5510145,
+      "engine": "polyfish",
+      "iterations": 3000,
+      "legal": 15,
+      "legalNs": 57549198,
+      "size": 11,
+      "viewNs": 13946162,
+      "repeat": 2
+    },
+    {
+      "engine": "tribes",
+      "size": 11,
+      "iterations": 3000,
+      "legal": 13,
+      "cloneNs": 14569992,
+      "viewNs": 14766838,
+      "legalNs": 18049253,
+      "endTurnNs": 1975435,
+      "repeat": 3
+    },
+    {
+      "cloneNs": 6175684,
+      "endTurnNs": 5623356,
+      "engine": "polyfish",
+      "iterations": 3000,
+      "legal": 15,
+      "legalNs": 57736391,
+      "size": 11,
+      "viewNs": 13894301,
+      "repeat": 3
+    },
+    {
+      "engine": "tribes",
+      "size": 11,
+      "iterations": 3000,
+      "legal": 13,
+      "cloneNs": 15226741,
+      "viewNs": 14458680,
+      "legalNs": 16701641,
+      "endTurnNs": 1981470,
+      "repeat": 4
+    },
+    {
+      "cloneNs": 6253836,
+      "endTurnNs": 5828857,
+      "engine": "polyfish",
+      "iterations": 3000,
+      "legal": 15,
+      "legalNs": 58556289,
+      "size": 11,
+      "viewNs": 13953436,
+      "repeat": 4
+    },
+    {
+      "engine": "tribes",
+      "size": 14,
+      "iterations": 3000,
+      "legal": 13,
+      "cloneNs": 21305585,
+      "viewNs": 21192908,
+      "legalNs": 15305897,
+      "endTurnNs": 1595221,
+      "repeat": 0
+    },
+    {
+      "cloneNs": 8661773,
+      "endTurnNs": 5861668,
+      "engine": "polyfish",
+      "iterations": 3000,
+      "legal": 15,
+      "legalNs": 61681076,
+      "size": 14,
+      "viewNs": 18937545,
+      "repeat": 0
+    },
+    {
+      "engine": "tribes",
+      "size": 14,
+      "iterations": 3000,
+      "legal": 13,
+      "cloneNs": 15389889,
+      "viewNs": 16148414,
+      "legalNs": 14768828,
+      "endTurnNs": 1543757,
+      "repeat": 1
+    },
+    {
+      "cloneNs": 8576779,
+      "endTurnNs": 5831786,
+      "engine": "polyfish",
+      "iterations": 3000,
+      "legal": 15,
+      "legalNs": 60911953,
+      "size": 14,
+      "viewNs": 18587155,
+      "repeat": 1
+    },
+    {
+      "engine": "tribes",
+      "size": 14,
+      "iterations": 3000,
+      "legal": 13,
+      "cloneNs": 15023236,
+      "viewNs": 15829639,
+      "legalNs": 16083761,
+      "endTurnNs": 1640350,
+      "repeat": 2
+    },
+    {
+      "cloneNs": 8677379,
+      "endTurnNs": 5842293,
+      "engine": "polyfish",
+      "iterations": 3000,
+      "legal": 15,
+      "legalNs": 61334006,
+      "size": 14,
+      "viewNs": 18847648,
+      "repeat": 2
+    },
+    {
+      "engine": "tribes",
+      "size": 14,
+      "iterations": 3000,
+      "legal": 13,
+      "cloneNs": 15476117,
+      "viewNs": 16331968,
+      "legalNs": 16655351,
+      "endTurnNs": 1870871,
+      "repeat": 3
+    },
+    {
+      "cloneNs": 8554076,
+      "endTurnNs": 5780086,
+      "engine": "polyfish",
+      "iterations": 3000,
+      "legal": 15,
+      "legalNs": 61033968,
+      "size": 14,
+      "viewNs": 18631694,
+      "repeat": 3
+    },
+    {
+      "engine": "tribes",
+      "size": 14,
+      "iterations": 3000,
+      "legal": 13,
+      "cloneNs": 14810873,
+      "viewNs": 15567059,
+      "legalNs": 15875835,
+      "endTurnNs": 1670424,
+      "repeat": 4
+    },
+    {
+      "cloneNs": 8648557,
+      "endTurnNs": 5908535,
+      "engine": "polyfish",
+      "iterations": 3000,
+      "legal": 15,
+      "legalNs": 61454097,
+      "size": 14,
+      "viewNs": 18797897,
+      "repeat": 4
+    },
+    {
+      "engine": "tribes",
+      "size": 16,
+      "iterations": 3000,
+      "legal": 13,
+      "cloneNs": 16406635,
+      "viewNs": 17727855,
+      "legalNs": 14032191,
+      "endTurnNs": 1609423,
+      "repeat": 0
+    },
+    {
+      "cloneNs": 10799086,
+      "endTurnNs": 5942479,
+      "engine": "polyfish",
+      "iterations": 3000,
+      "legal": 15,
+      "legalNs": 63347673,
+      "size": 16,
+      "viewNs": 22756940,
+      "repeat": 0
+    },
+    {
+      "engine": "tribes",
+      "size": 16,
+      "iterations": 3000,
+      "legal": 13,
+      "cloneNs": 16416899,
+      "viewNs": 17869638,
+      "legalNs": 14763950,
+      "endTurnNs": 1814521,
+      "repeat": 1
+    },
+    {
+      "cloneNs": 10616902,
+      "endTurnNs": 5766070,
+      "engine": "polyfish",
+      "iterations": 3000,
+      "legal": 15,
+      "legalNs": 62216173,
+      "size": 16,
+      "viewNs": 22315403,
+      "repeat": 1
+    },
+    {
+      "engine": "tribes",
+      "size": 16,
+      "iterations": 3000,
+      "legal": 13,
+      "cloneNs": 16139311,
+      "viewNs": 17434664,
+      "legalNs": 14645308,
+      "endTurnNs": 1759996,
+      "repeat": 2
+    },
+    {
+      "cloneNs": 10699754,
+      "endTurnNs": 5920426,
+      "engine": "polyfish",
+      "iterations": 3000,
+      "legal": 15,
+      "legalNs": 61808974,
+      "size": 16,
+      "viewNs": 22503865,
+      "repeat": 2
+    },
+    {
+      "engine": "tribes",
+      "size": 16,
+      "iterations": 3000,
+      "legal": 13,
+      "cloneNs": 23680990,
+      "viewNs": 24849470,
+      "legalNs": 14971803,
+      "endTurnNs": 1906108,
+      "repeat": 3
+    },
+    {
+      "cloneNs": 11104549,
+      "endTurnNs": 6161721,
+      "engine": "polyfish",
+      "iterations": 3000,
+      "legal": 15,
+      "legalNs": 65093500,
+      "size": 16,
+      "viewNs": 23327821,
+      "repeat": 3
+    },
+    {
+      "engine": "tribes",
+      "size": 16,
+      "iterations": 3000,
+      "legal": 13,
+      "cloneNs": 16431602,
+      "viewNs": 17436259,
+      "legalNs": 16054442,
+      "endTurnNs": 1940595,
+      "repeat": 4
+    },
+    {
+      "cloneNs": 11861182,
+      "endTurnNs": 6913406,
+      "engine": "polyfish",
+      "iterations": 3000,
+      "legal": 15,
+      "legalNs": 70026013,
+      "size": 16,
+      "viewNs": 25100822,
+      "repeat": 4
+    }
+  ],
+  "summaries": {
+    "11": {
+      "cloneNs": {
+        "ratio": 2.442753615864645,
+        "bootstrap95": [
+          2.3297688011006366,
+          2.9563823016947484
+        ]
+      },
+      "viewNs": {
+        "ratio": 1.0655184559020612,
+        "bootstrap95": [
+          1.0367497523691465,
+          1.2538171433832477
+        ]
+      },
+      "legalNs": {
+        "ratio": 0.31261484632802905,
+        "bootstrap95": [
+          0.2892740732616973,
+          0.3532885004883662
+        ]
+      },
+      "endTurnNs": {
+        "ratio": 0.3698375133994718,
+        "bootstrap95": [
+          0.3473471248716637,
+          0.3983306409908958
+        ]
+      }
+    },
+    "14": {
+      "cloneNs": {
+        "ratio": 1.7794747724967297,
+        "bootstrap95": [
+          1.7125253380419416,
+          2.4634843708609426
+        ]
+      },
+      "viewNs": {
+        "ratio": 0.8590542867640992,
+        "bootstrap95": [
+          0.828127688964356,
+          1.127408454254218
+        ]
+      },
+      "legalNs": {
+        "ratio": 0.25884229704480743,
+        "bootstrap95": [
+          0.24079346781946706,
+          0.27155165765627637
+        ]
+      },
+      "endTurnNs": {
+        "ratio": 0.2807716079970655,
+        "bootstrap95": [
+          0.2642382023633529,
+          0.3202288895815393
+        ]
+      }
+    },
+    "16": {
+      "cloneNs": {
+        "ratio": 1.5202118957104334,
+        "bootstrap95": [
+          1.3840862571706598,
+          2.192869841021731
+        ]
+      },
+      "viewNs": {
+        "ratio": 0.7790087331600821,
+        "bootstrap95": [
+          0.7062659143194593,
+          1.0919512904634805
+        ]
+      },
+      "legalNs": {
+        "ratio": 0.23306223103096463,
+        "bootstrap95": [
+          0.2108352220481266,
+          0.25343380805795346
+        ]
+      },
+      "endTurnNs": {
+        "ratio": 0.30534748208617984,
+        "bootstrap95": [
+          0.26119699350230235,
+          0.32777962261499427
+        ]
+      }
+    }
+  },
+  "nativeRuns": [
+    {
+      "engine": "tribes",
+      "workload": "native 11\u00d711 Capitals",
+      "games": 4,
+      "elapsedNs": 528974917,
+      "rawLog": "**** Playing level with seed 1590191438878 ****\nPlaying with [0:SIMPLE(XIN_XI), 1:SIMPLE(IMPERIUS)] (1/4)\nGame seed: 1795035804573\nAgents random seed: 1795035804573\nLevel seed: 1590191438878\n17; Game Results: \n #1: Tribe IMPERIUS (SimpleAgent): WIN, 2455 points; #tech: 11, #cities: 3, production: 11\n #2: Tribe XIN_XI (SimpleAgent): LOSS, 1430 points; #tech: 9, #cities: 0, production: 0\nPlaying with [1:SIMPLE(XIN_XI), 0:SIMPLE(IMPERIUS)] (2/4)\nGame seed: 1795035804709\nAgents random seed: 1795035804709\nLevel seed: 1590191438878\n15; Game Results: \n #1: Tribe IMPERIUS (SimpleAgent): WIN, 2205 points; #tech: 9, #cities: 3, production: 9\n #2: Tribe XIN_XI (SimpleAgent): LOSS, 930 points; #tech: 6, #cities: 0, production: 0\n**** Playing level with seed 1590791907337 ****\nPlaying with [0:SIMPLE(XIN_XI), 1:SIMPLE(IMPERIUS)] (3/4)\nGame seed: 1795035804723\nAgents random seed: 1795035804723\nLevel seed: 1590791907337\n40; Game Results: \n #1: Tribe IMPERIUS (SimpleAgent): WIN, 7515 points; #tech: 15, #cities: 4, production: 34\n #2: Tribe XIN_XI (SimpleAgent): LOSS, 6365 points; #tech: 24, #cities: 0, production: 0\nPlaying with [1:SIMPLE(XIN_XI), 0:SIMPLE(IMPERIUS)] (4/4)\nGame seed: 1795035804892\nAgents random seed: 1795035804892\nLevel seed: 1590791907337\n34; Game Results: \n #1: Tribe XIN_XI (SimpleAgent): WIN, 6620 points; #tech: 16, #cities: 4, production: 27\n #2: Tribe IMPERIUS (SimpleAgent): LOSS, 3735 points; #tech: 17, #cities: 0, production: 0\n--------- RESULTS ---------\n[N:4];[%:75.00];[W:3];[S:4380.00];[T:12.00];[C:2.75];[P:18.00];[Player:1:SIMPLE]\n[N:4];[%:25.00];[W:1];[S:3433.75];[T:14.75];[C:0.75];[P:2.25];[Player:0:SIMPLE]"
+    },
+    {
+      "engine": "polyfish",
+      "workload": "native 121-tile Drylands Might",
+      "games": 4,
+      "elapsedNs": 478211666,
+      "rawMatches": [
+        {
+          "actions": 248,
+          "mapSize": 121,
+          "result": {
+            "status": "won",
+            "winner": 1
+          },
+          "seed": 42,
+          "turn": 18
+        },
+        {
+          "actions": 114,
+          "mapSize": 121,
+          "result": {
+            "status": "won",
+            "winner": 2
+          },
+          "seed": 43,
+          "turn": 9
+        },
+        {
+          "actions": 340,
+          "mapSize": 121,
+          "result": {
+            "status": "won",
+            "winner": 1
+          },
+          "seed": 44,
+          "turn": 21
+        },
+        {
+          "actions": 214,
+          "mapSize": 121,
+          "result": {
+            "status": "won",
+            "winner": 1
+          },
+          "seed": 45,
+          "turn": 16
+        }
+      ]
+    },
+    {
+      "engine": "polyfish",
+      "workload": "native 196-tile Drylands Might",
+      "games": 4,
+      "elapsedNs": 1825678250,
+      "rawMatches": [
+        {
+          "actions": 1130,
+          "mapSize": 196,
+          "result": {
+            "status": "truncated"
+          },
+          "seed": 42,
+          "turn": 51
+        },
+        {
+          "actions": 421,
+          "mapSize": 196,
+          "result": {
+            "status": "won",
+            "winner": 1
+          },
+          "seed": 43,
+          "turn": 20
+        },
+        {
+          "actions": 880,
+          "mapSize": 196,
+          "result": {
+            "status": "won",
+            "winner": 1
+          },
+          "seed": 44,
+          "turn": 33
+        },
+        {
+          "actions": 236,
+          "mapSize": 196,
+          "result": {
+            "status": "won",
+            "winner": 1
+          },
+          "seed": 45,
+          "turn": 16
+        }
+      ]
+    },
+    {
+      "engine": "polyfish",
+      "workload": "native 256-tile Drylands Might",
+      "games": 4,
+      "elapsedNs": 2730435833,
+      "rawMatches": [
+        {
+          "actions": 838,
+          "mapSize": 256,
+          "result": {
+            "status": "won",
+            "winner": 1
+          },
+          "seed": 42,
+          "turn": 32
+        },
+        {
+          "actions": 479,
+          "mapSize": 256,
+          "result": {
+            "status": "won",
+            "winner": 2
+          },
+          "seed": 43,
+          "turn": 22
+        },
+        {
+          "actions": 847,
+          "mapSize": 256,
+          "result": {
+            "status": "won",
+            "winner": 1
+          },
+          "seed": 44,
+          "turn": 32
+        },
+        {
+          "actions": 943,
+          "mapSize": 256,
+          "result": {
+            "status": "won",
+            "winner": 2
+          },
+          "seed": 45,
+          "turn": 35
+        }
+      ]
+    }
+  ]
+}
