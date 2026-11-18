@@ -267,7 +267,7 @@ pub fn choose_with_budget(
         ^ (game.state._history.len() as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
     let mut rng = StdRng::seed_from_u64(seed);
     let mut observed = observation(game, pov);
-    let mut actions = ordered_actions(game);
+    let mut actions = order_candidates(legal_actions(game, &observed));
     if actions.len() <= 1 {
         return (actions.pop(), 0);
     }
@@ -303,9 +303,21 @@ pub fn choose_with_budget(
     (Some(actions.swap_remove(index)), 0)
 }
 
-fn ordered_actions(game: &Game) -> Vec<Box<dyn Move>> {
-    let mut actions: Vec<_> = game
+/// Keep commands available in both the player view and the authoritative state.
+pub fn legal_actions(game: &Game, view: &Game) -> Vec<Box<dyn Move>> {
+    let observed_keys: std::collections::HashSet<_> = view
         .legal_moves()
+        .into_iter()
+        .map(|action| action.serialize().to_string())
+        .collect();
+    game.legal_moves()
+        .into_iter()
+        .filter(|action| observed_keys.contains(&action.serialize().to_string()))
+        .collect()
+}
+
+fn order_candidates(actions: Vec<Box<dyn Move>>) -> Vec<Box<dyn Move>> {
+    let mut actions: Vec<_> = actions
         .into_iter()
         .filter(|action| {
             action.move_type() != MoveType::Resign
@@ -462,7 +474,7 @@ fn rolling_horizon(
             let actions = if ply == 0 {
                 root_actions
             } else {
-                later = ordered_actions(&trial);
+                later = order_candidates(trial.legal_moves());
                 &later
             };
             if actions.is_empty() {

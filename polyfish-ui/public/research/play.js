@@ -43,8 +43,8 @@ function fitBoard() {
   if (!match?.size) return;
   const { clientWidth, clientHeight } = viewport;
   const available = Math.min(clientWidth, clientHeight) - 24 - 2 * (match.size - 1);
-  const cell = Math.max(24, Math.min(66, available / match.size));
-  board.style.setProperty('--cell', Math.round(cell * zoom) + 'px');
+  const cell = Math.max(14, Math.min(66, available / match.size));
+  board.style.setProperty('--cell', Math.floor(cell * zoom) + 'px');
 }
 
 function formatName(value) {

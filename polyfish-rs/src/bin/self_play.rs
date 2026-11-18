@@ -1813,6 +1813,9 @@ fn main() -> anyhow::Result<()> {
 
     let match_label = match &args.opponent {
         Some(opp) => format!("league vs {opp}"),
+        None if args.opponent_preset.is_some() => {
+            format!("learner vs {:?} preset", args.opponent_preset.unwrap())
+        }
         None if anchor_frac > 0.0 => {
             format!(
                 "self-play + {:.0}% greedy-anchor games",
@@ -2591,7 +2594,7 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    let metrics = json!({
+    let mut metrics = json!({
         "num_games": args.num_games,
         "avg_score": avg_score,
         "max_score": max_score,
@@ -2638,6 +2641,13 @@ fn main() -> anyhow::Result<()> {
         "games_file": games_file,
         "moves_by_turn": moves_by_turn,
     });
+    if let Some(preset) = args.opponent_preset {
+        metrics["opponent_preset"] = json!({
+            "name": preset,
+            "version": polyfish::research::PRESET_VERSION,
+            "base_seed": base_seed,
+        });
+    }
     std::fs::write(
         ".last_self_play_metrics.json",
         serde_json::to_string(&metrics)?,
@@ -2701,6 +2711,10 @@ fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "self_play/preset_tests.rs"]
+mod preset_tests;
 
 #[cfg(test)]
 mod td_lambda_tests {

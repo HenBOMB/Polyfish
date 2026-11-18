@@ -160,3 +160,42 @@ fn research_turn_limit_is_a_truncation() {
     assert_eq!(research::result(&game), MatchResult::Truncated);
     assert_eq!(game.state._history.len(), 2);
 }
+
+#[test]
+fn a_stale_territory_list_does_not_duplicate_build_actions() {
+    use polyfish::states::TechnologyState;
+    use polyfish::types::{MoveType, StructureType, TechnologyType};
+
+    let mut game = fixture(MapSize::Tiny);
+    let tribe = game.state.tribes.get_mut(&1).unwrap();
+    let city = &tribe.cities[0];
+    let target = *city
+        ._territory
+        .iter()
+        .find(|&&idx| idx != city.idx)
+        .unwrap();
+    let mut stale = city.clone();
+    stale.idx = 120;
+    stale._territory = vec![target];
+    tribe.cities.push(stale);
+    tribe.stars = 10;
+    tribe.tech_vanilla.push(TechnologyState {
+        tech_type: TechnologyType::Forestry,
+        discovered: true,
+        discovered_turn: 0,
+    });
+    game.state.tiles[&target].terrain_type = TerrainType::Forest;
+    game.state.structures.insert(target, None);
+    game.state.resources.insert(target, None);
+
+    let builds = game
+        .legal_moves()
+        .iter()
+        .filter(|action| {
+            action.move_type() == MoveType::Build
+                && action.target_idx().ok() == Some(target as usize)
+                && action.structure_type().ok() == Some(StructureType::LumberHut)
+        })
+        .count();
+    assert_eq!(builds, 1);
+}

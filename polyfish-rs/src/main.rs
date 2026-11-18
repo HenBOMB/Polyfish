@@ -190,7 +190,7 @@ async fn main() {
             get(polyfish::training_api::api_elo_ladder),
         )
         .nest_service("/assets", ServeDir::new("../polyfish-ui/dist/assets"))
-        .nest_service("/simulator", ServeDir::new("../src/public/research")
+        .nest_service("/simulator", ServeDir::new("../polyfish-ui/public/research")
             .fallback(ServeDir::new("../polyfish-ui/dist/simulator")))
         .nest_service("/static", ServeDir::new("../polyfish-ui/dist"))
         // Built SPA first, then the static UI in src/public (training.html, js/,

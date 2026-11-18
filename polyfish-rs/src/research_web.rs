@@ -121,7 +121,7 @@ fn snapshot(game: &Game, has_network: bool, replaying: bool) -> Value {
         })
     }).collect();
     let actions: Vec<_> = if !bot_turn && !replaying && result == MatchResult::InProgress {
-        game.legal_moves()
+        research::legal_actions(game, &observed)
             .into_iter()
             .map(|action| {
                 json!({
@@ -180,8 +180,8 @@ async fn play(State(app): State<Arc<AppState>>, Json(req): Json<ActionRequest>) 
             "The match advanced. Refresh the board.".into(),
         ));
     }
-    let action = game
-        .legal_moves()
+    let view = research::observation(&game, game.current_player_id());
+    let action = research::legal_actions(&game, &view)
         .into_iter()
         .find(|candidate| candidate.serialize() == req.action)
         .ok_or_else(|| bad_request("That action is no longer available"))?;

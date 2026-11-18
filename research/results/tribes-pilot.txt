@@ -1,0 +1,34 @@
+**** Playing level with seed 1590191438878 ****
+Playing with [0:MCTS(XIN_XI), 1:RHEA(IMPERIUS)] (1/4)
+Game seed: 1795034730854
+Agents random seed: 1795034730854
+Level seed: 1590191438878
+Tick: 12; action [LEVEL_UP by city 1 with bonus PARK] couldn't execute?
+24; Game Results: 
+ #1: Tribe IMPERIUS (RHEAAgent): WIN, 10385 points; #tech: 24, #cities: 3, production: 23
+ #2: Tribe XIN_XI (MCTSPlayer): LOSS, 6515 points; #tech: 24, #cities: 0, production: 0
+Playing with [1:RHEA(XIN_XI), 0:MCTS(IMPERIUS)] (2/4)
+Game seed: 1795034740013
+Agents random seed: 1795034740013
+Level seed: 1590191438878
+10; Game Results: 
+ #1: Tribe IMPERIUS (MCTSPlayer): WIN, 1400 points; #tech: 5, #cities: 2, production: 8
+ #2: Tribe XIN_XI (RHEAAgent): LOSS, 710 points; #tech: 4, #cities: 0, production: 0
+**** Playing level with seed 1590791907337 ****
+Playing with [0:MCTS(XIN_XI), 1:RHEA(IMPERIUS)] (3/4)
+Game seed: 1795034740756
+Agents random seed: 1795034740756
+Level seed: 1590791907337
+51; Game Results: 
+ #1: Tribe XIN_XI (MCTSPlayer): WIN, 19330 points; #tech: 24, #cities: 3, production: 37
+ #2: Tribe IMPERIUS (RHEAAgent): LOSS, 13775 points; #tech: 24, #cities: 1, production: 14
+Playing with [1:RHEA(XIN_XI), 0:MCTS(IMPERIUS)] (4/4)
+Game seed: 1795034793244
+Agents random seed: 1795034793244
+Level seed: 1590791907337
+51; Game Results: 
+ #1: Tribe XIN_XI (RHEAAgent): WIN, 12400 points; #tech: 24, #cities: 3, production: 26
+ #2: Tribe IMPERIUS (MCTSPlayer): LOSS, 10000 points; #tech: 24, #cities: 1, production: 12
+--------- RESULTS ---------
+[N:4];[%:50.00];[W:2];[S:9317.50];[T:19.00];[C:1.75];[P:15.75];[Player:1:RHEA]
+[N:4];[%:50.00];[W:2];[S:9311.25];[T:19.25];[C:1.50];[P:14.25];[Player:0:MCTS]

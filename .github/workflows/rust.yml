@@ -222,6 +222,11 @@ jobs:
           workspaces: "./polyfish-rs -> target"
           key: ${{ matrix.label }}
 
+      - uses: actions/setup-python@v5
+        if: matrix.label == 'tch-eval'
+        with:
+          python-version: "3.11"
+
       - name: Install PyTorch for tch-eval
         if: matrix.label == 'tch-eval'
         working-directory: ./polyfish-rs
