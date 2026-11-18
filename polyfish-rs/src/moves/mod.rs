@@ -194,6 +194,9 @@ impl Move for ResignMove {
 /// Generate all legal moves for the current player
 pub fn generate_legal_moves(state: &GameState) -> Vec<Box<dyn Move>> {
     let mut moves: Vec<Box<dyn Move>> = Vec::new();
+    if state.settings.might_winner.is_some() {
+        return moves;
+    }
 
     // let pov_id = state.settings.current_player_turn_id;
     // if let Some(tribe) = state.tribes.get(&pov_id) {

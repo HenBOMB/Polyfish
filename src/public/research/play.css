@@ -1,0 +1,105 @@
+:root {
+  color-scheme: dark;
+  font: 15px/1.45 system-ui, sans-serif;
+  color: #f1f2ec;
+  background: #171d21;
+  --panel: #20292e;
+  --line: #3b484f;
+  --dim: #acb8b9;
+  --light: #e8cf9e;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+a { color: inherit; }
+button, input, select { font: inherit; }
+button, select, input {
+  min-height: 2.5rem;
+  border: 1px solid var(--line);
+  border-radius: .42rem;
+  color: inherit;
+  background: #29353c;
+  padding: .45rem .65rem;
+}
+button { cursor: pointer; }
+button:hover:enabled { border-color: var(--light); }
+button:disabled { opacity: .42; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--light);
+  outline-offset: 2px;
+}
+.primary { background: var(--light); color: #222722; font-weight: 700; }
+.topbar { display: flex; justify-content: space-between; align-items: center; padding: .95rem max(1rem, calc((100% - 1300px) / 2)); border-bottom: 1px solid var(--line); }
+.topbar a { text-decoration: none; }
+.brand { font-size: 1.18rem; font-weight: 800; white-space: nowrap; }
+.brand span, .subtle, small { color: var(--dim); font-weight: 400; }
+main { max-width: 1320px; margin: auto; padding: 1.2rem 1rem; }
+#setup { display: flex; flex-wrap: wrap; gap: .7rem; align-items: end; margin-bottom: 1rem; }
+#setup label { display: grid; gap: .25rem; color: var(--dim); font-weight: 600; }
+#setup input { width: 9rem; }
+#setup select, #setup input { color: #f1f2ec; font-weight: 400; }
+.play { display: grid; grid-template-columns: minmax(0, 1fr) minmax(15rem, 19rem); gap: .8rem; }
+.stage, .panel { border: 1px solid var(--line); border-radius: .75rem; overflow: hidden; background: var(--panel); }
+.statusbar, .files, .zoom { display: flex; align-items: center; gap: .4rem; }
+.statusbar { padding: .7rem; justify-content: space-between; }
+#match-detail { display: block; }
+.zoom button { min-width: 2.5rem; }
+.viewport {
+  min-height: 340px;
+  height: min(64vh, 760px);
+  overflow: auto;
+  display: flex;
+  background: #12171a;
+  padding: 12px;
+}
+#board {
+  --size: 11;
+  --cell: 45px;
+  display: grid;
+  grid-template-columns: repeat(var(--size), var(--cell));
+  grid-auto-rows: var(--cell);
+  gap: 2px;
+  flex: none;
+  margin: auto;
+}
+.tile {
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+  border-radius: .19rem;
+  padding: 0;
+  border: 1px solid #0005;
+  color: #fff;
+  background: #485e44;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  font-size: calc(var(--cell) * .26);
+  line-height: 1;
+}
+.tile:hover:enabled, .tile:focus-visible, .tile[data-selected] { outline: 2px solid #f4dfa9; outline-offset: -2px; }
+.tile[data-terrain="Forest"] { background: repeating-linear-gradient(136deg, #294946, #294946 5px, #355a51 5px, #355a51 8px); }
+.tile[data-terrain="Mountain"] { background: repeating-linear-gradient(45deg, #5f626b, #5f626b 7px, #6a6e73 7px, #6a6e73 9px); }
+.tile[data-terrain="Water"], .tile[data-terrain="Ocean"] { background: #355c74; }
+.tile[data-terrain="Fog"] { background: #252e35; }
+.tile[data-owner="1"] { box-shadow: inset 0 -3px #82d4df; }
+.tile[data-owner="2"] { box-shadow: inset 0 -3px #ebb481; }
+.tile[data-target] { outline: 2px solid #8de3bd; outline-offset: -3px; }
+.tile small { position: absolute; right: 2px; bottom: 2px; font-size: calc(var(--cell) * .23); color: #fff; text-shadow: 0 1px 2px #000; }
+.tile .unit { display: grid; place-items: center; width: 80%; height: calc(var(--cell) * .48); border-radius: 4px; background: #223940; border: 1px solid #86c7ce; font-weight: 750; }
+.tile .unit.enemy { background: #413029; border-color: #ecb995; }
+.files { flex-wrap: wrap; padding: .7rem; }
+.files output { padding: .3rem; }
+.panel { min-height: 20rem; display: flex; flex-direction: column; padding: 1rem; }
+h1 { margin: 0; font-size: 1.1rem; }
+.panel p { color: var(--dim); margin: .4rem 0 1rem; }
+#tile-actions, #global-actions { display: grid; gap: .35rem; max-height: 15rem; overflow: auto; }
+#tile-actions button, #global-actions button { line-height: 1.25; text-align: left; }
+.turn { margin-top: auto; padding-top: 1rem; }
+.turn summary { cursor: pointer; margin-bottom: .6rem; }
+.turn > button { width: 100%; }
+#error { color: #ffb8a5; }
+@media (max-width: 790px) {
+  .play { grid-template-columns: minmax(0, 1fr); }
+  .viewport { height: min(58vh, 640px); min-height: 290px; }
+  .panel { min-height: 12rem; }
+}

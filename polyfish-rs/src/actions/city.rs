@@ -271,6 +271,18 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
                 .get(&tile_idx)
                 .map(|t| t.capital_of)
                 .unwrap_or(0);
+            if state.settings.mode == crate::types::ModeType::Might
+                && state.tribes.len() == 2
+                && old_capital_val != 0
+                && state.tribes[&tile_owner].starting_tile_coords.idx == tile_idx
+            {
+                let old_winner = state.settings.might_winner.replace(pov_id);
+                let old_game_over = std::mem::replace(&mut state.settings._game_over, true);
+                undos.push(Box::new(move |s| {
+                    s.settings.might_winner = old_winner;
+                    s.settings._game_over = old_game_over;
+                }));
+            }
 
             // Update city ownership and name
             city.owner = pov_id;

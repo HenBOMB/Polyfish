@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#171d21">
+  <title>Polyfish Simulator</title>
+  <link rel="stylesheet" href="/simulator/play.css">
+  <script src="/simulator/play.js" type="module"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/simulator/">Polyfish <span>Simulator</span></a>
+    <a class="subtle" href="/training.html">Training dashboard</a>
+  </header>
+  <main>
+    <form id="setup" aria-label="Match setup">
+      <label>Board
+        <select name="mapSize">
+          <option value="121">Tiny · 11 × 11</option>
+          <option value="196">Small · 14 × 14</option>
+          <option value="256">Normal · 16 × 16</option>
+        </select>
+      </label>
+      <label>Your tribe <select name="tribe1"></select></label>
+      <label>Rival tribe <select name="tribe2"></select></label>
+      <label>Opponent
+        <select name="opponentPreset">
+          <option value="human">Local two-player</option>
+          <option value="easy">Easy</option>
+          <option value="normal" selected>Normal</option>
+          <option value="expert">Expert</option>
+          <option value="learned" disabled>Learned</option>
+        </select>
+      </label>
+      <label>Seed <input name="seed" type="text" inputmode="numeric" placeholder="Random"></label>
+      <button class="primary" type="submit">New match</button>
+    </form>
+    <section class="play" aria-label="Match">
+      <div class="stage">
+        <div class="statusbar">
+          <div>
+            <strong id="status" role="status">Start a match</strong>
+            <small id="match-detail">Might · Drylands</small>
+          </div>
+          <div class="zoom" aria-label="Board zoom">
+            <button id="zoom-out" type="button" aria-label="Zoom out">−</button>
+            <button id="zoom-fit" type="button">Fit</button>
+            <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
+          </div>
+        </div>
+        <div class="viewport" id="viewport" tabindex="0" aria-label="Scrollable game board">
+          <div id="board" aria-label="Board tiles"></div>
+        </div>
+        <div class="files">
+          <button id="save" type="button" disabled>Download save</button>
+          <button id="open" type="button">Open save or replay</button>
+          <input id="file" type="file" accept=".json,application/json" hidden>
+          <div id="replay" hidden>
+            <button id="previous" type="button">Previous</button>
+            <output id="cursor"></output>
+            <button id="next" type="button">Next</button>
+          </div>
+        </div>
+      </div>
+      <aside class="panel" aria-label="Tile and turn actions">
+        <div>
+          <h1 id="tile-title">Board actions</h1>
+          <p id="tile-detail">Select a tile to inspect it and see its available actions.</p>
+        </div>
+        <div id="tile-actions"></div>
+        <div class="turn">
+          <details id="other-actions">
+            <summary>Research and other actions</summary>
+            <div id="global-actions"></div>
+          </details>
+          <button type="button" class="primary" id="end-turn" disabled>End turn</button>
+          <button type="button" id="retry-bot" hidden>Resume bot turn</button>
+          <p id="error" role="alert" hidden></p>
+        </div>
+      </aside>
+    </section>
+  </main>
+</body>
+</html>

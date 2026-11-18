@@ -27,6 +27,8 @@ use tower_http::services::ServeDir;
 
 use polyfish::recorder::GameRecorder;
 
+mod research_web;
+
 struct AppState {
     game: Mutex<Game>,
     replay: Mutex<Option<ReplayPlayback>>,
@@ -121,15 +123,16 @@ async fn main() {
                 candle_core::DType::F32,
                 &device,
             )
-            .expect("Failed to load model weights")
         };
-        polyfish::ai::network::PolyZeroNet::new(vb)
-            .expect("Failed to build neural network")
+        match vb.and_then(polyfish::ai::network::PolyZeroNet::new) {
+            Ok(network) => Some(Arc::new(network)),
+            Err(error) => {
+                eprintln!("Learned opponent unavailable: {error}");
+                None
+            }
+        }
     } else {
-        panic!(
-            "Model file {} not found! Please run init_model.py first.",
-            model_path
-        );
+        None
     };
 
     let recorder = Arc::new(GameRecorder::new());
@@ -138,12 +141,14 @@ async fn main() {
         game: Mutex::new(game),
         replay: Mutex::new(None),
         training_status: Mutex::new(None),
-        network: Some(Arc::new(network)),
+        network,
         recorder,
     });
 
     // Build our application with routes
     let app = Router::new()
+        .route("/", get(|| async { axum::response::Redirect::temporary("/simulator/") }))
+        .merge(research_web::routes())
         .route("/current", get(get_current_state))
         .route("/autostep", post(auto_step))
         .route("/step", post(manual_step))
@@ -185,7 +190,8 @@ async fn main() {
             get(polyfish::training_api::api_elo_ladder),
         )
         .nest_service("/assets", ServeDir::new("../polyfish-ui/dist/assets"))
-        .nest_service("/simulator", ServeDir::new("../polyfish-ui/dist/simulator"))
+        .nest_service("/simulator", ServeDir::new("../src/public/research")
+            .fallback(ServeDir::new("../polyfish-ui/dist/simulator")))
         .nest_service("/static", ServeDir::new("../polyfish-ui/dist"))
         // Built SPA first, then the static UI in src/public (training.html, js/,
         // css/) that ships unbuilt; unmatched paths fall back to SPA routing.
@@ -199,8 +205,9 @@ async fn main() {
         .with_state(shared_state);
 
     // Run our app
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    println!("Listening on http://localhost:3000");
+    let address = std::env::var("POLYFISH_LISTEN").unwrap_or_else(|_| "0.0.0.0:3000".into());
+    let listener = tokio::net::TcpListener::bind(&address).await.unwrap();
+    println!("Listening on http://{}", listener.local_addr().unwrap());
     axum::serve(listener, app).await.unwrap();
 }
 
@@ -307,7 +314,8 @@ async fn auto_step(
     let mut gumbel_trace_json = None;
 
     // 1. Try to get AI move from trained model if available
-    if let Some(net) = &state.network {
+    let network = state.network.as_ref().filter(|_| game.map_size() == 11);
+    if let Some(net) = network {
         use polyfish::ai::brain::Brain;
         use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
         let evaluator = Evaluator::Inline(InlineEvalHandle::new(net.clone()));
@@ -338,7 +346,7 @@ async fn auto_step(
     }
 
     // 2. Fallback to heuristic analysis if no network is available
-    let (h_best_move, mcts_analysis_json) = if state.network.is_some() {
+    let (h_best_move, mcts_analysis_json) = if network.is_some() {
         let mut trace_val = gumbel_trace_json.unwrap_or(serde_json::Value::Null);
         if let serde_json::Value::Object(ref mut map) = trace_val {
             map.insert("type".to_string(), serde_json::json!("gumbel"));
@@ -356,13 +364,13 @@ async fn auto_step(
     };
 
     // If we don't have a network but we ARE supposed to move, use the heuristic best move
-    if state.network.is_none() && !params.dry_run {
+    if network.is_none() && !params.dry_run {
         if let Some(m) = h_best_move.as_ref() {
             move_name = format!("{:?}", m.move_type());
             best_move_json = Some(m.serialize());
             game.play_move(m.as_ref());
         }
-    } else if state.network.is_none() {
+    } else if network.is_none() {
         // Just for dry_run analysis when network is missing
         best_move_json = h_best_move.as_ref().map(|m| m.serialize());
     }
@@ -632,6 +640,13 @@ async fn save_training_data(State(state): State<Arc<AppState>>) -> Json<Value> {
 #[derive(serde::Deserialize)]
 struct ResetRequest {
     max_turns: Option<i32>,
+    #[serde(rename = "mapSize")]
+    map_size: Option<u16>,
+    #[serde(rename = "opponentPreset")]
+    opponent_preset: Option<polyfish::research::Opponent>,
+    seed: Option<i64>,
+    tribe1: Option<String>,
+    tribe2: Option<String>,
 }
 
 async fn reset_game(
@@ -647,6 +662,13 @@ async fn reset_game(
         }
     };
 
+    if let Some(req) = &payload {
+        if req.map_size.is_some() || req.opponent_preset.is_some() || req.seed.is_some()
+            || req.tribe1.is_some() || req.tribe2.is_some()
+        {
+            return research_web::reset(&state, req);
+        }
+    }
     let mut game = state.game.lock().unwrap();
 
     let mut settings = MapGenSettings::default();
@@ -1002,7 +1024,8 @@ async fn get_trainer_hint(
 ) -> Json<Value> {
     let mut game = state.game.lock().unwrap();
 
-    let (best_move, mcts_analysis_json) = if let Some(net) = &state.network {
+    let network = state.network.as_ref().filter(|_| game.map_size() == 11);
+    let (best_move, mcts_analysis_json) = if let Some(net) = network {
         // 1. Use Neural Network (Gumbel MCTS) if available
         use polyfish::ai::brain::Brain;
         use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};

@@ -610,6 +610,7 @@ fn play_single_game(
     iteration: usize,
     decay_last_iter: usize,
     gamemode: u8,
+    preset_opponent: Option<(polyfish::research::OpponentPreset, PlayerId)>,
     backend1: SearchBackend,
     backend2: SearchBackend,
     value_trust: Option<f32>,
@@ -651,6 +652,12 @@ fn play_single_game(
     game.state = polyfish::mapgen::generate(gen_settings);
     game.state.settings.mode = polyfish::types::ModeType::from_repr(gamemode)
         .unwrap_or(polyfish::types::ModeType::Perfection);
+    if let Some((preset, seat)) = preset_opponent {
+        polyfish::research::use_might_rules(
+            &mut game,
+            polyfish::research::MatchConfig::new(preset.into(), seat),
+        );
+    }
     game.state.settings.max_turns = max_turns;
     game.post_load();
 
@@ -753,131 +760,142 @@ fn play_single_game(
 
         let pov = game.state.settings.current_player_turn_id;
 
-        // Get state tensor
-        let current_network = if pov == 1 { network1 } else { network2 };
-        let device = current_network.device();
-        let state_t = state_to_tensor(&game.state, pov, &device)
-            .expect("BUG: Failed to create state tensor - game state is invalid");
-
-        // MCTS Search - use the correct agent
-        let current_agent = if pov == 1 { &mut agent1 } else { &mut agent2 };
-
-        let trigger_info = if trace_villages
-            && !traced_in_this_game
-            && trace_counter.load(Ordering::Relaxed) < trace_max
-        {
-            find_village_trigger(&game.state, pov, &open_villages, trace_trigger)
+        let (best_move, sample) = if let Some((preset, _)) = preset_opponent.filter(|(_, seat)| *seat == pov) {
+            let action = polyfish::research::choose_move(&game, preset);
+            if action.is_none() {
+                eprintln!("[Game {game_idx}] Preset opponent did not select a legal move");
+                aborted_games.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            (action, None)
         } else {
-            None
-        };
-        if trigger_info.is_some() {
-            current_agent.request_trace();
-        }
+            // Get state tensor
+            let current_network = if pov == 1 { network1 } else { network2 };
+            let device = current_network.device();
+            let state_t = state_to_tensor(&game.state, pov, &device)
+                .expect("BUG: Failed to create state tensor - game state is invalid");
 
-        let (best_move, move_visits) = current_agent.think_decomposed(&mut game, move_count);
-        // The search that just ran was for the CURRENT (pre-move) state, so
-        // this is that state's own root value — the TD bootstrap target for
-        // whichever earlier step's label lands here as its "next decision".
-        let root_value = current_agent.last_root_value();
-        if let Some(kl) = current_agent.last_search_kl() {
-            kl_sum += kl;
-            kl_n += 1;
-        }
+            // MCTS Search - use the correct agent
+            let current_agent = if pov == 1 { &mut agent1 } else { &mut agent2 };
 
-        if let Some((trigger_unit_idx, trigger_village_idx)) = trigger_info {
-            if let Some(trace) = current_agent.take_trace() {
-                if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
-                    write_decision_trace(
-                        &trace,
-                        iteration,
-                        game_idx,
-                        game.state.settings.turn,
-                        move_count,
-                        pov,
-                        trigger_unit_idx,
-                        trigger_village_idx,
-                    );
-                }
-                traced_in_this_game = true;
-            }
-        }
-
-        let map_size = game.state.settings.size as usize;
-
-        // Initialize probability distributions
-        let fixed_map_width = features::MAP_SIZE;
-        let fixed_spatial_size = features::MAP_SIZE * fixed_map_width;
-
-        let mut p_action = vec![0.0; polyfish::ai::network::NUM_ACTION_TYPES];
-        let mut p_source = vec![0.0; fixed_spatial_size];
-        let mut p_target = vec![0.0; fixed_spatial_size];
-        let mut p_option = vec![0.0; 192]; // Unified option head (Expanded)
-
-        let mut total_visits = 0.0;
-
-        // Aggregate visits into distributions
-        for mv in &move_visits {
-            total_visits += mv.visits;
-
-            // Spatial and Option targets using DecomposedMapper
-            let targets = DecomposedMapper::move_visit_to_targets(&mv, map_size);
-
-            let action_idx = targets.action_type;
-            if action_idx < p_action.len() {
-                p_action[action_idx] += mv.visits;
+            let trigger_info = if trace_villages
+                && !traced_in_this_game
+                && trace_counter.load(Ordering::Relaxed) < trace_max
+            {
+                find_village_trigger(&game.state, pov, &open_villages, trace_trigger)
+            } else {
+                None
+            };
+            if trigger_info.is_some() {
+                current_agent.request_trace();
             }
 
-            if let Some(i) = targets.source_spatial {
-                if i < p_source.len() {
-                    p_source[i] += mv.visits;
+            let (best_move, move_visits) = current_agent.think_decomposed(&mut game, move_count);
+            // The search that just ran was for the CURRENT (pre-move) state, so
+            // this is that state's own root value — the TD bootstrap target for
+            // whichever earlier step's label lands here as its "next decision".
+            let root_value = current_agent.last_root_value();
+            if let Some(kl) = current_agent.last_search_kl() {
+                kl_sum += kl;
+                kl_n += 1;
+            }
+
+            if let Some((trigger_unit_idx, trigger_village_idx)) = trigger_info {
+                if let Some(trace) = current_agent.take_trace() {
+                    if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
+                        write_decision_trace(
+                            &trace,
+                            iteration,
+                            game_idx,
+                            game.state.settings.turn,
+                            move_count,
+                            pov,
+                            trigger_unit_idx,
+                            trigger_village_idx,
+                        );
+                    }
+                    traced_in_this_game = true;
                 }
             }
 
-            if let Some(i) = targets.target_spatial {
-                if i < p_target.len() {
-                    p_target[i] += mv.visits;
+            let map_size = game.state.settings.size as usize;
+
+            // Initialize probability distributions
+            let fixed_map_width = features::MAP_SIZE;
+            let fixed_spatial_size = features::MAP_SIZE * fixed_map_width;
+
+            let mut p_action = vec![0.0; polyfish::ai::network::NUM_ACTION_TYPES];
+            let mut p_source = vec![0.0; fixed_spatial_size];
+            let mut p_target = vec![0.0; fixed_spatial_size];
+            let mut p_option = vec![0.0; 192]; // Unified option head (Expanded)
+
+            let mut total_visits = 0.0;
+
+            // Aggregate visits into distributions
+            for mv in &move_visits {
+                total_visits += mv.visits;
+
+                // Spatial and Option targets using DecomposedMapper
+                let targets = DecomposedMapper::move_visit_to_targets(&mv, map_size);
+
+                let action_idx = targets.action_type;
+                if action_idx < p_action.len() {
+                    p_action[action_idx] += mv.visits;
+                }
+
+                if let Some(i) = targets.source_spatial {
+                    if i < p_source.len() {
+                        p_source[i] += mv.visits;
+                    }
+                }
+
+                if let Some(i) = targets.target_spatial {
+                    if i < p_target.len() {
+                        p_target[i] += mv.visits;
+                    }
+                }
+
+                if let Some(i) = targets.target_type {
+                    if i < p_option.len() {
+                        p_option[i] += mv.visits;
+                    }
                 }
             }
 
-            if let Some(i) = targets.target_type {
-                if i < p_option.len() {
-                    p_option[i] += mv.visits;
+            // Normalize
+            if total_visits > 0.0 {
+                for x in &mut p_action {
+                    *x /= total_visits;
+                }
+                for x in &mut p_source {
+                    *x /= total_visits;
+                }
+                for x in &mut p_target {
+                    *x /= total_visits;
+                }
+                for x in &mut p_option {
+                    *x /= total_visits;
                 }
             }
-        }
 
-        // Normalize
-        if total_visits > 0.0 {
-            for x in &mut p_action {
-                *x /= total_visits;
-            }
-            for x in &mut p_source {
-                *x /= total_visits;
-            }
-            for x in &mut p_target {
-                *x /= total_visits;
-            }
-            for x in &mut p_option {
-                *x /= total_visits;
-            }
-        }
+            let policy_data = DecomposedPolicyData {
+                action_type: p_action,
+                source_spatial: p_source,
+                target_spatial: p_target,
+                move_option: p_option,
+            };
 
-        let policy_data = DecomposedPolicyData {
-            action_type: p_action,
-            source_spatial: p_source,
-            target_spatial: p_target,
-            move_option: p_option,
-        };
+            let record_sample = !move_visits.is_empty();
 
-        let record_sample = !move_visits.is_empty();
-
-        // Opening diversity: play a sample from pi' rather than its argmax for
-        // the first `opening_temp_moves` plies. The policy target stays pi'
-        // either way, which is what AlphaZero/Gumbel train on.
-        let best_move = if move_count < opening_temp_moves && move_visits.len() > 1 {
-            sample_opening_move(&game.state, &move_visits, &mut opening_rng).or(best_move)
-        } else {
-            best_move
+            // Opening diversity: play a sample from pi' rather than its argmax for
+            // the first `opening_temp_moves` plies. The policy target stays pi'
+            // either way, which is what AlphaZero/Gumbel train on.
+            let best_move = if move_count < opening_temp_moves && move_visits.len() > 1 {
+                sample_opening_move(&game.state, &move_visits, &mut opening_rng).or(best_move)
+            } else {
+                best_move
+            };
+            (best_move, record_sample.then_some((state_t, policy_data, root_value)))
         };
 
         if let Some(m) = best_move {
@@ -973,7 +991,7 @@ fn play_single_game(
             }
 
             flat_recap.push((turn_now, pov, replay_command));
-            if record_sample {
+            if let Some((state_t, policy_data, root_value)) = sample {
                 game_history.push(HistoryStep {
                     features: state_t,
                     policy: policy_data,
@@ -1023,7 +1041,10 @@ fn play_single_game(
         .map(|(id, _)| *id)
         .collect();
 
-    let (winner_id, winner_score) = if alive_tribes.len() == 1 {
+    let capital_winner = game.state.settings.might_winner;
+    let (winner_id, winner_score) = if let Some(winner) = capital_winner {
+        (winner, scores[&winner])
+    } else if alive_tribes.len() == 1 {
         let wid = alive_tribes[0];
         (wid, *scores.get(&wid).unwrap_or(&0))
     } else {
@@ -1035,7 +1056,7 @@ fn play_single_game(
             .unwrap_or((0, 0))
     };
 
-    let is_decisive = alive_tribes.len() == 1;
+    let is_decisive = capital_winner.is_some() || alive_tribes.len() == 1;
     if progress == ProgressMode::Full {
         eprintln!(
             "[Game {}] Finished. Moves: {} | Winner: {} (Score: {}) | Decisive: {}",
@@ -1094,17 +1115,23 @@ fn play_single_game(
             max_turns: initial_state.settings.max_turns,
             game_mode: initial_state.settings.mode,
             players: replay_players,
-            source_diagnostics: None,
+            source_diagnostics: preset_opponent.map(|(preset, bot_seat)| {
+                json!({ "preset": preset, "presetVersion": polyfish::research::PRESET_VERSION, "botSeat": bot_seat, "seed": seed })
+            }),
         },
         initial_state,
         turns: group_recap(flat_recap),
         result: Some(ReplayResult {
-            winner_player_id: Some(winner_id),
+            winner_player_id: (is_decisive || preset_opponent.is_none()).then_some(winner_id),
             draw: false,
             scores: scores.iter().map(|(&id, &score)| (id, score)).collect(),
             reason: Some(
-                if is_decisive {
+                if capital_winner.is_some() {
+                    "capitalCapture"
+                } else if is_decisive {
                     "elimination"
+                } else if preset_opponent.is_some() {
+                    "turnLimit"
                 } else {
                     "scoreAtLimit"
                 }
@@ -1137,8 +1164,8 @@ fn play_single_game(
         decisive: is_decisive,
         policy_kl: (kl_n > 0).then(|| kl_sum / kl_n as f32),
         anchor_seat: match (
-            backend1 == SearchBackend::Greedy,
-            backend2 == SearchBackend::Greedy,
+            preset_opponent.is_none() && backend1 == SearchBackend::Greedy,
+            preset_opponent.is_none() && backend2 == SearchBackend::Greedy,
         ) {
             (true, false) => Some(1),
             (false, true) => Some(2),
@@ -1260,6 +1287,10 @@ fn main() -> anyhow::Result<()> {
         /// Optional opponent model path (if not set, plays against self)
         #[arg(long)]
         opponent: Option<String>,
+
+        /// Play Might against a fixed Tribes-style opponent, recording learner decisions only.
+        #[arg(long, value_enum, conflicts_with = "opponent")]
+        opponent_preset: Option<polyfish::research::OpponentPreset>,
 
         /// Fraction of games (0..1) played against the network-free Greedy
         /// backend as an anchor opponent (seat alternates between anchor
@@ -1480,6 +1511,9 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    if args.anchor_frac > 0.0 && args.opponent_preset.is_some() {
+        anyhow::bail!("--anchor-frac and --opponent-preset are mutually exclusive");
+    }
     if args.anchor_frac > 0.0 && args.opponent.is_some() {
         anyhow::bail!("--anchor-frac and --opponent are mutually exclusive");
     }
@@ -1891,6 +1925,7 @@ fn main() -> anyhow::Result<()> {
                             args.iteration,
                             decay_last_iter,
                             args.gamemode,
+                            args.opponent_preset.map(|preset| (preset, if swap_players { 1 } else { 2 })),
                             backend_seat1,
                             backend_seat2,
                             args.value_trust,
