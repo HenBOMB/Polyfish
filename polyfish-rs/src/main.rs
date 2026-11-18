@@ -190,8 +190,14 @@ async fn main() {
             get(polyfish::training_api::api_elo_ladder),
         )
         .nest_service("/assets", ServeDir::new("../polyfish-ui/dist/assets"))
-        .nest_service("/simulator", ServeDir::new("../polyfish-ui/public/research")
-            .fallback(ServeDir::new("../polyfish-ui/dist/simulator")))
+        .nest_service(
+            "/simulator",
+            ServeDir::new("../src/public").fallback(
+                ServeDir::new("../polyfish-ui/public/research")
+                    .fallback(ServeDir::new("../polyfish-ui/dist/simulator")),
+            ),
+        )
+        .nest_service("/simulator/plain", ServeDir::new("../polyfish-ui/public/research"))
         .nest_service("/static", ServeDir::new("../polyfish-ui/dist"))
         // Built SPA first, then the static UI in src/public (training.html, js/,
         // css/) that ships unbuilt; unmatched paths fall back to SPA routing.
@@ -275,6 +281,9 @@ fn default_iterations() -> usize {
 
 async fn get_current_state(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mut game = state.game.lock().unwrap();
+    if let Some(board) = research_web::graphical_snapshot(&game, state.network.is_some()) {
+        return Json(board);
+    }
     polyfish::prediction::update_predictions(&mut game.state);
 
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
@@ -995,6 +1004,10 @@ async fn load_game(State(state): State<Arc<AppState>>) -> Json<Value> {
 
     game.state = loaded_state;
     game.post_load();
+
+    if let Some(board) = research_web::graphical_snapshot(&game, state.network.is_some()) {
+        return Json(board);
+    }
 
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);

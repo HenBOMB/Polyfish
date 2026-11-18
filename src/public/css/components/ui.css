@@ -546,3 +546,46 @@ input[type=range] {
     letter-spacing: 1px;
     color: white;
 }
+
+#research-setup {
+    width: min(25rem, calc(100% - 2rem));
+    padding: 1.25rem;
+    color: var(--rts-text);
+    background: var(--rts-bg);
+    border: 1px solid var(--rts-border);
+    border-radius: 0.75rem;
+    color-scheme: dark;
+}
+
+#research-setup::backdrop {
+    background: rgb(0 0 0 / 65%);
+}
+
+#research-setup form {
+    display: grid;
+    gap: 0.65rem;
+}
+
+#research-setup h2, #research-setup p {
+    margin: 0;
+}
+
+#research-setup label {
+    display: grid;
+    gap: 0.25rem;
+}
+
+#research-setup select, #research-setup input {
+    padding: 0.45rem;
+    font: inherit;
+}
+
+#research-setup-error {
+    color: #fca5a5;
+}
+
+.research-setup-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}

@@ -216,7 +216,9 @@ class MapRenderer {
 
         // Ambient (Mountains/Forests)
         if (tile.type === 4) { // Mountain
-            this.updateLayer(idx, 'ambient', `terrain/mountains/mountain_${tile.climate === 17 ? 16 : tile.climate}`, pos, 1200, ['mountain']);
+            const climate = tile.climate === 17 ? 16 : tile.climate;
+            const classes = climate === 8 ? ['mountain', 'kickoo-mountain'] : ['mountain'];
+            this.updateLayer(idx, 'ambient', `terrain/mountains/mountain_${climate}`, pos, 1200, classes);
         } else if (tile.type === 5) { // Forest
             this.updateLayer(idx, 'ambient', `terrain/forests/Forest_${tile.climate === 17 ? 16 : tile.climate}`, pos, 2000, ['forest']);
         } else {

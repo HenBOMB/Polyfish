@@ -2,7 +2,7 @@
 
 ## Play locally
 
-From `polyfish-rs/`, start the Rust server and visit [the simulator](http://127.0.0.1:3000/simulator/). The browser uses the files in `polyfish-ui/public/research/`.
+From `polyfish-rs/`, start the Rust server and visit [the simulator](http://127.0.0.1:3000/simulator/). A full checkout serves the graphical board from `src/public/`. The research archive uses the compact board from `polyfish-ui/public/research/`. That board is also available at [/simulator/plain/](http://127.0.0.1:3000/simulator/plain/) in a full checkout.
 
 ```sh
 POLYFISH_LISTEN=127.0.0.1:3000 cargo run --locked --release --no-default-features --bin polyfish

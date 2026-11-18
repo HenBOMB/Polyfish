@@ -85,19 +85,63 @@ pub(super) fn reset(state: &AppState, req: &ResetRequest) -> WebResult {
     Ok(Json(snapshot(&live, state.network.is_some(), false)))
 }
 
-fn snapshot(game: &Game, has_network: bool, replaying: bool) -> Value {
+fn board_view(game: &Game, replaying: bool) -> (Game, bool) {
     let cfg = game.state.settings.research;
     let active = game.current_player_id();
     let bot_turn = !replaying
+        && research::result(game) == MatchResult::InProgress
         && cfg
             .is_some_and(|config| config.opponent != Opponent::Human && config.bot_seat == active);
     let pov = cfg
         .filter(|config| config.opponent != Opponent::Human)
         .map_or(active, |config| if config.bot_seat == 1 { 2 } else { 1 });
-    let result = research::result(game);
     let mut observed = research::observation(game, pov);
     observed.state.settings.current_player_turn_id = pov;
+    (observed, bot_turn)
+}
+
+pub(super) fn graphical_snapshot(game: &Game, has_network: bool) -> Option<Value> {
+    let config = game.state.settings.research?;
+    let (observed, bot_turn) = board_view(game, false);
     let state = &observed.state;
+    let result = research::result(game);
+    let mut tiles: Vec<_> = state.tiles.values().collect();
+    tiles.sort_by_key(|tile| tile.coords.idx);
+    let legal_moves: Vec<_> = if !bot_turn && result == MatchResult::InProgress {
+        research::legal_actions(game, &observed)
+            .iter()
+            .map(|action| action.serialize())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Some(json!({
+        "state": {
+            "settings": state.settings,
+            "tiles": tiles,
+            "structures": state.structures,
+            "resources": state.resources,
+            "tribes": crate::tribes_json_with_max_health(state),
+        },
+        "legalMoves": legal_moves,
+        "researchMatch": {
+            "opponent": config.opponent,
+            "seed": game.state.initial_seed.to_string(),
+            "revision": game.state._history.len(),
+            "result": result,
+            "learnedAvailable": has_network,
+            "botTurn": bot_turn,
+        },
+    }))
+}
+
+fn snapshot(game: &Game, has_network: bool, replaying: bool) -> Value {
+    let cfg = game.state.settings.research;
+    let active = game.current_player_id();
+    let result = research::result(game);
+    let (observed, bot_turn) = board_view(game, replaying);
+    let state = &observed.state;
+    let pov = observed.current_player_id();
     let tiles: Vec<_> = state.tiles.values().map(|tile| {
         if !tile.explorers.contains(&pov) && state.settings._fow {
             return json!({"index": tile.coords.idx, "visible": false});

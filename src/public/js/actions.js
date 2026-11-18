@@ -7,6 +7,11 @@ function playMove(move) {
     // Reset pending state whenever a move is played
     resetMctsButton();
 
+    if (graphicalMatch) {
+        playGraphicalMove(move);
+        return;
+    }
+
     document.querySelectorAll('.rts-btn').forEach(b => b.disabled = true);
     fetch('/step', {
         method: 'POST',

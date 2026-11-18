@@ -206,6 +206,7 @@ let mctsParams = {
 };
 
 async function runPassiveAnalysis(force = false) {
+    if (graphicalMatch) return;
     if (!mctsParams.passive && !force) return;
     if (pendingMctsMove || PENDING_AI_MOVE) {
         if (!force) setTimeout(runPassiveAnalysis, 1000);
@@ -344,6 +345,8 @@ function updateUI(data) {
             renderer.clear();
         }
         GAME_STATE = data.state;
+        graphicalMatch = data.researchMatch ?? null;
+        if (graphicalMatch) ENABLE_FOW = true;
     }
     if (data.legalMoves) currentLegalMoves = data.legalMoves;
     if (data.movePlayed) lastMoveVal.textContent = data.movePlayed;
@@ -790,10 +793,11 @@ function focusCamera(smooth = false) {
 }
 
 window.addEventListener('load', () => {
-    fetch('/current').then(r => r.json()).then(data => {
-        updateUI(data);
+    refreshGraphicalBoard().then(() => {
         setTimeout(focusCamera, 100);
-    });
+        if (!graphicalMatch) runPassiveAnalysis(true);
+        if (graphicalMatch?.botTurn) runGraphicalTurn();
+    }).catch(error => showToast(error.message));
 
     // Drag, Zoom, Event listeners...
     let dragging = false, lx, ly;
@@ -822,9 +826,6 @@ window.addEventListener('load', () => {
         translateY = (rect.height / 2) - ((rect.height / 2) - translateY) * (scale / oldScale);
         updateTransform();
     }, { passive: false });
-
-    // Panel Toggle
-    runPassiveAnalysis(true);
 
     // Passive Analysis Toggle
     const passiveToggle = document.getElementById('mcts-passive-toggle');
@@ -1349,6 +1350,7 @@ setInterval(pollTrainingStatus, 2000);
 
 function checkTrainMode() {
     if (!GAME_STATE.settings) return;
+    if (showGraphicalTurn()) return;
 
     const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
 
@@ -1421,8 +1423,8 @@ document.getElementById('btn-interactive').onclick = () => {
     }
 };
 
-document.getElementById('btn-reset').onclick = () => apiAction('/reset', {});
 document.getElementById('btn-fow').onclick = () => {
+    if (graphicalMatch) return;
     ENABLE_FOW = !ENABLE_FOW;
     renderer.render(GAME_STATE, currentLegalMoves, 1);
 };
@@ -1523,7 +1525,7 @@ window.addEventListener('click', () => {
 
 // Teacher/Assistant logic
 async function requestAiHint() {
-    if (!INTERACTIVE_MODE || PENDING_AI_MOVE) return;
+    if (graphicalMatch || !INTERACTIVE_MODE || PENDING_AI_MOVE) return;
 
     const depth = parseInt(mctsDepth.value) || 100;
 
@@ -1583,7 +1585,8 @@ window.addEventListener('keydown', (e) => {
     }
 });
 
-document.getElementById('btn-reset').onclick = () => apiAction('/reset', {});
+document.getElementById('btn-reset').onclick = openResearchSetup;
+document.getElementById('btn-fit-board').onclick = fitGraphicalBoard;
 document.getElementById('btn-save-state').onclick = async () => {
     try {
         const res = await fetch('/save', { method: 'POST' });
@@ -1602,6 +1605,7 @@ document.getElementById('btn-load-state').onclick = async () => {
         const data = await res.json();
         if (data.state) {
             updateUI(data);
+            if (graphicalMatch?.botTurn) runGraphicalTurn();
             showToast("📂 Game State Loaded!");
         }
     } catch (e) {

@@ -10,8 +10,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/premium.css">
     <link rel="stylesheet" href="css/game.css">
-    <link rel="stylesheet" href="css/components/map.css">
-    <link rel="stylesheet" href="css/components/ui.css">
+    <link rel="stylesheet" href="css/components/map.css?v=3">
+    <link rel="stylesheet" href="css/components/ui.css?v=3">
     <link rel="stylesheet" href="css/components/eval.css">
     <link rel="stylesheet" href="css/components/mcts.css">
     <link rel="stylesheet" href="css/components/techtree.css">
@@ -49,6 +49,7 @@
             </div>
 
             <div class="rts-group right system-controls">
+                <button id="btn-fit-board" class="rts-sys-btn">Fit Board</button>
                 <button id="btn-fow" class="rts-sys-btn" title="Toggle Fog of War">FOW</button>
                 <button id="btn-predictions" class="rts-sys-btn" title="Toggle AI Predictions">AI VIS</button>
                 <div id="training-status" class="training-led hidden">Training Active</div>
@@ -128,7 +129,7 @@
                     </div>
                     <div class="action-grid secondary">
                         <button id="btn-rng" class="rts-btn" title="Random Move">RNG</button>
-                        <button id="btn-reset" class="rts-btn" title="Reset Simulation">Reset</button>
+                        <button id="btn-reset" class="rts-btn">New Match</button>
                     </div>
                     <button id="btn-save-state" class="rts-btn mini green" title="Save Game State">Save State</button>
                     <button id="btn-load-state" class="rts-btn mini blue" title="Load Game State">Load State</button>
@@ -230,14 +231,54 @@
         </defs>
     </svg>
 
+    <dialog id="research-setup" aria-labelledby="research-setup-title">
+        <form>
+            <h2 id="research-setup-title">New Match</h2>
+            <p>1v1 Might · Drylands · Fog of War</p>
+            <label>Map size
+                <select name="mapSize">
+                    <option value="121">121 tiles (11×11)</option>
+                    <option value="196">196 tiles (14×14)</option>
+                    <option value="256">256 tiles (16×16)</option>
+                </select>
+            </label>
+            <label>Your tribe
+                <select name="tribe1">
+                    <option>Imperius</option><option>Bardur</option><option>Xin-Xi</option><option>Oumaji</option>
+                </select>
+            </label>
+            <label>Opponent tribe
+                <select name="tribe2">
+                    <option>Bardur</option><option>Imperius</option><option>Xin-Xi</option><option>Oumaji</option>
+                </select>
+            </label>
+            <label>Opponent
+                <select name="opponentPreset">
+                    <option value="human">Local player</option>
+                    <option value="easy">Easy</option>
+                    <option value="normal" selected>Normal</option>
+                    <option value="expert">Expert</option>
+                    <option value="learned" disabled>Learned (11×11)</option>
+                </select>
+            </label>
+            <label>Seed <input name="seed" placeholder="Random" pattern="-?[0-9]+"></label>
+            <p id="research-setup-error" role="alert" hidden></p>
+            <div class="research-setup-actions">
+                <button type="button" id="btn-cancel-setup" class="rts-btn">Cancel</button>
+                <button type="submit" class="rts-btn primary">Start Match</button>
+            </div>
+        </form>
+    </dialog>
+
     <!-- Scripts -->
     <script src="js/types.js?v=2"></script>
     <script src="js/functions.js?v=2"></script>
-    <script src="js/actions.js?v=2"></script>
-    <script src="js/map.js?v=2"></script>
+    <script src="js/actions.js?v=3"></script>
+    <script src="js/map.js?v=3"></script>
     <script src="js/space-bg.js?v=2"></script>
     <script src="js/replay.js?v=4"></script>
-    <script src="js/main.js?v=2"></script>
+    <script src="js/research-match.js?v=1"></script>
+    <script src="js/main.js?v=3"></script>
 
     <!-- Replay UI Overlay -->
     <div id="replay-controls" class="hidden">
