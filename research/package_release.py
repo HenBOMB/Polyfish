@@ -20,6 +20,7 @@ INCLUDE = (
     "polyfish-rs/examples/metal_parity.rs",
     "polyfish-rs/examples/tch_parity.rs",
     "polyfish-rs/examples/research_bench.rs",
+    "polyfish-rs/examples/midgame_bench.rs",
     "polyfish-rs/src",
     "polyfish-rs/tests/research_simulator.rs",
     "polyfish-rs/tests/unit_push.rs",

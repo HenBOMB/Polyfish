@@ -1,0 +1,164 @@
+{
+  "121": {
+    "actionCounts": {
+      "endTurn": 128,
+      "attack": 126,
+      "harvest": 130,
+      "move": 128
+    },
+    "fullActionCounts": {
+      "endTurn": 256,
+      "attack": 246,
+      "harvest": 266,
+      "move": 256
+    },
+    "maxDepth": 5,
+    "projectionSha256": "a8dfb5e43c466946c4db6b33fbf2a4b6e4187813870230202794f856e51fc777",
+    "legalCounts": {
+      "inspectedNodes": 256,
+      "javaLegal": 38833,
+      "rustLegal": 38832,
+      "javaOnlyMapped": 0,
+      "rustOnlyMapped": 0,
+      "sharedMapped": 15530,
+      "javaOutsideSubset": 23303,
+      "rustOutsideSubset": 23302
+    },
+    "rejectedTransitions": {}
+  },
+  "196": {
+    "actionCounts": {
+      "endTurn": 128,
+      "attack": 126,
+      "harvest": 130,
+      "move": 128
+    },
+    "fullActionCounts": {
+      "endTurn": 256,
+      "attack": 247,
+      "harvest": 265,
+      "move": 256
+    },
+    "maxDepth": 5,
+    "projectionSha256": "0b1935194e738443312ab2be8ad48f18f71e5266315a406640abe5a5cf2fab76",
+    "legalCounts": {
+      "inspectedNodes": 256,
+      "javaLegal": 56430,
+      "rustLegal": 56429,
+      "javaOnlyMapped": 0,
+      "rustOnlyMapped": 0,
+      "sharedMapped": 16168,
+      "javaOutsideSubset": 40262,
+      "rustOutsideSubset": 40261
+    },
+    "rejectedTransitions": {}
+  },
+  "256": {
+    "actionCounts": {
+      "endTurn": 128,
+      "attack": 128,
+      "harvest": 128,
+      "move": 128
+    },
+    "fullActionCounts": {
+      "endTurn": 256,
+      "attack": 256,
+      "harvest": 256,
+      "move": 256
+    },
+    "maxDepth": 5,
+    "projectionSha256": "e83a2a40fdf36e775aa7784cfb4f73e4a93ba8c00622ea63128a09140096ffd5",
+    "legalCounts": {
+      "inspectedNodes": 256,
+      "javaLegal": 81630,
+      "rustLegal": 81605,
+      "javaOnlyMapped": 0,
+      "rustOnlyMapped": 0,
+      "sharedMapped": 30265,
+      "javaOutsideSubset": 51365,
+      "rustOutsideSubset": 51340
+    },
+    "rejectedTransitions": {}
+  },
+  "324": {
+    "actionCounts": {
+      "endTurn": 128,
+      "attack": 128,
+      "harvest": 128,
+      "move": 128
+    },
+    "fullActionCounts": {
+      "endTurn": 256,
+      "attack": 256,
+      "harvest": 256,
+      "move": 256
+    },
+    "maxDepth": 5,
+    "projectionSha256": "8aea101f04808cfe162771218e80255913568e7fe8ac6c3651499f5842dd266e",
+    "legalCounts": {
+      "inspectedNodes": 256,
+      "javaLegal": 96563,
+      "rustLegal": 96538,
+      "javaOnlyMapped": 0,
+      "rustOnlyMapped": 0,
+      "sharedMapped": 29720,
+      "javaOutsideSubset": 66843,
+      "rustOutsideSubset": 66818
+    },
+    "rejectedTransitions": {}
+  },
+  "400": {
+    "actionCounts": {
+      "endTurn": 128,
+      "attack": 128,
+      "harvest": 128,
+      "move": 128
+    },
+    "fullActionCounts": {
+      "endTurn": 256,
+      "attack": 256,
+      "harvest": 256,
+      "move": 256
+    },
+    "maxDepth": 5,
+    "projectionSha256": "814a8063eb5c489ada171f1c3d50c65bb8a671b0421ca6fcc0149c5e7952593b",
+    "legalCounts": {
+      "inspectedNodes": 256,
+      "javaLegal": 123397,
+      "rustLegal": 123339,
+      "javaOnlyMapped": 0,
+      "rustOnlyMapped": 0,
+      "sharedMapped": 42438,
+      "javaOutsideSubset": 80959,
+      "rustOutsideSubset": 80901
+    },
+    "rejectedTransitions": {}
+  },
+  "900": {
+    "actionCounts": {
+      "endTurn": 128,
+      "attack": 128,
+      "harvest": 128,
+      "move": 128
+    },
+    "fullActionCounts": {
+      "endTurn": 256,
+      "attack": 256,
+      "harvest": 256,
+      "move": 256
+    },
+    "maxDepth": 5,
+    "projectionSha256": "3f4ab8401d9cb2c674da35dde2a06d1e9af696084632531637d5a3d81b56db72",
+    "legalCounts": {
+      "inspectedNodes": 256,
+      "javaLegal": 243064,
+      "rustLegal": 243006,
+      "javaOnlyMapped": 0,
+      "rustOnlyMapped": 0,
+      "sharedMapped": 43055,
+      "javaOutsideSubset": 200009,
+      "rustOutsideSubset": 199951
+    },
+    "rejectedTransitions": {}
+  }
+}
