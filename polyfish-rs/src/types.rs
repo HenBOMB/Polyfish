@@ -55,6 +55,9 @@ pub enum TerrainType {
     Ice = 6,
     Wetland = 7,
     Mangrove = 8,
+    /// Unknown terrain in a research observation. Excluded from terrain feature channels.
+    #[strum(disabled)]
+    Fog = 255,
 }
 
 /// Technology types

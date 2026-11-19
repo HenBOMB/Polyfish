@@ -1,5 +1,5 @@
 use polyfish::research::{self, MatchConfig, Opponent};
-use polyfish::{Action, ActionError, Coords, Game, MapSize, TribeType, TurnRotation};
+use polyfish::{Action, ActionError, Coords, Game, MapSize, TerrainType, TribeType, TurnRotation};
 
 fn match_game() -> Game {
     research::new_match(
@@ -137,15 +137,23 @@ fn committed_undo_keeps_fog_discoveries() {
             .count()
     };
     let before = explored(&game);
-    for action in game
-        .legal_actions()
+    let before_view = research::observation(&game, 1);
+    for action in research::legal_actions(&game, &before_view)
         .into_iter()
+        .map(|action| Action::from_move(action.as_ref()).unwrap())
         .filter(|action| matches!(action, Action::Step { .. }))
     {
         let mut committed = game.clone();
         let undo = committed.play(&action).unwrap();
         if explored(&committed) == before {
             continue;
+        }
+        let after_view = research::observation(&committed, 1);
+        for (idx, tile) in &committed.state.tiles {
+            if tile.explorers.contains(&1) && !game.state.tiles[idx].explorers.contains(&1) {
+                assert_eq!(before_view.state.tiles[idx].terrain_type, TerrainType::Fog);
+                assert_eq!(after_view.state.tiles[idx].terrain_type, tile.terrain_type);
+            }
         }
         undo(&mut committed.state);
         assert!(explored(&committed) > before);

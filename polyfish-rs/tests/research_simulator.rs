@@ -865,6 +865,40 @@ fn all_presets_finish_the_same_turn_after_a_save_load() {
 }
 
 #[test]
+fn research_observation_masks_hidden_terrain() {
+    let mut plains = fixture(MapSize::Tiny);
+    let pov = plains.current_player_id();
+    let hidden = plains
+        .state
+        .tiles
+        .values()
+        .find(|tile| !tile.explorers.contains(&pov))
+        .unwrap()
+        .coords
+        .idx;
+    plains.state.tiles[&hidden].terrain_type = TerrainType::Field;
+    let mut mountains = plains.clone();
+    mountains.state.tiles[&hidden].terrain_type = TerrainType::Mountain;
+
+    let view = observation(&plains, pov);
+    let mountain_view = observation(&mountains, pov);
+    assert_eq!(view.state.tiles[&hidden].terrain_type, TerrainType::Fog);
+    assert_eq!(
+        polyfish::fow::get_terrain_at(&view.state, hidden, pov),
+        TerrainType::Fog
+    );
+    assert_eq!(
+        serde_json::to_value(&view.state).unwrap(),
+        serde_json::to_value(&mountain_view.state).unwrap()
+    );
+    assert_eq!(plains.state.tiles[&hidden].terrain_type, TerrainType::Field);
+    assert_eq!(
+        mountains.state.tiles[&hidden].terrain_type,
+        TerrainType::Mountain
+    );
+}
+
+#[test]
 fn expert_uses_the_budget_and_ignores_hidden_state() {
     let game = fixture(MapSize::Tiny);
     let mut changed = game.clone();
@@ -904,10 +938,6 @@ fn expert_uses_the_budget_and_ignores_hidden_state() {
         Some(polyfish::states::ResourceState {
             resource_type: ResourceType::Metal,
         }),
-    );
-    assert_eq!(
-        observation(&game, 1).state.tiles[&hidden].terrain_type,
-        TerrainType::Field
     );
     assert!(observation(&changed, 1).state.resources[&visible].is_none());
     for preset in [

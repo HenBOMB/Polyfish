@@ -7,24 +7,18 @@
 use crate::states::{GameState, PlayerId};
 use crate::types::{ResourceType, TerrainType, TileEffect};
 
-/// Get terrain at a tile, using prediction for unexplored tiles during MCTS
-///
-/// - Returns actual terrain if tile is explored by player
-/// - Returns actual terrain during real moves (`_are_you_sure = true`)
-/// - Returns predicted terrain during MCTS for unexplored tiles
+/// Read terrain from the board, preserving Fog in research observations.
+/// MCTS on an unmasked board uses predictions for unexplored tiles.
 pub fn get_terrain_at(state: &GameState, idx: i32, pov_id: PlayerId) -> TerrainType {
     let tile = match state.tiles.get(&idx) {
         Some(t) => t,
         None => return TerrainType::None,
     };
 
-    // If tile is explored by this player, return actual terrain
-    if tile.explorers.contains(&pov_id) {
-        return tile.terrain_type;
-    }
-
-    // If real move, return actual (we're revealing now)
-    if state.settings._are_you_sure {
+    if tile.terrain_type == TerrainType::Fog
+        || tile.explorers.contains(&pov_id)
+        || state.settings._are_you_sure
+    {
         return tile.terrain_type;
     }
 
@@ -114,7 +108,7 @@ pub fn is_terrain_passable(
     }
 
     match terrain {
-        TerrainType::None => false,
+        TerrainType::None | TerrainType::Fog => false,
         TerrainType::Mountain => has_climbing,
         TerrainType::Water => has_sailing,
         TerrainType::Ocean => has_navigation,
