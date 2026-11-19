@@ -58,6 +58,10 @@ The [scenario files](fixtures/midgame) describe turn-16 positions with mixed ter
 
 The native MCTS workload alternates seats on fog-of-war views, runs 512 iterations per decision, and uses a 20-action rollout cap. The reported decisions per second include observation creation. The engines use their own search trees, evaluators, and legal actions. The memory workload runs separate processes holding 0, 128, 512, and 1,024 child states and reports peak resident memory. All workloads use seven independent interleaved process pairs by default. Timing runs warm up with twice the measured batch or decision count.
 
+The [baseline runs](results/midgame-benchmark-v1-baseline.json), [tuned runs](results/midgame-benchmark-v1-tuned.json), and [per-board comparison](results/midgame-comparison-v1.json) record the paired measurements and intervals. Run `python3 research/summarize_midgame_benchmark.py BASELINE_JSON TUNED_JSON` to reproduce the comparison. To check replay parity, build the release `research_match` binary at both revisions and run `python3 research/verify_board_compaction.py BASELINE_BINARY TUNED_BINARY`.
+
+To repeat the [Rust opening regression check](results/engine-opening-rust-paired-v1.json), save the release `research_bench` binary from each revision and run `python3 research/compare_opening_rust.py BASELINE_BINARY TUNED_BINARY BASELINE_COMMIT TUNED_COMMIT`. The [paired opening results with Java](results/engine-benchmark-after-compaction-v1.json) use the original v1.1 opening protocol.
+
 ## Reproduce the original v1 pilots
 
 The archived native match timings in [engine-pilot.json](results/engine-pilot.json) used the Drylands generator at `c038708d`. The current Drylands generator produces different maps from those seeds. [simulator-smoke.jsonl](results/simulator-smoke.jsonl) records the v1 browser and headless match verification.
