@@ -1,0 +1,46 @@
+{
+  "method": "macOS sample, 8 seconds, 1 ms sampling interval, release binary",
+  "fixture": "900-tile, 40-action fixed trace from the engine benchmark",
+  "interpretation": "Inclusive stack sample counts overlap across functions. Optimization and inlining can change symbol visibility.",
+  "baseline": {
+    "revision": "5e9905dd10f7f790a19df93052d2434d072d4a73",
+    "mainThreadSamples": 6731,
+    "inclusiveSamples": {
+      "legalGeneration": 5168,
+      "buildGeneration": 2484,
+      "isTileExplored": 1638,
+      "stepUnit": 1021,
+      "shortestPath": 782,
+      "firstContact": 191,
+      "getUnitSetting": 675,
+      "getStructureSetting": 370,
+      "getTechnologySetting": 788
+    }
+  },
+  "optimized": {
+    "revision": "f744404844077374eeed541369e97e5e8e4ed447",
+    "mainThreadSamples": 6358,
+    "inclusiveSamples": {
+      "legalGeneration": 3440,
+      "buildGeneration": 618,
+      "isTileExplored": 0,
+      "stepUnit": 1219,
+      "shortestPath": 0,
+      "firstContact": 56,
+      "getUnitSetting": 40,
+      "getStructureSetting": 0,
+      "getTechnologySetting": 0
+    }
+  },
+  "behaviorCheck": {
+    "games": 60,
+    "actions": 5504,
+    "mapSizes": [
+      121,
+      256,
+      900
+    ],
+    "initialStateNormalization": "Sort the serialized explorer sets on each tile",
+    "comparison": "Initial state, replay commands and result agree on both binaries"
+  }
+}

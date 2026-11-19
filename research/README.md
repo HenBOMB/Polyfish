@@ -26,9 +26,25 @@ cargo run --locked --release --no-default-features --bin research_match -- \
 
 For checkpoint training, run `self_play --opponent-preset easy|normal|expert` with your usual self-play options. This mode uses 11×11 Might, alternates the learner's seat, and records samples from learner decisions. Select a preset, checkpoint opponent, or anchor mode per run.
 
-## Reproduce the pilots
+## Benchmark dependencies
 
-Pin [GAIGResearch/Tribes](https://github.com/GAIGResearch/Tribes) to `015a551d1a6be69b5931788fcc418e4c51eb8ea1`. A local JDK and the corresponding [JavaFX Base](https://repo.maven.apache.org/maven2/org/openjfx/javafx-base/22.0.2/) platform jar are required. The paired pilot builds both sources and records elapsed times, legal-action counts, and runtime details.
+Pin [GAIGResearch/Tribes](https://github.com/GAIGResearch/Tribes) to `015a551d1a6be69b5931788fcc418e4c51eb8ea1`. A local JDK and the corresponding [JavaFX Base](https://repo.maven.apache.org/maven2/org/openjfx/javafx-base/22.0.2/) platform jar are required.
+
+## Reproduce the v1.1 engine benchmark
+
+Use the pinned Tribes checkout and JavaFX jar above. Run the benchmark from the repository root on a quiet host with BSD `time` (macOS) or GNU `time` (Linux).
+
+```sh
+python3 research/run_engine_benchmark.py /path/to/Tribes /path/to/javafx-base.jar /tmp/engine-benchmark.json
+```
+
+Each engine runs a flat opening with two matching capitals and one warrior per seat. The benchmark runs seven fresh process pairs per workload on each of six board sizes and interleaves the engines and sizes. The operation tests time 20,000 repetitions each of state copy, player-view creation, legal enumeration, a one-tile step, and End Turn. The throughput test plays 250 fixed 40-action traces per process and verifies every step and seat change. The engines enumerate their native legal actions before each scripted advance. Each timed workload gets two warm-up iterations per measured iteration.
+
+Peak resident set size (RSS) covers the engine process, including the runtime and warm-up. A separate run holds 512 copies of the opening state at once. The Java runs use `-Xms32m -Xmx512m`, and Rust uses a model-free release build. The output reports paired bootstrap intervals from seven process pairs. The script writes a JSON file containing the raw measurements and build metadata and a CSV of the summaries. [Baseline runs](results/engine-benchmark-v1.1.json) · [Optimized runs](results/engine-benchmark-v1.1-optimized.json) · [Optimized CSV](results/engine-benchmark-v1.1-optimized.csv)
+
+The Rust before-and-after comparison uses the same protocol and two engine revisions, `5e9905dd` and `f7444048`. The macOS sampling profile uses the repeated 900-tile trace and reports overlapping, inclusive stack counts. [Profiling data](results/engine-profile-v1.1.json)
+
+## Reproduce the original v1 pilots
 
 The archived native match timings in [engine-pilot.json](results/engine-pilot.json) used the Drylands generator at `c038708d`. The current Drylands generator produces different maps from those seeds. [simulator-smoke.jsonl](results/simulator-smoke.jsonl) records the v1 browser and headless match verification.
 

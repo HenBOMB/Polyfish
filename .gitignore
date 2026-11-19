@@ -6,6 +6,8 @@ node_modules
 **/__pycache__/
 
 *.csv
+!research/results/engine-benchmark-v1.1.csv
+!research/results/engine-benchmark-v1.1-optimized.csv
 
 */**/*.so
 */**/*.cmd
