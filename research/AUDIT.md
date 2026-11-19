@@ -26,6 +26,8 @@ The commercial workflow reference is Midjiwan's **2.16.8** build, identified in 
 
 The browser checklist covers selecting a map and opponent, inspecting explored and unexplored tiles, selecting a unit and destination, inspecting economy options, opening research, ending a turn, saving, and stepping over replay commands. Polyfish exposes these as board buttons, contextual actions, and local files. Java Tribes documents its own launch configuration and controls. Midjiwan documents pass-and-play, army training, exploration, combat, and a tech tree that exposes resource, unit, and building unlocks. These are workflow targets. A controlled side-by-side pass through the commercial UI is still pending. [Java Tribes interface](https://github.com/GAIGResearch/Tribes) · [Midjiwan's gameplay overview](https://polytopia.io/polytopia-switch/)
 
+The forced-spawn tests follow the published push rules for standard land units. They cover an unmoved Catapult after a different unit leaves its city, movement and ranged attack directions, besiegers, and blocked destinations. The center tie cases use the isometric board's south direction and the midpoint between tiles on even-sized maps. Direct measurements in version 2.16.8 are still pending. [Midjiwan's giant push example](https://polytopia.io/news/strategy-tip-4/) · [Push rules and worked example](https://docs.google.com/document/d/1C3nQm6SnRFc5pkWMy_WOj8LRosuj2XlINCmCoDfswn4/edit)
+
 ## Distribution
 
 - The new `polyfish-ui/public/research/` surface consists of original HTML, CSS, and JavaScript covered by the UI module's license. Its board uses CSS, Unicode markers, and system fonts.

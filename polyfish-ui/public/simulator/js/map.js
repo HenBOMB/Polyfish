@@ -9,6 +9,9 @@ const CITY_HOUSE_SPOTS = [
     [4, 64, 78],
 ];
 
+// World art shares the same depth scale. Offsets only break ties on the same tile.
+const WORLD_DEPTH = 2000;
+
 class MapRenderer {
     constructor(container) {
         this.container = container;
@@ -28,28 +31,7 @@ class MapRenderer {
             svg.style.height = '1px';
             svg.style.overflow = 'visible';
             svg.style.pointerEvents = 'none';
-            svg.style.zIndex = '500'; // Below units (5000) but above ground? Ground is 0..fog. 
-            // Ground zIndex is pos.y. We need borders to be visible. pos.y is large.
-            // Actually zIndex in CSS works differently. If tiles are position:absolute, they interleave based on z-index.
-            // SVG is one big element. If we put z-index 500, it might be behind some tiles and in front of others?
-            // Problem: SVG is a single flat layer. Tiles are sorted by Z.
-            // If we put SVG at z-index 500, it cuts through the map 3D-wise?
-            // Solution: Borders should probably be drawn PER TILE as an overlay div/img, or SVG needs to be very high Z to sit on top of everything?
-            // "borders of the city... around the edges". Usually this is on the ground.
-            // If we draw on top of everything (z 10000), it might overlay units?
-            // Dash border usually implies ground level.
-            // Let's try z-index 20 (just above ground which is 0-10, but below objects like cities/units which are 4000+).
-            // Actually objects have zIndex = pos.y + offsets.
-            // pos.y can be 0 to ~2000+.
-            // If SVG is z-index 20, it will be behind "southern" tiles.
-            // Isometric map layering is tricky with a single SVG.
-            // ALTERNATIVE: Create individual border divs for each tile edge?
-            // OR: SVG per tile?
-            // User asked for "dashed outline".
-            // Let's stick to SVG on top (z-index 6000) for now. It will overlay units slightly if they stand on the edge, but that's acceptable for a prompt.
-            svg.style.zIndex = '1500'; // Above ground, below most units/cities/trees ideally? 
-            // Trees are 2000+. Cities 4000. Units 5000.
-            // So 1500 is good: above ground, below objects.
+            svg.style.zIndex = '1500'; // Draw territory borders beneath world art.
             this.container.appendChild(svg);
         }
         this.territorySvg = svg;
@@ -229,9 +211,9 @@ class MapRenderer {
         // Ambient (Mountains/Forests)
         if (tile.type === 4) { // Mountain
             const classes = tile.climate === 8 ? ['mountain', 'kickoo-mountain'] : ['mountain'];
-            this.updateLayer(idx, 'ambient', `terrain/mountains/mountain_${textureIndex}`, pos, 1200, classes);
+            this.updateLayer(idx, 'ambient', `terrain/mountains/mountain_${textureIndex}`, pos, WORLD_DEPTH, classes);
         } else if (tile.type === 5) { // Forest
-            this.updateLayer(idx, 'ambient', `terrain/forests/Forest_${textureIndex}`, pos, 2000, ['forest']);
+            this.updateLayer(idx, 'ambient', `terrain/forests/Forest_${textureIndex}`, pos, WORLD_DEPTH, ['forest']);
         } else {
             this.removeLayer(idx, 'ambient');
         }
@@ -261,7 +243,7 @@ class MapRenderer {
                 resClasses.push('interactive-outline');
             }
 
-            this.updateLayer(idx, 'resource', resFile, pos, 2500, resClasses);
+            this.updateLayer(idx, 'resource', resFile, pos, WORLD_DEPTH + 2, resClasses);
         } else {
             this.removeLayer(idx, 'resource');
         }
@@ -275,7 +257,8 @@ class MapRenderer {
                 const classes = ['structure'];
                 if (struct.type === 1) classes.push('village');
                 if (struct.type === 2) classes.push('ruins');
-                if (struct.type === 29) classes.push('monument');
+                if (struct.type >= 23 && struct.type <= 29) classes.push('monument');
+                if (struct.type === 29) classes.push('eye-of-god');
                 if (struct.type === 47) {
                     classes.push('lighthouse');
                 } else if (struct.type === 12) {
@@ -283,7 +266,7 @@ class MapRenderer {
                 } else if ([5, 6, 8, 13, 21, 22].includes(struct.type)) {
                     classes.push('improvement');
                 }
-                this.updateLayer(idx, 'structure', structFile, pos, 2000, classes);
+                this.updateLayer(idx, 'structure', structFile, pos, WORLD_DEPTH + 1, classes);
             }
         } else {
             this.removeLayer(idx, 'structure');
@@ -342,7 +325,7 @@ class MapRenderer {
             if (unit.flipped) classes.push('flipped');
             if (selectedUnitIdx === idx) classes.push('selected-unit-highlight');
 
-            const unitEl = this.updateLayer(idx, 'unit', unitFile, pos, 5000, classes);
+            const unitEl = this.updateLayer(idx, 'unit', unitFile, pos, WORLD_DEPTH + 4, classes);
             unitEl.innerHTML = `<div class="health">${Math.floor(unit.health)}</div>`;
             const hit = this.updateLayer(idx, 'unit-hit', '', pos, 27000, ['unit-hit']);
             hit.onclick = event => this.handleTileClick(event, idx, true);
@@ -353,7 +336,7 @@ class MapRenderer {
     }
 
     renderCityBuildings(idx, pos, city, tile, isCapital) {
-        const art = this.updateLayer(idx, 'city', '', pos, 4000, ['city']);
+        const art = this.updateLayer(idx, 'city', '', pos, WORLD_DEPTH + 3, ['city']);
         const tribeType = cityArtTribe(tile, city.tribe.type);
         const houseCount = Math.min(CITY_HOUSE_SPOTS.length, Math.max(1, city.level) + 2);
         const key = `${tribeType}:${houseCount}:${isCapital}`;

@@ -275,7 +275,16 @@ pub fn step_unit(
     let map_size = state.settings.size;
 
     // Get current unit state and compute path
-    let (old_tile_idx, old_moved, old_attacked, old_type, old_passenger, old_prev_coords, path) = {
+    let (
+        old_tile_idx,
+        old_moved,
+        old_attacked,
+        old_type,
+        old_passenger,
+        old_prev_coords,
+        old_last_attack,
+        path,
+    ) = {
         let tribe = match state.tribes.get(&unit_owner) {
             Some(t) => t,
             None => return Box::new(|_| {}),
@@ -302,6 +311,7 @@ pub fn step_unit(
             unit.unit_type,
             unit.passenger_type,
             unit.prev_coords,
+            unit.last_attack_coords,
             path,
         )
     };
@@ -316,6 +326,7 @@ pub fn step_unit(
         if let Some(unit) = tribe.units.get_mut(unit_idx) {
             unit.prev_coords.copy_from(&unit.coords);
             unit.coords.set_at(to_tile_idx, map_size);
+            unit.last_attack_coords = None;
 
             // Version-dependent exhaustion logic:
             // - Before v115: All involuntary moves (pushes) do not exhaust the unit.
@@ -339,27 +350,8 @@ pub fn step_unit(
         tile._unit_owner_id = Some(unit_owner);
     }
 
-    let mut undos: Vec<UndoCallback> = Vec::new();
+    let mut undos = Vec::new();
     let _rewards: Option<()> = None; // Stars, task progress
-
-    if !involuntary
-        && let Some(&first_step) = path.first()
-        && let Some(city) = state.tribes.get_mut(&unit_owner).and_then(|tribe| {
-            tribe.cities.iter_mut().find(|city| city.idx == old_tile_idx)
-        })
-    {
-        let origin = Coords::from_index(old_tile_idx, map_size);
-        let next = Coords::from_index(first_step, map_size);
-        let direction = ((next.x - origin.x).signum(), (next.y - origin.y).signum());
-        let old_departure = city.last_departure.replace(direction);
-        undos.push(Box::new(move |s: &mut GameState| {
-            if let Some(city) = s.tribes.get_mut(&unit_owner).and_then(|tribe| {
-                tribe.cities.iter_mut().find(|city| city.idx == old_tile_idx)
-            }) {
-                city.last_departure = old_departure;
-            }
-        }));
-    }
 
     let tiles_to_reveal = if let Some(tribe) = state.tribes.get(&unit_owner) {
         if let Some(unit) = tribe.units.get(unit_idx) {
@@ -768,6 +760,7 @@ pub fn step_unit(
             if let Some(unit) = tribe.units.get_mut(unit_idx) {
                 unit.coords.set_at(old_tile_idx, map_size);
                 unit.prev_coords = old_prev_coords;
+                unit.last_attack_coords = old_last_attack;
                 unit.unit_type = old_type;
                 unit.passenger_type = old_passenger;
                 unit.moved = old_moved;
@@ -1045,33 +1038,20 @@ pub fn attack_unit(
         defense_bonus,
     );
 
-    // Track last attack direction for push logic
-    let (old_last_attack, old_prev_coords) = {
+    // Firing changes a ranged unit's facing without changing its position.
+    if get_unit_setting(atk_type).range > 1 {
         let tribe = state.tribes.get_mut(&attacker_owner).unwrap();
         let unit = tribe.units.get_mut(attacker_idx).unwrap();
-        let old_la = unit.last_attack_coords.clone();
-        let old_pc = unit.prev_coords;
-
-        unit.last_attack_coords = Some(Coords::from_index(def_coords, state.settings.size));
-        // UPDATE: Set prev_coords to mirror the defender position across the attacker
-        // This ensures the push logic sees the "movement" as towards the defender.
-        let atk_c = Coords::from_index(atk_coords, state.settings.size);
-        let def_c = Coords::from_index(def_coords, state.settings.size);
-        unit.prev_coords = Coords::from_xy(
-            2 * atk_c.x - def_c.x,
-            2 * atk_c.y - def_c.y,
-            state.settings.size,
-        );
-        (old_la, old_pc)
-    };
-    undos.push(Box::new(move |s| {
-        if let Some(tribe) = s.tribes.get_mut(&attacker_owner) {
-            if let Some(unit) = tribe.units.get_mut(attacker_idx) {
-                unit.last_attack_coords = old_last_attack;
-                unit.prev_coords = old_prev_coords;
+        let target = Coords::from_index(def_coords, state.settings.size);
+        let old_last_attack = unit.last_attack_coords.replace(target);
+        undos.push(Box::new(move |s| {
+            if let Some(tribe) = s.tribes.get_mut(&attacker_owner) {
+                if let Some(unit) = tribe.units.get_mut(attacker_idx) {
+                    unit.last_attack_coords = old_last_attack;
+                }
             }
-        }
-    }));
+        }));
+    }
 
     // Apply damage to defender
     let def_damage = result.attack_damage;

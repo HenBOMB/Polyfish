@@ -217,7 +217,7 @@ pub struct UnitState {
     pub veteran: bool,
     #[serde(default, alias = "xp")]
     pub kills: i32,
-    #[serde(default)]
+    #[serde(default = "Coords::invalid")]
     pub prev_coords: Coords,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub home_coords: Option<Coords>,
@@ -259,7 +259,7 @@ impl Default for UnitState {
             veteran: false,
             kills: 0,
             coords: Coords::default(),
-            prev_coords: Coords::default(),
+            prev_coords: Coords::invalid(),
             home_coords: None,
             direction: 0,
             flipped: false,
@@ -298,8 +298,6 @@ pub struct CityState {
     pub production: i32,
     #[serde(default)]
     pub rewards: Vec<CityRewardType>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_departure: Option<(i32, i32)>,
     #[serde(default)]
     pub _territory: Vec<i32>,
 }
@@ -317,7 +315,6 @@ impl Default for CityState {
             production: 0,
             owner: 0,
             rewards: Vec::new(),
-            last_departure: None,
             _territory: Vec::new(),
         }
     }
@@ -712,9 +709,6 @@ impl GameState {
                 // Cities outside vision are removed to avoid leaking their
                 // coordinates; production for hidden cities is not simulated.
                 tribe.cities.retain(|c| visible_tiles.contains(&c.idx));
-                for city in &mut tribe.cities {
-                    city.last_departure = None;
-                }
                 // Fog memory is private per tribe; never expose it to the POV state.
                 tribe.memory_units.clear();
                 tribe.memory_attacks.clear();

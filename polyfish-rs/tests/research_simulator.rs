@@ -1,9 +1,9 @@
 use polyfish::Coords;
 use polyfish::actions::city::{add_population, capture_city};
 use polyfish::actions::structure::destroy_structure;
-use polyfish::functions::{get_city_at, get_city_production, get_true_unit_at};
+use polyfish::functions::{get_city_at, get_city_production};
 use polyfish::game::Game;
-use polyfish::moves::{BuildMove, EndTurnMove, RewardMove, StepMove, SummonMove};
+use polyfish::moves::{BuildMove, EndTurnMove, RewardMove};
 use polyfish::research::{
     self, EXPERT_BUDGET, MatchConfig, MatchResult, Opponent, OpponentPreset, observation,
 };
@@ -11,7 +11,6 @@ use polyfish::settings::technology::get_technology_setting;
 use polyfish::states::{CityState, GameState};
 use polyfish::types::{
     CityRewardType, MapSize, ModeType, ResourceType, StructureType, TerrainType, TribeType,
-    UnitType,
 };
 
 fn fixture(size: MapSize) -> Game {
@@ -184,52 +183,6 @@ fn lumber_huts_feed_a_friendly_sawmill_across_city_borders() {
         .play_move(&BuildMove::new(mill, StructureType::Sawmill))
         .unwrap();
     assert_eq!(population(&game.state, neighbor_city), 1);
-}
-
-#[test]
-fn giant_push_uses_the_city_departure_after_training_a_catapult() {
-    let mut game = fixture(MapSize::Tiny);
-    let capital = game.state.tribes[&1].cities[0].idx;
-    let size = game.state.settings.size;
-    let (north, north_again) = (capital - size, capital - 2 * size);
-    for idx in [north, north_again] {
-        game.state.tiles.get_mut(&idx).unwrap().terrain_type = TerrainType::Field;
-    }
-    let _ = game.play_move(&StepMove::new(capital, north)).unwrap();
-    assert_eq!(
-        get_city_at(&game.state, capital).unwrap().last_departure,
-        Some((0, -1))
-    );
-    let _ = game.play_move(&EndTurnMove).unwrap();
-    let _ = game.play_move(&EndTurnMove).unwrap();
-    let _ = game.play_move(&StepMove::new(north, north_again)).unwrap();
-    game.state.tribes.get_mut(&1).unwrap().stars = 10;
-    let _ = game
-        .play_move(&SummonMove::new(capital, UnitType::Catapult))
-        .unwrap();
-
-    let saved = game.to_json().unwrap();
-    let mut reloaded = Game::from_json(&saved).unwrap();
-    let undo = reloaded
-        .play_move(&RewardMove::new(capital, CityRewardType::SuperUnit))
-        .unwrap();
-    assert_eq!(
-        get_true_unit_at(&reloaded.state, north).unwrap().unit_type,
-        UnitType::Catapult
-    );
-    assert_eq!(
-        get_true_unit_at(&reloaded.state, capital)
-            .unwrap()
-            .unit_type,
-        UnitType::Giant
-    );
-    undo(&mut reloaded.state);
-    assert_eq!(
-        get_true_unit_at(&reloaded.state, capital)
-            .unwrap()
-            .unit_type,
-        UnitType::Catapult
-    );
 }
 
 #[test]

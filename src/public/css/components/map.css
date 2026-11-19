@@ -73,11 +73,18 @@
     margin-top: -48px !important;
 }
 
-.monument {
-    width: 50px !important;
-    margin-left: 40px !important;
-    margin-top: -50px !important;
-    pointer-events: none !important;
+.structure.monument {
+    --monument-width: 85px;
+    width: var(--monument-width) !important;
+    height: 108.8px;
+    margin-left: calc(64px - var(--monument-width) / 2) !important;
+    /* Anchor the base around the center of the ground diamond. */
+    margin-top: -60.4px !important;
+    background-position: center bottom;
+}
+
+.structure.monument.eye-of-god {
+    --monument-width: 42.5px;
 }
 
 .village {

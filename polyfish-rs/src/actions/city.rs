@@ -315,8 +315,6 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
             // `claim_territory` call below, per tile (#40).
             let city_score = crate::score::get_city_transfer_score(&city);
 
-            let old_departure = city.last_departure.take();
-
             // Add to new owner
             if let Some(new_tribe) = state.tribes.get_mut(&pov_id) {
                 new_tribe.score += city_score;
@@ -387,7 +385,6 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
                 let mut restored = c_clone.clone();
                 restored.owner = tile_owner;
                 restored.name = city_name_old;
-                restored.last_departure = old_departure;
 
                 let city_score = crate::score::get_city_transfer_score(&restored);
 
@@ -449,7 +446,6 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
             production: 1,
             owner: pov_id,
             rewards: Vec::new(),
-            last_departure: None,
             _territory: territory.clone(),
         };
 

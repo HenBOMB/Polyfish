@@ -417,7 +417,6 @@ pub fn capture_ruin(
                     production: 3,
                     owner: pov_id,
                     rewards: vec![CityRewardType::CityWall],
-                    last_departure: None,
                     _territory: territory.clone(),
                 };
                 let city_score = crate::score::get_city_transfer_score(&city);
@@ -651,7 +650,6 @@ pub fn capture_ruin(
                 production: 3,
                 owner: pov_id,
                 rewards: vec![CityRewardType::CityWall], // Grant City Walls
-                last_departure: None,
                 _territory: territory.clone(),
             };
 
