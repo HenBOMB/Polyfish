@@ -212,7 +212,7 @@ pub fn result(game: &Game) -> MatchResult {
     }
 }
 
-/// A belief-state copy built from the acting player's board and public information.
+/// The acting player's board and public information, with unexplored terrain set to Fog.
 pub fn observation(game: &Game, pov: PlayerId) -> Game {
     let mut view = game.clone();
     let state = &mut view.state;
@@ -251,7 +251,7 @@ pub fn observation(game: &Game, pov: PlayerId) -> Game {
         } else {
             *tile = TileState {
                 coords: tile.coords,
-                terrain_type: TerrainType::Field,
+                terrain_type: TerrainType::Fog,
                 ..TileState::default()
             };
         }
@@ -387,14 +387,13 @@ fn choose_with_root(
         }
         observed.state.settings._verbose = false;
         observed.state.settings.seed = seed as i64;
-        // Both simulated players see the known board. Unknown tiles remain blank.
-        for tile in observed
-            .state
-            .tiles
-            .values_mut()
-            .filter(|tile| tile.explorers.contains(&pov))
-        {
-            tile.explorers.extend(observed.state.tribes.keys().copied());
+        for tile in observed.state.tiles.values_mut() {
+            if tile.terrain_type == TerrainType::Fog {
+                // Expert rollouts assume unseen ground is open land when revealed.
+                tile.terrain_type = TerrainType::Field;
+            } else if tile.explorers.contains(&pov) {
+                tile.explorers.extend(observed.state.tribes.keys().copied());
+            }
         }
         let (index, advances) = rolling_horizon(&observed, &actions, budget, &mut rng);
         return (

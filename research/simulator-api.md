@@ -2,6 +2,9 @@
 
 Use the typed action list for policies that inspect the full board. For a fog-of-war
 policy, pass the observation and the filtered move list to the policy instead.
+The observation reports `TerrainType::Fog` for unexplored tiles and the actual
+terrain for explored tiles. When adapting an observation for Java Tribes, map
+`TerrainType::Fog` to Java's `FOG` tile value.
 
 ```rust
 use polyfish::research::{self, MatchConfig, Opponent};
