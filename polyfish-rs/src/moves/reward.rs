@@ -34,7 +34,11 @@ impl Move for RewardMove {
         MoveType::Reward
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let mut undos: Vec<UndoCallback> = Vec::new();
         let target = self.target_index;
         let reward_type = self.reward;

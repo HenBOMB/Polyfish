@@ -32,7 +32,11 @@ impl Move for BuildMove {
         MoveType::Build
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         use crate::settings::structures::get_structure_setting;
 
         let pov_id = state.settings.current_player_turn_id;

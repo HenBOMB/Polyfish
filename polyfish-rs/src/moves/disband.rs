@@ -23,7 +23,11 @@ impl Move for DisbandMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let target = self.src_index;
         // Find unit
         let unit_owner = state.tiles

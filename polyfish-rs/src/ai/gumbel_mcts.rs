@@ -784,7 +784,7 @@ impl<'a> GumbelMctsAgent<'a> {
         let m = candidate_node.move_to_here.as_ref()?;
         let (my_pre, opp_pre) = reward::score_snapshot(&game.state, root_player);
         let turn_pre = game.state.settings.turn;
-        let undo = game.simulate_move(m.as_ref())?;
+        let undo = game.simulate_generated(m.as_ref())?;
         undos.push(undo);
         indices_stack.push(cand_child_idx);
         path_players.push(game.state.settings.current_player_turn_id);
@@ -827,7 +827,7 @@ impl<'a> GumbelMctsAgent<'a> {
             let mover = game.state.settings.current_player_turn_id;
             let (my_pre, opp_pre) = reward::score_snapshot(&game.state, mover);
             let turn_pre = game.state.settings.turn;
-            let undo = match game.simulate_move(m.as_ref()) {
+            let undo = match game.simulate_generated(m.as_ref()) {
                 Some(u) => u,
                 None => break,
             };
@@ -1304,7 +1304,7 @@ fn reused_children_match_legal(game: &Game, children: &[GumbelNode]) -> bool {
 fn next_root_hash_for(game: &Game, m: Option<&dyn Move>) -> Option<u64> {
     let m = m?;
     let mut preview = game.clone();
-    let _ = preview.play_move(m)?;
+    let _ = preview.play_generated(m)?;
     // Never re-root across a handover: the stored subtree under an EndTurn
     // child belongs to the OPPONENT and was built from this player's belief
     // state, so promoting it would search the wrong side's tree.

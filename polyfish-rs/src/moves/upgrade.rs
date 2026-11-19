@@ -30,7 +30,15 @@ impl Move for UpgradeMove {
         MoveType::Summon // Reusing Summon type per TS implementation
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn is_upgrade(&self) -> bool {
+        true
+    }
+
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let pov_id = state.settings.current_player_turn_id;
 
         let unit = get_unit_at(state, self.src_index).ok_or("No unit to upgrade")?;

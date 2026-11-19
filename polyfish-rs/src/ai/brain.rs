@@ -316,11 +316,9 @@ impl<'a> Brain<'a> {
     /// Build the concrete agent once and reuse it across calls so the agent
     /// can carry its MCTS tree between consecutive same-player searches.
     /// Returns `None` when there is exactly one legal move (no search needed).
-    fn think(&mut self, game: &Game) -> (Option<&mut SearchAgent<'a>>, Vec<Box<dyn Move>>) {
-        let moves = generate_legal_moves(&game.state);
-
-        if moves.len() == 1 {
-            return (None, moves);
+    fn think(&mut self, move_count: usize) -> Option<&mut SearchAgent<'a>> {
+        if move_count == 1 {
+            return None;
         }
 
         if self.agent.is_none() {
@@ -334,12 +332,30 @@ impl<'a> Brain<'a> {
                 self.tree_q_weight,
             ));
         }
-        (self.agent.as_mut(), moves)
+        self.agent.as_mut()
     }
 
     pub fn think_decomposed(
         &mut self,
         game: &Game,
+        move_count: usize,
+    ) -> (Option<Box<dyn Move>>, Vec<MoveVisit>) {
+        let moves = generate_legal_moves(&game.state);
+        self.think_decomposed_with_root(game, &moves, move_count)
+    }
+
+    pub fn think_decomposed_from_decision(
+        &mut self,
+        decision: &crate::Decision<'_>,
+        move_count: usize,
+    ) -> (Option<Box<dyn Move>>, Vec<MoveVisit>) {
+        self.think_decomposed_with_root(decision.game(), decision.search_moves(), move_count)
+    }
+
+    fn think_decomposed_with_root(
+        &mut self,
+        game: &Game,
+        moves: &[Box<dyn Move>],
         move_count: usize,
     ) -> (Option<Box<dyn Move>>, Vec<MoveVisit>) {
         // Read-and-clear before `self.think` below, which mutably borrows
@@ -348,13 +364,16 @@ impl<'a> Brain<'a> {
         let want_trace = self.pending_trace;
         self.pending_trace = false;
 
-        let (agent, mut moves) = self.think(game);
+        let agent = self.think(moves.len());
 
         if agent.is_none() {
             if let Some(a) = &mut self.agent {
                 a.clear_last_root_value();
             }
-            return (moves.pop(), Vec::new());
+            return (
+                moves.first().map(|m| dyn_clone::clone_box(m.as_ref())),
+                Vec::new(),
+            );
         }
 
         let agent = agent.unwrap();
@@ -394,16 +413,35 @@ impl<'a> Brain<'a> {
     }
 
     pub fn think_with_stats(&mut self, game: &Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
+        let moves = generate_legal_moves(&game.state);
+        self.think_with_stats_root(game, &moves)
+    }
+
+    pub fn think_with_stats_from_decision(
+        &mut self,
+        decision: &crate::Decision<'_>,
+    ) -> (Option<Box<dyn Move>>, Vec<f32>) {
+        self.think_with_stats_root(decision.game(), decision.search_moves())
+    }
+
+    fn think_with_stats_root(
+        &mut self,
+        game: &Game,
+        moves: &[Box<dyn Move>],
+    ) -> (Option<Box<dyn Move>>, Vec<f32>) {
         let want_trace = self.pending_trace;
         self.pending_trace = false;
 
-        let (agent, mut moves) = self.think(game);
+        let agent = self.think(moves.len());
 
         if agent.is_none() {
             if let Some(a) = &mut self.agent {
                 a.clear_last_root_value();
             }
-            return (moves.pop(), Vec::new());
+            return (
+                moves.first().map(|m| dyn_clone::clone_box(m.as_ref())),
+                Vec::new(),
+            );
         }
 
         let agent = agent.unwrap();

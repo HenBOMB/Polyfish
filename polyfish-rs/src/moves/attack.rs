@@ -24,7 +24,11 @@ impl Move for AttackMove {
         MoveType::Attack
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         // Find attacker
         let (attacker_owner, attacker_idx) = {
             let tile = state

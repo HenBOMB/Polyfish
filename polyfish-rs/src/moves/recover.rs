@@ -25,7 +25,11 @@ impl Move for RecoverMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let mut undos = Vec::new();
 
         let unit_owner = state

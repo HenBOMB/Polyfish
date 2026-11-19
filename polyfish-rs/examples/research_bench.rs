@@ -3,9 +3,8 @@ use std::{hint::black_box, time::Instant};
 use anyhow::{Context, Result};
 use polyfish::coords::Coords;
 use polyfish::game::Game;
-use polyfish::moves::EndTurnMove;
 use polyfish::research::{self, MatchConfig, Opponent};
-use polyfish::types::{TerrainType, TribeType};
+use polyfish::types::{MoveType, TerrainType, TribeType};
 use serde_json::json;
 
 fn flat_board(tiles: u16) -> Result<Game> {
@@ -64,11 +63,15 @@ fn run(game: &Game, iterations: usize) -> [u128; 4] {
         drop(view);
         let mut next = game.clone();
         let start = Instant::now();
-        let legal = black_box(next.legal_moves());
+        let decision = black_box(next.decision());
         times[2] += start.elapsed().as_nanos();
-        drop(legal);
+        let end_turn = decision
+            .moves()
+            .iter()
+            .position(|m| m.move_type() == MoveType::EndTurn)
+            .expect("legal EndTurn");
         let start = Instant::now();
-        let undo = black_box(next.play_move(&EndTurnMove).expect("EndTurn"));
+        let undo = black_box(decision.play_index(end_turn).expect("EndTurn"));
         times[3] += start.elapsed().as_nanos();
         drop(undo);
         assert_eq!(next.current_player_id(), 2);

@@ -12,7 +12,7 @@ use polyfish::research::{
     self, EXPERT_BUDGET, MatchConfig, MatchResult, Opponent, OpponentPreset, observation,
 };
 use polyfish::settings::technology::get_technology_setting;
-use polyfish::states::{CityState, GameState, StructureState, UnitState};
+use polyfish::states::{CityState, GameState, StructureState, TechnologyState, UnitState};
 use polyfish::types::{
     CityRewardType, MapSize, MapType, ModeType, ResourceType, StructureType, TechnologyType,
     TerrainType, TribeType, UnitType,
@@ -428,7 +428,9 @@ fn is_legal(game: &Game, move_: &dyn Move) -> bool {
 
 fn play_legal(game: &mut Game, move_: &dyn Move) {
     assert!(is_legal(game, move_), "{}", move_.describe(&game.state));
-    let _ = game.play_move(move_).unwrap();
+    let _ = game
+        .play(&polyfish::Action::from_move(move_).expect("move identity"))
+        .unwrap();
 }
 
 fn next_round(game: &mut Game) {
@@ -464,6 +466,11 @@ fn naval_crossing_upgrades_fights_lands_and_wins_might() {
         ReplayCommand::from_move(&upgrade).unwrap(),
         ReplayCommand::Upgrade { .. }
     ));
+    let legacy_summon = ReplayCommand::Summon {
+        target: WEST_PORT,
+        unit: UnitType::Scoutship,
+    };
+    assert_eq!(game.play(&legacy_summon).err(), Some(polyfish::ActionError::IllegalAction));
     play_legal(&mut game, &upgrade);
     play_legal(&mut game, &AttackMove::new(WEST_PORT, ocean));
     assert!(get_unit_at(&game.state, ocean).is_none());
@@ -614,21 +621,27 @@ fn workshop_adds_one_star_per_turn_and_is_paid_after_loading() {
         |state: &GameState| get_city_production(state, get_city_at(state, capital).unwrap());
     let before = income(&game.state);
     let undo = game
-        .play_move(&RewardMove::new(capital, CityRewardType::Workshop))
+        .play(
+            &polyfish::Action::from_move(&RewardMove::new(capital, CityRewardType::Workshop))
+                .expect("move identity"),
+        )
         .unwrap();
     assert_eq!(income(&game.state), before + 1);
     undo(&mut game.state);
     assert_eq!(income(&game.state), before);
     let _ = game
-        .play_move(&RewardMove::new(capital, CityRewardType::Workshop))
+        .play(
+            &polyfish::Action::from_move(&RewardMove::new(capital, CityRewardType::Workshop))
+                .expect("move identity"),
+        )
         .unwrap();
 
     let saved = game.to_json().unwrap();
     let mut reloaded = Game::from_json(&saved).unwrap();
     assert_eq!(income(&reloaded.state), before + 1);
     let stars = reloaded.state.tribes[&1].stars;
-    let _ = reloaded.play_move(&EndTurnMove).unwrap();
-    let _ = reloaded.play_move(&EndTurnMove).unwrap();
+    let _ = reloaded.play(&polyfish::Action::EndTurn).unwrap();
+    let _ = reloaded.play(&polyfish::Action::EndTurn).unwrap();
     assert_eq!(reloaded.state.tribes[&1].stars, stars + before + 1);
 }
 
@@ -648,7 +661,15 @@ fn lumber_huts_feed_a_friendly_sawmill_across_city_borders() {
             production: 1,
             ..CityState::default()
         });
-    game.state.tribes.get_mut(&1).unwrap().stars = 100;
+    let tribe = game.state.tribes.get_mut(&1).unwrap();
+    tribe.stars = 100;
+    for tech_type in [TechnologyType::Forestry, TechnologyType::Mathematics] {
+        tribe.tech_vanilla.push(TechnologyState {
+            tech_type,
+            discovered: true,
+            discovered_turn: 0,
+        });
+    }
     game.state.settings._fow = false;
 
     let enemy_city = game.state.tribes[&2].cities[0].idx;
@@ -669,15 +690,18 @@ fn lumber_huts_feed_a_friendly_sawmill_across_city_borders() {
         StructureType::LumberHut,
         1,
     );
+    game.post_load();
     let population = |state: &GameState, city| get_city_at(state, city).unwrap().population;
     let home_pop = population(&game.state, home);
 
-    let undo_mill = game
-        .play_move(&BuildMove::new(mill, StructureType::Sawmill))
-        .unwrap();
+    // Start with a sawmill whose last adjoining friendly hut was removed.
+    let undo_mill = create_structure(&mut game.state, mill, StructureType::Sawmill, 1);
     assert_eq!(population(&game.state, neighbor_city), 0);
     let undo_hut = game
-        .play_move(&BuildMove::new(hut, StructureType::LumberHut))
+        .play(
+            &polyfish::Action::from_move(&BuildMove::new(hut, StructureType::LumberHut))
+                .expect("move identity"),
+        )
         .unwrap();
     assert_eq!(population(&game.state, home), home_pop + 1);
     assert_eq!(population(&game.state, neighbor_city), 1);
@@ -690,10 +714,16 @@ fn lumber_huts_feed_a_friendly_sawmill_across_city_borders() {
     undo_hut(&mut game.state);
     undo_mill(&mut game.state);
     let _ = game
-        .play_move(&BuildMove::new(hut, StructureType::LumberHut))
+        .play(
+            &polyfish::Action::from_move(&BuildMove::new(hut, StructureType::LumberHut))
+                .expect("move identity"),
+        )
         .unwrap();
     let _ = game
-        .play_move(&BuildMove::new(mill, StructureType::Sawmill))
+        .play(
+            &polyfish::Action::from_move(&BuildMove::new(mill, StructureType::Sawmill))
+                .expect("move identity"),
+        )
         .unwrap();
     assert_eq!(population(&game.state, neighbor_city), 1);
 }
@@ -742,7 +772,9 @@ fn turn(game: &mut Game, preset: OpponentPreset) -> Vec<serde_json::Value> {
     while game.current_player_id() == pov && research::result(game) == MatchResult::InProgress {
         let action = research::choose_move(game, preset).expect("a legal bot move");
         actions.push(action.serialize());
-        let _undo = game.play_move(action.as_ref()).expect("move accepted");
+        let _undo = game
+            .play(&polyfish::Action::from_move(action.as_ref()).expect("move identity"))
+            .expect("move accepted");
         assert!(actions.len() <= 100, "bot did not finish the turn");
     }
     actions
@@ -876,8 +908,8 @@ fn might_capital_capture_ends_the_match_and_undo_restores_it() {
 fn research_turn_limit_is_a_truncation() {
     let mut game = fixture(MapSize::Tiny);
     game.state.settings.max_turns = game.turn();
-    let _first = game.play_move(&EndTurnMove).unwrap();
-    let _second = game.play_move(&EndTurnMove).unwrap();
+    let _first = game.play(&polyfish::Action::EndTurn).unwrap();
+    let _second = game.play(&polyfish::Action::EndTurn).unwrap();
     assert_eq!(research::result(&game), MatchResult::Truncated);
     assert_eq!(game.state._history.len(), 2);
 }

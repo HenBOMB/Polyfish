@@ -21,7 +21,11 @@ impl Move for BreakIceMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let mut undos = Vec::new();
         let ice_idx = self.target_index;
         let pov_id = state.settings.current_player_turn_id;

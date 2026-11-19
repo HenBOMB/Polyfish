@@ -11,12 +11,15 @@ use crate::functions::{
     get_adjacent_indices, get_chebyshev_distance, get_pov_tribe, get_total_production, is_game_over,
     sync_scores,
 };
-use crate::moves::{Move, generate_legal_moves};
+use crate::moves::{Move, MoveExecution, generate_legal_moves};
 use crate::settings::has_technology;
 use crate::states::*;
 use crate::types::*;
 use std::fs;
 use std::path::Path;
+
+mod decision;
+pub use decision::{Action, ActionError, Decision, TurnRotation};
 
 /// Starting owner ID (first player)
 pub const STARTING_OWNER_ID: PlayerId = 1;
@@ -304,7 +307,7 @@ impl Game {
         for &idx in move_indices {
             let legal = self.legal_moves();
             if idx < legal.len() {
-                if let Some(undo) = self.play_move(legal[idx].as_ref()) {
+                if let Some(undo) = self.play_generated(legal[idx].as_ref()) {
                     undos.push(undo);
                 }
             }
@@ -313,9 +316,7 @@ impl Game {
         undos
     }
 
-    /// Play a move and return an undo callback
-    /// Returns None if the game is over.
-    pub fn play_move(&mut self, game_move: &dyn Move) -> Option<UndoCallback> {
+    pub(crate) fn play_generated(&mut self, game_move: &dyn Move) -> Option<UndoCallback> {
         if self.state.settings._game_over {
             return None;
         }
@@ -337,7 +338,9 @@ impl Game {
                 s.settings._recent_moves = old_recent_moves;
             }) as UndoCallback
         } else if game_move.move_type() == MoveType::Resign {
-            let res = game_move.execute(&mut self.state).unwrap();
+            let res = game_move
+                .execute(&mut self.state, MoveExecution::INTERNAL)
+                .unwrap();
             let move_undo = res.undo;
             let end_undo = self.end_turn();
             let old_recent_moves = std::mem::take(&mut self.state.settings._recent_moves);
@@ -350,7 +353,7 @@ impl Game {
                 s.settings._recent_moves = old_recent_moves;
             }) as UndoCallback
         } else {
-            let result = game_move.execute(&mut self.state);
+            let result = game_move.execute(&mut self.state, MoveExecution::INTERNAL);
             if let Err(e) = result {
                 eprintln!(
                     "Error executing move [{}]: {}",
@@ -406,7 +409,15 @@ impl Game {
     /// This is specifically for MCTS simulations where we don't want to
     /// permanently reveal tiles on the map. `EndTurn` hands control to the next
     /// player under `adversarial_search()`, and skips back to the mover otherwise.
-    pub fn simulate_move(&mut self, game_move: &dyn Move) -> Option<UndoCallback> {
+    pub(crate) fn simulate_generated(&mut self, game_move: &dyn Move) -> Option<UndoCallback> {
+        self.simulate_generated_with_rotation(game_move, None)
+    }
+
+    fn simulate_generated_with_rotation(
+        &mut self,
+        game_move: &dyn Move,
+        rotation: Option<TurnRotation>,
+    ) -> Option<UndoCallback> {
         if self.state.settings._game_over {
             return None;
         }
@@ -425,7 +436,11 @@ impl Game {
 
             // Legacy single-player search: keep ending turns until control is
             // back with the mover, i.e. delete every opponent turn in between.
-            if !adversarial_search() {
+            let skip_opponents = match rotation {
+                Some(mode) => mode == TurnRotation::SamePlayer,
+                None => !adversarial_search(),
+            };
+            if skip_opponents {
                 let max_players = 16; // Safety limit to prevent infinite loop
                 let mut iterations = 0;
                 while self.state.settings.current_player_turn_id != original_player
@@ -445,7 +460,9 @@ impl Game {
                 s.settings._recent_moves = old_recent_moves;
             }) as UndoCallback
         } else if game_move.move_type() == MoveType::Resign {
-            let res = game_move.execute(&mut self.state).unwrap();
+            let res = game_move
+                .execute(&mut self.state, MoveExecution::INTERNAL)
+                .unwrap();
             let move_undo = res.undo;
             let end_undo = self.end_turn();
             let old_recent_moves = std::mem::take(&mut self.state.settings._recent_moves);
@@ -456,7 +473,7 @@ impl Game {
                 s.settings._recent_moves = old_recent_moves;
             }) as UndoCallback
         } else {
-            let result = game_move.execute(&mut self.state);
+            let result = game_move.execute(&mut self.state, MoveExecution::INTERNAL);
             if let Err(e) = result {
                 eprintln!("Error executing simulated move: {}", e);
                 return None;

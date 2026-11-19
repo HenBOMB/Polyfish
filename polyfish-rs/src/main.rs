@@ -2,24 +2,13 @@ use axum::{
     Json, Router,
     extract::State,
     handler::HandlerWithoutStateExt,
+    http::StatusCode,
     routing::{get, post},
 };
 use polyfish::mapgen::{MapGenSettings, generate};
-use polyfish::moves::{
-    AttackMove, BuildMove, CaptureMove, DisbandMove, EndTurnMove, HarvestMove, Move, RecoverMove,
-    ResearchMove, ResignMove, RewardMove, StepMove, SummonMove, UpgradeMove,
-    abilities::{
-        boost::BoostMove, convert::ConvertMove, decompose::DecomposeMove, destroy::DestroyMove,
-        diplomacy::BreakPeaceMove, enchant_animal::EnchantAnimalMove, explode::ExplodeMove,
-        forest::BurnForestMove, forest::ClearForestMove, forest::GrowForestMove,
-        freeze_area::FreezeAreaMove, heal_others::HealOthersMove, promote::PromoteMove,
-    },
-};
 use polyfish::replay::{Replay, ReplayExecutor, ReplayPlayback, load_replay};
-use polyfish::types::{
-    AbilityType, CityRewardType, MapSize, StructureType, TechnologyType, TribeType, UnitType,
-};
-use polyfish::{MapType, game::Game};
+use polyfish::types::{MapSize, TribeType};
+use polyfish::{Action, Game, MapType, MoveType};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
@@ -308,10 +297,20 @@ async fn get_current_state(State(state): State<Arc<AppState>>) -> Json<Value> {
     }))
 }
 
+type StepError = (StatusCode, Json<Value>);
+type StepResponse = Result<Json<Value>, StepError>;
+
+fn step_error(error: impl ToString) -> StepError {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": error.to_string() })),
+    )
+}
+
 async fn auto_step(
     State(state): State<Arc<AppState>>,
     Json(params): Json<StepParams>,
-) -> Json<Value> {
+) -> StepResponse {
     let mut game = state.game.lock().unwrap();
     // dont spam the front end lol
     game.state.settings._verbose = false;
@@ -338,7 +337,8 @@ async fn auto_step(
         .with_tree_q_weight(1.0);
         game.state._messages.clear();
         brain.request_trace();
-        let (chosen_move, brain_policy) = brain.think_with_stats(&mut game);
+        let decision = game.decision();
+        let (chosen_move, brain_policy) = brain.think_with_stats_from_decision(&decision);
         policy = brain_policy.into();
         best_move_json = chosen_move.as_ref().map(|m| m.serialize());
         if let Some(trace) = brain.take_trace() {
@@ -349,7 +349,8 @@ async fn auto_step(
         if !params.dry_run {
             if let Some(m) = chosen_move {
                 move_name = format!("{:?}", m.move_type());
-                game.play_move(m.as_ref());
+                let action = Action::from_move(m.as_ref()).map_err(step_error)?;
+                let _undo = decision.play(&action).map_err(step_error)?;
             }
         }
     }
@@ -377,7 +378,8 @@ async fn auto_step(
         if let Some(m) = h_best_move.as_ref() {
             move_name = format!("{:?}", m.move_type());
             best_move_json = Some(m.serialize());
-            game.play_move(m.as_ref());
+            let action = Action::from_move(m.as_ref()).map_err(step_error)?;
+            let _undo = game.play(&action).map_err(step_error)?;
         }
     } else if network.is_none() {
         // Just for dry_run analysis when network is missing
@@ -390,7 +392,7 @@ async fn auto_step(
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
     let evaluation = build_evaluation_json(&game.state);
 
-    Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "state": {
             "settings": game.state.settings,
             "tiles": tiles,
@@ -406,49 +408,23 @@ async fn auto_step(
         "policyDistribution": policy,
         "evaluation": evaluation,
         "mctsAnalysis": mcts_analysis_json
-    }))
+    })))
 }
 
-async fn rng_step(State(state): State<Arc<AppState>>) -> Json<Value> {
+async fn rng_step(State(state): State<Arc<AppState>>) -> StepResponse {
     let mut game = state.game.lock().unwrap();
     let original_player = game.current_player_id();
     let mut move_name = "none".to_string();
 
-    // Play at least one move
     game.state._messages.clear();
-    loop {
-        let moves = game.legal_moves();
-        if moves.is_empty() {
-            break;
-        }
-
-        use rand::seq::IndexedRandom;
-        let mut rng = rand::rng();
-        let chosen = moves.choose(&mut rng).unwrap();
-
-        move_name = format!("{:?}", chosen.move_type());
-        game.play_move(chosen.as_ref());
-
-        // If we just played EndTurn, we need to let the other players play
-        // until it is our turn again.
-        if game.current_player_id() != original_player {
-            // Keep playing random moves until turn comes back to original_player
-            // or game over
-            let mut steps = 0;
-            while game.current_player_id() != original_player && steps < 100 {
-                let other_moves = game.legal_moves();
-                if other_moves.is_empty() {
-                    break;
-                }
-                let random_move = other_moves.choose(&mut rng).unwrap();
-                game.play_move(random_move.as_ref());
-                steps += 1;
+    if let Some(played) = play_random_action(&mut game)? {
+        move_name = format!("{played:?}");
+        for _ in 0..100 {
+            if game.current_player_id() == original_player
+                || play_random_action(&mut game)?.is_none()
+            {
+                break;
             }
-            // Break the main loop because we have completed a full round
-            break;
-        } else {
-            // We moved but it's still our turn (e.g. moved a unit), break to let UI update
-            break;
         }
     }
 
@@ -459,7 +435,7 @@ async fn rng_step(State(state): State<Arc<AppState>>) -> Json<Value> {
 
     let evaluation = build_evaluation_json(&game.state);
 
-    Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "state": {
             "settings": game.state.settings,
             "tiles": tiles,
@@ -472,134 +448,51 @@ async fn rng_step(State(state): State<Arc<AppState>>) -> Json<Value> {
         "movePlayed": move_name,
         "legalMoves": legal_moves,
         "evaluation": evaluation
-    }))
+    })))
+}
+
+fn play_random_action(game: &mut Game) -> Result<Option<MoveType>, StepError> {
+    use rand::seq::IteratorRandom;
+    let decision = game.decision();
+    let Some((index, move_)) = decision
+        .moves()
+        .iter()
+        .enumerate()
+        .filter(|(_, move_)| move_.move_type() != MoveType::Resign)
+        .choose(&mut rand::rng())
+    else {
+        return Ok(None);
+    };
+    let move_type = move_.move_type();
+    let _undo = decision.play_index(index).map_err(step_error)?;
+    Ok(Some(move_type))
 }
 
 async fn manual_step(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<Value>,
-) -> Json<Value> {
-    let mut game = state.game.lock().unwrap();
-    let move_type = payload
-        .get("moveType")
-        .and_then(|v| v.as_i64())
-        .map(|v| v as i8)
-        .unwrap_or(0);
-
-    let move_obj: Box<dyn Move> = match move_type {
-        1 => {
-            // Step
-            let src = payload["src"].as_i64().unwrap() as i32;
-            let target = payload["target"].as_i64().unwrap() as i32;
-            Box::new(StepMove::new(src, target))
-        }
-        2 => {
-            // Attack
-            let src = payload["src"].as_i64().unwrap() as i32;
-            let target = payload["target"].as_i64().unwrap() as i32;
-            Box::new(AttackMove::new(src, target))
-        }
-        3 => {
-            // Ability
-            let src = payload["src"]
-                .as_i64()
-                .or(payload["target"].as_i64())
-                .unwrap_or(0) as i32;
-            let ability = payload["type"].as_i64().unwrap_or(0) as i32;
-            match AbilityType::from(ability) {
-                AbilityType::Recover => Box::new(RecoverMove::new(src)),
-                AbilityType::Promote => Box::new(PromoteMove::new(src)),
-                AbilityType::Disband => Box::new(DisbandMove::new(src)),
-                AbilityType::BurnForest => Box::new(BurnForestMove::new(src)),
-                AbilityType::ClearForest => Box::new(ClearForestMove::new(src)),
-                AbilityType::GrowForest => Box::new(GrowForestMove::new(src)),
-                AbilityType::Destroy => Box::new(DestroyMove::new(src)),
-                AbilityType::Decompose => Box::new(DecomposeMove::new(src)),
-                AbilityType::Convert => {
-                    let target = payload["target"]
-                        .as_i64()
-                        .or(payload["src"].as_i64())
-                        .unwrap() as i32;
-                    Box::new(ConvertMove::new(src, target))
-                }
-                AbilityType::HealOthers => Box::new(HealOthersMove::new(src)),
-                AbilityType::FreezeArea => Box::new(FreezeAreaMove::new(src)),
-                AbilityType::Swarm => Box::new(BoostMove::new(src)),
-                AbilityType::Explode => Box::new(ExplodeMove::new(src)),
-                AbilityType::EnchantAnimal => Box::new(EnchantAnimalMove::new(src)),
-                AbilityType::BreakPeace => {
-                    let target = payload["target"]
-                        .as_i64()
-                        .or(payload["src"].as_i64())
-                        .unwrap() as i32;
-                    Box::new(BreakPeaceMove::new(target))
-                }
-                _ => Box::new(EndTurnMove),
-            }
-        }
-        4 => {
-            // Summon or Upgrade
-            let tile_index = payload["src"].as_i64().unwrap() as i32;
-            let unit_type = UnitType::from(payload["type"].as_i64().unwrap() as i32);
-            if payload
-                .get("upgrade")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-            {
-                Box::new(UpgradeMove::new(tile_index, unit_type))
-            } else {
-                Box::new(SummonMove::new(tile_index, unit_type))
-            }
-        }
-        5 => {
-            // Harvest
-            let idx = payload["target"].as_i64().unwrap() as i32;
-            Box::new(HarvestMove::new(idx))
-        }
-        6 => {
-            // Build
-            let idx = payload["target"].as_i64().unwrap() as i32;
-            let construct = payload["type"].as_i64().unwrap() as i32;
-            Box::new(BuildMove::new(idx, StructureType::from(construct)))
-        }
-        7 => {
-            // Research
-            let tech = payload["type"].as_i64().unwrap() as i32;
-            Box::new(ResearchMove::new(TechnologyType::from(tech)))
-        }
-        8 => {
-            // Capture
-            let src = payload["src"].as_i64().unwrap() as i32;
-            Box::new(CaptureMove::new(src))
-        }
-        9 => {
-            // Reward
-            let idx = payload["target"].as_i64().unwrap() as i32;
-            let reward_type = payload["type"].as_i64().unwrap() as i32;
-            Box::new(RewardMove::new(idx, CityRewardType::from(reward_type)))
-        }
-        10 => Box::new(EndTurnMove),
-        11 => Box::new(ResignMove),
-        _ => Box::new(EndTurnMove),
-    };
-
-    // RECORDING: Before we play the move, we capture the state and the move we ARE about to make.
-    // We only record moves for non-bots (or whatever the user is controlling).
-    // Assuming user controls the current tribe.
-    // Calculate simple heuristic values for Eco/Mil.
-    // Calculate simple heuristic values for Eco/Mil.
+) -> StepResponse {
     use polyfish::ai::evaluator::{army, economy};
-    let pid = game.state.settings.current_player_turn_id;
-    let eco = economy::evaluate_economy(&game.state, pid);
-    let mil = army::evaluate_army(&game.state, pid);
 
-    state
-        .recorder
-        .record_step(&game.state, move_obj.as_ref(), eco, mil);
+    let mut game = state.game.lock().unwrap();
+    let decision = game.decision();
+    let index = decision
+        .moves()
+        .iter()
+        .position(|m| m.serialize() == payload)
+        .ok_or_else(|| step_error("That action is not legal"))?;
+    let move_obj = dyn_clone::clone_box(decision.moves()[index].as_ref());
+    let before = decision.game().state.clone();
+    let pid = before.settings.current_player_turn_id;
+    let eco = economy::evaluate_economy(&before, pid);
+    let mil = army::evaluate_army(&before, pid);
 
     let move_name = format!("{:?}", move_obj.move_type());
-    game.state._messages.clear();
-    game.play_move(move_obj.as_ref());
+    let _undo = decision.play_index(index).map_err(step_error)?;
+    game.state._messages.drain(..before._messages.len());
+    state
+        .recorder
+        .record_step(&before, move_obj.as_ref(), eco, mil);
 
     let eco1 = economy::evaluate_economy(&game.state, pid);
     let mil1 = army::evaluate_army(&game.state, pid);
@@ -623,7 +516,7 @@ async fn manual_step(
 
     let evaluation = build_evaluation_json(&game.state);
 
-    Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "state": {
             "settings": game.state.settings,
             "tiles": tiles,
@@ -636,7 +529,7 @@ async fn manual_step(
         "movePlayed": move_name,
         "legalMoves": legal_moves,
         "evaluation": evaluation
-    }))
+    })))
 }
 
 async fn save_training_data(State(state): State<Arc<AppState>>) -> Json<Value> {

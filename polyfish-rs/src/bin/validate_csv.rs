@@ -570,7 +570,8 @@ fn main() {
                 if let Some(et) = legal.iter().find(|m| m.move_type() == MoveType::EndTurn) {
                     let desc = et.describe(&game.state);
                     let ser = et.serialize();
-                    game.play_move(et.as_ref());
+                    let _ = game
+                        .play(&polyfish::Action::from_move(et.as_ref()).expect("move identity"));
                     moves_played.push((delta_row, cp, "EndTurn".into(), desc, ser));
                     if verbose {
                         eprintln!("  [auto] EndTurn P{} → P{} at row {}", cp, ap, delta_row);
@@ -681,7 +682,8 @@ fn main() {
             if verbose {
                 eprintln!("  Row {:3}: {} {}", delta_row, mt, desc);
             }
-            game.play_move(legal[mi].as_ref());
+            let _ =
+                game.play(&polyfish::Action::from_move(legal[mi].as_ref()).expect("move identity"));
             // Track post-move stars from delta (for next sync)
             if let (Some(p), Some(s)) = (info.player, info.new_stars) {
                 last_known_stars.insert(p, s);

@@ -70,7 +70,10 @@ fn legal_move_order_is_stable_after_play() {
     for _ in 0..6 {
         let moves = game.legal_moves();
         let pick = moves.len() / 2;
-        if game.play_move(moves[pick].as_ref()).is_none() {
+        if game
+            .play(&polyfish::Action::from_move(moves[pick].as_ref()).expect("move identity"))
+            .is_err()
+        {
             break;
         }
     }
@@ -92,7 +95,10 @@ fn play(evaluator: &Evaluator, seed: u64, plies: usize) -> Vec<String> {
             (Some(m), visits) => {
                 let shape: Vec<f32> = visits.iter().map(|v| v.visits).collect();
                 out.push(format!("{m:?} {shape:?}"));
-                if game.play_move(m.as_ref()).is_none() {
+                if game
+                    .play(&polyfish::Action::from_move(m.as_ref()).expect("move identity"))
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -160,7 +166,10 @@ mod other_agents {
             match agent.select_move(&mut game) {
                 Some(m) => {
                     out.push(format!("{m:?}"));
-                    if game.play_move(m.as_ref()).is_none() {
+                    if game
+                        .play(&polyfish::Action::from_move(m.as_ref()).expect("move identity"))
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -192,7 +201,8 @@ mod other_agents {
                 .filter_map(|_| {
                     let m = agent.select_move(&mut game)?;
                     let s = format!("{m:?}");
-                    game.play_move(m.as_ref())?;
+                    game.play(&polyfish::Action::from_move(m.as_ref()).expect("move identity"))
+                        .ok()?;
                     Some(s)
                 })
                 .collect::<Vec<_>>()
@@ -211,7 +221,8 @@ mod other_agents {
                 .filter_map(|_| {
                     let m = agent.select_move(&mut game)?;
                     let s = format!("{m:?}");
-                    game.play_move(m.as_ref())?;
+                    game.play(&polyfish::Action::from_move(m.as_ref()).expect("move identity"))
+                        .ok()?;
                     Some(s)
                 })
                 .collect::<Vec<_>>()

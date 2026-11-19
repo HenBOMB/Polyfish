@@ -55,7 +55,9 @@ fn main() {
 
             use rand::seq::IndexedRandom;
             if let Some(m) = legal_moves.choose(&mut rand::rng()) {
-                let _ = game.play_move(m.as_ref());
+                let _ = game
+                    .play(&polyfish::Action::from_move(m.as_ref()).expect("move identity"))
+                    .ok();
                 turn_count += 1;
             }
         }

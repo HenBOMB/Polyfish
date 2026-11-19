@@ -133,7 +133,17 @@ fn freeze_area_move_undo_round_trips() {
         })
         .expect("FreezeAreaMove was not generated next to unfrozen water");
 
-    let undo = game.simulate_move(m.as_ref()).expect("simulation refused");
+    let undo = game
+        .simulate(
+            &polyfish::Action::from_move(m.as_ref()).expect("move identity"),
+            if polyfish::game::adversarial_search() {
+                polyfish::TurnRotation::NextPlayer
+            } else {
+                polyfish::TurnRotation::SamePlayer
+            },
+        )
+        .ok()
+        .expect("simulation refused");
     assert_ne!(
         state_hash(&game),
         before_hash,

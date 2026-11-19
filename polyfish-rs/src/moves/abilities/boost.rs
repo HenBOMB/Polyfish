@@ -19,7 +19,11 @@ impl Move for BoostMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let (unit_owner, unit_idx_in_tribe) = {
             let mut found = None;
             for (tribe_id, tribe) in &state.tribes {

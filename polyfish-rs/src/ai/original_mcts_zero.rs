@@ -153,7 +153,7 @@ impl<'a> ZeroMctsAgent<'a> {
         if let Some(m) = &child.move_to_here {
             // do NOT simulate here, cause mcts zero runs with FOW=Disabled
             // TODO after training is complete and we have competent model, SIMULATE MOVE HERE INSTEAD!
-            if let Some(undo) = game.play_move(m.as_ref()) {
+            if let Some(undo) = game.play_generated(m.as_ref()) {
                 let val = -self.search(game, child);
                 undo(&mut game.state);
 

@@ -321,6 +321,28 @@ pub fn choose_with_budget(
     preset: OpponentPreset,
     budget: usize,
 ) -> (Option<Box<dyn Move>>, usize) {
+    choose_with_root(game, preset, budget, None)
+}
+
+pub fn choose_from_decision(
+    decision: &crate::Decision<'_>,
+    preset: OpponentPreset,
+) -> Option<Box<dyn Move>> {
+    choose_with_root(
+        decision.game(),
+        preset,
+        EXPERT_BUDGET,
+        Some(decision.search_moves()),
+    )
+    .0
+}
+
+fn choose_with_root(
+    game: &Game,
+    preset: OpponentPreset,
+    budget: usize,
+    root: Option<&[Box<dyn Move>]>,
+) -> (Option<Box<dyn Move>>, usize) {
     if result(game) != MatchResult::InProgress {
         return (None, 0);
     }
@@ -330,9 +352,22 @@ pub fn choose_with_budget(
         ^ (game.state._history.len() as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
     let mut rng = StdRng::seed_from_u64(seed);
     let mut observed = observation(game, pov);
-    let mut actions = order_candidates(legal_actions(game, &observed));
+    let generated;
+    let root = match root {
+        Some(moves) => moves,
+        None => {
+            generated = game.legal_moves();
+            &generated
+        }
+    };
+    let observed_keys = observed_action_keys(&observed);
+    let mut actions = order_candidates(
+        root.iter()
+            .filter(|action| observed_keys.contains(&action.serialize().to_string()))
+            .collect(),
+    );
     if actions.len() <= 1 {
-        return (actions.pop(), 0);
+        return (actions.pop().map(|m| dyn_clone::clone_box(m.as_ref())), 0);
     }
     let naval = (observed.state.settings.map_type != MapType::Drylands)
         .then(|| naval::NavalPolicy::new(&observed.state));
@@ -362,7 +397,10 @@ pub fn choose_with_budget(
             tile.explorers.extend(observed.state.tribes.keys().copied());
         }
         let (index, advances) = rolling_horizon(&observed, &actions, budget, &mut rng);
-        return (Some(actions.swap_remove(index)), advances);
+        return (
+            Some(dyn_clone::clone_box(actions.swap_remove(index).as_ref())),
+            advances,
+        );
     }
 
     let goals = visible_goals(&observed.state);
@@ -383,34 +421,40 @@ pub fn choose_with_budget(
             .count()
     };
     let index = rng.random_range(0..choices);
-    (Some(actions.swap_remove(index)), 0)
+    (
+        Some(dyn_clone::clone_box(actions.swap_remove(index).as_ref())),
+        0,
+    )
 }
 
 /// Keep commands available in both the player view and the authoritative state.
 pub fn legal_actions(game: &Game, view: &Game) -> Vec<Box<dyn Move>> {
-    let observed_keys: std::collections::HashSet<_> = view
-        .legal_moves()
-        .into_iter()
-        .map(|action| action.serialize().to_string())
-        .collect();
+    let observed_keys = observed_action_keys(view);
     game.legal_moves()
         .into_iter()
         .filter(|action| observed_keys.contains(&action.serialize().to_string()))
         .collect()
 }
 
-fn order_candidates(actions: Vec<Box<dyn Move>>) -> Vec<Box<dyn Move>> {
+fn observed_action_keys(view: &Game) -> std::collections::HashSet<String> {
+    view.legal_moves()
+        .into_iter()
+        .map(|action| action.serialize().to_string())
+        .collect()
+}
+
+fn order_candidates<M: AsRef<dyn Move>>(actions: Vec<M>) -> Vec<M> {
     let mut actions: Vec<_> = actions
         .into_iter()
         .filter(|action| {
-            action.move_type() != MoveType::Resign
+            action.as_ref().move_type() != MoveType::Resign
                 && !matches!(
-                    action.ability_type(),
+                    action.as_ref().ability_type(),
                     Ok(AbilityType::Destroy | AbilityType::Disband)
                 )
         })
         .collect();
-    actions.sort_by_cached_key(|action| action.serialize().to_string());
+    actions.sort_by_cached_key(|action| action.as_ref().serialize().to_string());
     actions
 }
 
@@ -544,7 +588,7 @@ fn fitness(game: &Game, pov: PlayerId) -> f32 {
 
 fn rolling_horizon(
     root: &Game,
-    root_actions: &[Box<dyn Move>],
+    root_actions: &[&Box<dyn Move>],
     budget: usize,
     rng: &mut StdRng,
 ) -> (usize, usize) {
@@ -562,20 +606,17 @@ fn rolling_horizon(
                 break;
             }
             let later;
-            let actions = if ply == 0 {
-                root_actions
+            let action = if ply == 0 {
+                root_actions[gene % root_actions.len()].as_ref()
             } else {
                 later = order_candidates(trial.legal_moves());
-                &later
+                if later.is_empty() {
+                    break;
+                }
+                later[gene % later.len()].as_ref()
             };
-            if actions.is_empty() {
-                break;
-            }
             advances += 1;
-            if trial
-                .play_move(actions[gene % actions.len()].as_ref())
-                .is_none()
-            {
+            if trial.play_generated(action).is_none() {
                 break;
             }
         }

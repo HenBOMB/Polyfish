@@ -28,7 +28,11 @@ impl Move for BreakPeaceMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let pov_id = state.settings.current_player_turn_id;
         let target_id = self.opponent_id;
 
@@ -132,7 +136,11 @@ impl Move for PeaceRequestResponse {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let pov_id = state.settings.current_player_turn_id;
         let opp_id = self.opponent_id; // the tribe who sent the request
         let accepted = self.accepted == 1;
@@ -252,7 +260,11 @@ impl Move for EstablishEmbassyMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let pov_id = state.settings.current_player_turn_id;
         let opp_id = self.opponent_id;
         require_stars(state, 5, "establish embassy")?;
@@ -345,7 +357,11 @@ impl Move for PeaceTreatyMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let pov_id = state.settings.current_player_turn_id;
         let opp_id = self.opponent_id;
         let mut undos = Vec::new();
@@ -426,7 +442,11 @@ impl Move for DestroyEmbassyMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let pov_id = state.settings.current_player_turn_id;
         let opp_id = self.opponent_id;
         let mut undos = Vec::new();
