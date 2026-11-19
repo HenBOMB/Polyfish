@@ -89,15 +89,19 @@ impl BoardTiles {
         }
     }
 
-    pub fn keys(&self) -> impl Iterator<Item = &i32> {
+    pub fn keys(&self) -> impl DoubleEndedIterator<Item = &i32> + ExactSizeIterator + Clone {
         self.iter().map(|(key, _)| key)
     }
 
-    pub fn values(&self) -> impl Iterator<Item = &TileState> {
+    pub fn values(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &TileState> + ExactSizeIterator + Clone {
         self.iter().map(|(_, tile)| tile)
     }
 
-    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut TileState> {
+    pub fn values_mut(
+        &mut self,
+    ) -> impl DoubleEndedIterator<Item = &mut TileState> + ExactSizeIterator {
         self.iter_mut().map(|(_, tile)| tile)
     }
 }
@@ -136,10 +140,22 @@ impl IndexMut<&i32> for BoardTiles {
     }
 }
 
+#[derive(Clone)]
 pub enum BoardTilesIter<'a> {
     Indexed(std::slice::Iter<'a, (i32, TileState)>),
     Ordered(map::Iter<'a, i32, TileState>),
 }
+
+impl DoubleEndedIterator for BoardTilesIter<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Indexed(iter) => iter.next_back().map(|(key, tile)| (key, tile)),
+            Self::Ordered(iter) => iter.next_back(),
+        }
+    }
+}
+
+impl ExactSizeIterator for BoardTilesIter<'_> {}
 
 impl<'a> Iterator for BoardTilesIter<'a> {
     type Item = (&'a i32, &'a TileState);
@@ -182,7 +198,25 @@ impl<'a> Iterator for BoardTilesIterMut<'a> {
             Self::Ordered(iter) => iter.next(),
         }
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Indexed(iter) => iter.size_hint(),
+            Self::Ordered(iter) => iter.size_hint(),
+        }
+    }
 }
+
+impl DoubleEndedIterator for BoardTilesIterMut<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Indexed(iter) => iter.next_back().map(|(key, tile)| (&*key, tile)),
+            Self::Ordered(iter) => iter.next_back(),
+        }
+    }
+}
+
+impl ExactSizeIterator for BoardTilesIterMut<'_> {}
 
 impl<'a> IntoIterator for &'a mut BoardTiles {
     type Item = (&'a i32, &'a mut TileState);
