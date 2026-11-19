@@ -212,6 +212,14 @@
     height: 78px;
 }
 
+.poly-action-btn .poly-action-heal {
+    width: 36px;
+    height: 36px;
+    background-color: #f0fff8;
+    clip-path: polygon(34% 0, 66% 0, 66% 34%, 100% 34%, 100% 66%, 66% 66%,
+        66% 100%, 34% 100%, 34% 66%, 0 66%, 0 34%, 34% 34%);
+}
+
 .poly-action-btn:disabled {
     cursor: default;
     opacity: 0.5;

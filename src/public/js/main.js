@@ -474,6 +474,9 @@ function updateSelectionInfo(clickX = null, clickY = null) {
 
         const actions = [];
         const addAction = (move, label, image, cost = 0, iconClass = '') => {
+            const icon = iconClass === 'poly-action-heal'
+                ? '<span class="poly-action-icon poly-action-heal" aria-hidden="true"></span>'
+                : `<img class="poly-action-icon ${iconClass}" src="textures/${image || 'misc/infoSymbol'}.png" alt="">`;
             const costBadge = cost === 0 ? '' : `
                 <span class="cost-badge ${cost < 0 ? 'reward-badge' : ''}">
                     <img src="textures/misc/star.png" alt="">
@@ -483,7 +486,7 @@ function updateSelectionInfo(clickX = null, clickY = null) {
                 <div class="poly-action-container">
                     <button type="button" class="poly-action-btn" aria-label="${label}"
                         data-move-id="${currentLegalMoves.indexOf(move)}" ${povTribe.stars < cost ? 'disabled' : ''}>
-                        <img class="poly-action-icon ${iconClass}" src="textures/${image || 'misc/infoSymbol'}.png" alt="">
+                        ${icon}
                         ${costBadge}
                     </button>
                     <div class="poly-action-label">${label}</div>
@@ -498,7 +501,7 @@ function updateSelectionInfo(clickX = null, clickY = null) {
 
         for (const move of buildMoves) {
             const name = StructureTypes[move.type] || `ID=${move.type}`;
-            addAction(move, `Build ${name}`, getStructureFile(move.type, tile.climate, 'misc/infoSymbol'), StructureCosts[move.type] || 5);
+            addAction(move, `Build ${name}`, getStructureFile(move.type, tile.climate, 'misc/infoSymbol'), StructureCosts[move.type] ?? 5);
         }
 
         const unitCosts = {
@@ -514,11 +517,12 @@ function updateSelectionInfo(clickX = null, clickY = null) {
         for (const move of abilityMoves) {
             const type = typeof move.type === 'object' ? move.type?.Ok : move.type;
             const name = AbilityNames[type] || `ID=${type}`;
-            addAction(move, name, getAbilityFile(type, tile.climate), AbilityCosts[type] || 0);
+            const heals = type === AbilityType.Recover || type === AbilityType.HealOthers;
+            addAction(move, name, getAbilityFile(type, tile.climate), AbilityCosts[type] || 0, heals ? 'poly-action-heal' : '');
         }
 
         floatingPopup.innerHTML = `<div style="display: flex; gap: 15px; flex-wrap: wrap; justify-content: center;">${actions.join('')}</div>`;
-        floatingPopup.querySelectorAll('.poly-action-icon').forEach(icon => {
+        floatingPopup.querySelectorAll('img.poly-action-icon').forEach(icon => {
             icon.addEventListener('error', () => { icon.src = 'textures/misc/infoSymbol.png'; }, { once: true });
         });
 
@@ -821,9 +825,7 @@ function getAbilityFile(type, climate) {
         4: 'misc/explo',
         5: 'misc/PoisonGFX',
         6: 'misc/magic',
-        7: 'misc/heal',
         8: 'misc/citizen',
-        9: 'misc/heal',
         11: 'terrain/water/water',
         13: 'terrain/tiles/ice',
         14: 'misc/boost_1',

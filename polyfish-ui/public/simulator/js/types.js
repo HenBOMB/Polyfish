@@ -219,11 +219,18 @@ const StructureCosts = {
     20: 20, // Mountain Temple
     21: 5, // Mine
     22: 5, // Forge
-    25: 5, // Grand Bazaar
+    23: 0, // Altar of Peace
+    24: 0, // Tower of Wisdom
+    25: 0, // Grand Bazaar
+    26: 0, // Emperor's Tomb
+    27: 0, // Gate of Power
+    28: 0, // Park of Fortune
+    29: 0, // Eye of God
     33: 5, // Outpost
     50: 5, // Market
     69: 20, // Ice Temple
     71: 3, // Road
+    123: 0, // Cult of Ciru
 };
 
 const StructureTypes = {
