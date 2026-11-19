@@ -9,7 +9,6 @@ import json
 import os
 from pathlib import Path
 import random
-import statistics
 import subprocess
 import tempfile
 
@@ -176,10 +175,8 @@ def percentile_summary(raw):
         for metric, (value, higher) in fields.items():
             java = [value(row) for row in by_engine["tribes"]]
             rust = [value(row) for row in by_engine["polyfish"]]
-            ratio, interval = paired_summary(java, rust, higher, rng)
             summary.append(dict(tiles=side**2, mode=mode, count=count, metric=metric,
-                                javaMedian=statistics.median(java), rustMedian=statistics.median(rust),
-                                rustAdvantageRatio=ratio, pairedBootstrap95=interval))
+                                **paired_summary(java, rust, higher, rng)))
     return summary
 
 
@@ -192,8 +189,8 @@ def main():
     parser.add_argument("--sides", type=int, nargs="+", choices=SIDES, default=SIDES)
     parser.add_argument("--preflight", choices=("create", "verify"))
     parser.add_argument("--repeats", type=int, default=7)
-    parser.add_argument("--batches", type=int, default=16)
-    parser.add_argument("--decisions", type=int, default=4)
+    parser.add_argument("--batches", type=int, default=6)
+    parser.add_argument("--decisions", type=int, default=2)
     parser.add_argument("--modes", nargs="+", choices=("matched", "components", "native", "retain"),
                         default=("matched", "components", "native", "retain"))
     parser.add_argument("--rust-revision", help="SHA from which the supplied Rust executable was built")
@@ -230,28 +227,34 @@ def main():
             "native": [(args.decisions, args.decisions * 2)],
             "retain": [(count, 0) for count in RETAIN_COUNTS],
         }
-        for repeat in range(args.repeats):
-            workloads = [(side, mode, count, warm) for side in args.sides
-                         for mode in args.modes for count, warm in modes[mode]]
-            rng.shuffle(workloads)
-            for side, mode, count, warm in workloads:
-                fixture, schedule = paths[side]
-                engines = [(java, tribes), (rust, rust_dir)]
-                rng.shuffle(engines)
-                for order, (executable, cwd) in enumerate(engines):
-                    row = measure([*executable, str(fixture), mode, str(count), str(warm), str(schedule)], cwd)
-                    assert row["size"] == side
-                    raw.append(dict(row, mode=mode, repeat=repeat, order=order, count=count, warmup=warm))
-            print(f"Completed {repeat + 1}/{args.repeats} pairs per workload", flush=True)
+        checkpoint = args.output.with_suffix(".checkpoint.jsonl")
+        with checkpoint.open("x") as journal:
+            for repeat in range(args.repeats):
+                workloads = [(side, mode, count, warm) for side in args.sides
+                             for mode in args.modes for count, warm in modes[mode]]
+                rng.shuffle(workloads)
+                for side, mode, count, warm in workloads:
+                    fixture, schedule = paths[side]
+                    engines = [(java, tribes), (rust, rust_dir)]
+                    rng.shuffle(engines)
+                    for order, (executable, cwd) in enumerate(engines):
+                        row = measure([*executable, str(fixture), mode, str(count), str(warm), str(schedule)], cwd)
+                        assert row["size"] == side
+                        row = dict(row, mode=mode, repeat=repeat, order=order, count=count, warmup=warm)
+                        raw.append(row)
+                        journal.write(json.dumps(row) + "\n")
+                        journal.flush()
+                print(f"Completed {repeat + 1}/{args.repeats} pairs per workload", flush=True)
         inputs = [Path(__file__), JAVA_SOURCE, RUST_SOURCE, ROOT / "research/run_engine_benchmark.py",
                   *(file for pair in paths.values() for file in pair)]
         write_json(args.output, {
             "rustCommit": args.rust_revision, "tribesCommit": REVISION, "javaFlags": JAVA_FLAGS,
             "machine": checked(["sysctl", "-n", "machdep.cpu.brand_string"], ROOT) if os.uname().sysname == "Darwin" else os.uname().machine,
-            "java": checked(["java", "-version"], tribes), "rust": checked(["rustc", "--version", "--verbose"], ROOT),
+            "java": checked(["java", "--version"], tribes), "rust": checked(["rustc", "--version", "--verbose"], ROOT),
             "sha256": {str(file.relative_to(ROOT)): hashlib.sha256(file.read_bytes()).hexdigest() for file in inputs},
             "raw": raw, "summary": percentile_summary(raw),
         })
+        checkpoint.unlink()
 
 
 if __name__ == "__main__":

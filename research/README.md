@@ -44,6 +44,20 @@ Peak resident set size (RSS) covers the engine process, including the runtime an
 
 The Rust before-and-after comparison uses the same protocol and two engine revisions, `5e9905dd` and `f7444048`. The macOS sampling profile uses the repeated 900-tile trace and reports overlapping, inclusive stack counts. [Profiling data](results/engine-profile-v1.1.json)
 
+## Reproduce the midgame search comparison
+
+Use the pinned Tribes checkout and JavaFX jar above. Build the Rust harness at each revision you want to compare and save each executable before rebuilding. The first benchmark revision, `e200bc39`, contains the harness and the engine before board compaction.
+
+```sh
+cargo build --manifest-path polyfish-rs/Cargo.toml --locked --release --no-default-features --example midgame_bench
+python3 research/run_midgame_benchmark.py /path/to/Tribes /path/to/javafx-base.jar /path/to/midgame_bench /tmp/midgame-preflight.json --preflight verify
+python3 research/run_midgame_benchmark.py /path/to/Tribes /path/to/javafx-base.jar /path/to/midgame_bench /tmp/midgame-results.json --rust-revision <engine-commit>
+```
+
+The [scenario files](fixtures/midgame) describe turn-16 positions with mixed terrain, roads, developed cities, and armies of seven to fifteen units per seat. The matched workload uses full information. Each engine generates its entire native legal-action list on each cloned state and applies one validated branch. The harness times batches of 512 retained child states. Separate timed runs break down copying, legal generation, lookup, and application. Preflight verifies a shared state projection covering seat, round, stars, city production and progress, units and HP, ownership, terrain, resources, and roads. The [preflight report](results/midgame-preflight-v1.json) records the action mix and differences in native legal lists.
+
+The native MCTS workload alternates seats on fog-of-war views, runs 512 iterations per decision, and uses a 20-action rollout cap. The reported decisions per second include observation creation. The engines use their own search trees, evaluators, and legal actions. The memory workload runs separate processes holding 0, 128, 512, and 1,024 child states and reports peak resident memory. All workloads use seven independent interleaved process pairs by default. Timing runs warm up with twice the measured batch or decision count.
+
 ## Reproduce the original v1 pilots
 
 The archived native match timings in [engine-pilot.json](results/engine-pilot.json) used the Drylands generator at `c038708d`. The current Drylands generator produces different maps from those seeds. [simulator-smoke.jsonl](results/simulator-smoke.jsonl) records the v1 browser and headless match verification.
