@@ -106,7 +106,7 @@ fn handle_human_turn(game: &mut Game, recorder: &GameRecorder) -> anyhow::Result
                 recorder.record_step(&game.state, m.as_ref(), eco, mil);
 
                 println!("Executing: {:?}", m.move_type());
-                game.play_move(m.as_ref());
+                let _ = game.play(&polyfish::Action::from_move(m.as_ref()).expect("move identity"));
                 return Ok(());
             }
         }
@@ -152,7 +152,8 @@ fn handle_ai_turn(
             let mil = evaluator::army::evaluate_army(&game.state, 2);
             recorder.record_step(&game.state, chosen_move.as_ref(), eco, mil);
 
-            game.play_move(chosen_move.as_ref());
+            let _ = game
+                .play(&polyfish::Action::from_move(chosen_move.as_ref()).expect("move identity"));
             break;
         } else if choice == "n" {
             // Reject - Ask Human to select better move for AI
@@ -176,7 +177,8 @@ fn handle_ai_turn(
                     recorder.record_step(&game.state, m.as_ref(), eco, mil);
 
                     println!("Executing Correction: {:?}", m.move_type());
-                    game.play_move(m.as_ref());
+                    let _ =
+                        game.play(&polyfish::Action::from_move(m.as_ref()).expect("move identity"));
                     break;
                 }
             }

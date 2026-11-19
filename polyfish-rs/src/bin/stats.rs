@@ -102,7 +102,8 @@ fn main() -> anyhow::Result<()> {
             let random_move = legal_moves.choose(&mut rng).unwrap();
             let is_end_turn = random_move.move_type() == MoveType::EndTurn;
 
-            game.play_move(random_move.as_ref());
+            let _ = game
+                .play(&polyfish::Action::from_move(random_move.as_ref()).expect("move identity"));
             total_moves_played += 1;
 
             if !is_end_turn {

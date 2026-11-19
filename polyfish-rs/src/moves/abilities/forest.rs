@@ -23,7 +23,11 @@ impl Move for ClearForestMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let mut undos = Vec::new();
         // Clear Forest -> Field + Gain 1 Star + Remove Resource (Game)
         undos.push(modify_terrain(state, self.target_index, TerrainType::Field));
@@ -79,7 +83,11 @@ impl Move for GrowForestMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         require_stars(state, 5, "grow forest")?;
 
         let mut undos = Vec::new();
@@ -137,7 +145,11 @@ impl Move for BurnForestMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let cost = crate::version_sync::get_burn_forest_cost(state);
         require_stars(state, cost, "burn forest")?;
 

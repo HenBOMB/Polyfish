@@ -260,7 +260,7 @@ fn play_match(
     tribes: [TribeType; 2],
     tuning: SearchTuning,
     mut samples: Option<&mut Vec<TurnSample>>,
-) -> MatchResult {
+) -> anyhow::Result<MatchResult> {
     // Tribes are a property of the seat, not the configuration: seed N always
     // generates the same map, and the side swap therefore gives each config one
     // game as each tribe. `MatchResult::tribes` re-attributes them to configs.
@@ -328,6 +328,8 @@ fn play_match(
         // Search an obscured clone, exactly as self_play does — searching the
         // real game would let the graded agent see through fog that the
         // trained agent never gets.
+        let decision = game.decision();
+        let game = decision.game();
         let mut search_view = game.clone_for_mcts(current_pid);
         let t0 = Instant::now();
         let best_move = if current_pid == 1 {
@@ -371,7 +373,8 @@ fn play_match(
             );
         }
         if let Some(m) = best_move {
-            game.play_move(m.as_ref());
+            let action = polyfish::Action::from_move(m.as_ref())?;
+            let _undo = decision.play(&action)?;
         } else {
             break;
         }
@@ -429,7 +432,7 @@ fn play_match(
         [tribe_name(1), tribe_name(2)]
     };
 
-    MatchResult {
+    Ok(MatchResult {
         winner_config,
         score_config1,
         score_config2,
@@ -443,7 +446,7 @@ fn play_match(
         turns: game.state.settings.turn,
         moves: moves as u32,
         tribes,
-    }
+    })
 }
 
 /// One JSON file per game in `--dump-stats-dir`. `samples` is what ladder.py
@@ -729,14 +732,21 @@ fn main() -> anyhow::Result<()> {
                     tuning,
                     sink,
                 )
-            }));
+            }))
+            .map_err(|panic| anyhow::anyhow!("game panicked: {}", panic_msg(panic.as_ref())))
+            .and_then(|result| result);
 
             if let Some(dir) = &args.dump_stats_dir {
-                let (res, panic) = match &r {
-                    Ok(m) => (Some(m), None),
-                    Err(e) => (None, Some(panic_msg(e.as_ref()))),
-                };
-                if let Err(e) = write_game_stats(dir, idx, seed, swap, &samples, res, panic) {
+                let error = r.as_ref().err().map(ToString::to_string);
+                if let Err(e) = write_game_stats(
+                    dir,
+                    idx,
+                    seed,
+                    swap,
+                    &samples,
+                    r.as_ref().ok(),
+                    error.as_deref(),
+                ) {
                     eprintln!("  ⚠ failed to write game stats for seed {seed}: {e}");
                 }
             }
@@ -765,12 +775,7 @@ fn main() -> anyhow::Result<()> {
                 }
                 Err(e) => {
                     skipped.fetch_add(1, Ordering::Relaxed);
-                    eprintln!(
-                        "  ⚠ seed {} swap {} dropped — game panicked: {}",
-                        seed,
-                        swap,
-                        panic_msg(e.as_ref())
-                    );
+                    eprintln!("  ⚠ seed {seed} swap {swap} dropped: {e}");
                 }
             }
 

@@ -16,23 +16,23 @@ The model-free simulator supports 1v1 Might with fog of war on six map types, al
 
 1. Install **Rust**, **Node**, and **Python 3**.
 2. Build the frontend once: `cd polyfish-ui && npm install && npm run build` (the server serves `polyfish-ui/dist`).
-3. Run `./run-server.sh` (frees port 3000, then runs the `polyfish` binary from `polyfish-rs/`).
+3. From the repository root, run `./scripts/run-server.sh` or `scripts\run-server.bat` on Windows.
 4. Open `http://localhost:3000` for the simulator, `http://localhost:3000/simulator/training.html` for the training dashboard.
 
 On startup the server loads `polyfish-rs/live_game.json`, then `saved_state.json`, then the newest `replays/mod_replay_*.json`, before falling back to a generated map.
 
-## Open Work
+## Research and training records
 
-There is no TODO list here — it drifts. The live lists are:
-
-- **`expert_pipeline_audit.md`** — the current open-work list for the training pipeline. Every item has a status and a command that re-checks it. Start here.
-- **`hypothesis_driven_improvements.md`** — pre-registered experiments with COMMITTED/REJECTED verdicts. Read before proposing a change; several obvious ideas have already been measured.
-- **`expert_review.md`** / **`expert_boost_throughput.md`** — prior search/learning-signal review and a measured throughput investigation.
+- **[expert_pipeline_audit.md](docs/experiments/expert_pipeline_audit.md)** — the current open-work list for the training pipeline. Every item has a status and a command that re-checks it. Start here.
+- **[hypothesis_driven_improvements.md](docs/experiments/hypothesis_driven_improvements.md)** — pre-registered experiments with COMMITTED/REJECTED verdicts. Read before proposing a change; several obvious ideas have already been measured.
+- **[expert_review.md](docs/experiments/expert_review.md)** / **[expert_boost_throughput.md](docs/experiments/expert_boost_throughput.md)** — prior search/learning-signal review and a measured throughput investigation.
 - [GitHub issues](https://github.com/kadenstaker/Polyfish/issues) for everything else.
 
 The one perennial item: training the network well still needs monster compute.
 
 ## Training
+
+The root-level launch and reporting tools live in [scripts/](scripts/). On Windows, start the training driver with `scripts\run-training.bat`.
 
 - **`polyfish-rs/local_setup.sh`**: Creates `polyfish-rs/.venv` from `polyfish-rs/requirements.txt`. `remote_setup.sh` / `vast_setup.sh` do the same on a GPU box and also install PyTorch.
 - **`polyfish-rs/run_training_loop.sh`**: The driver — `init_model.py` → `self_play` (Rust, writes `games_*.safetensors`) → `train.py` (PyTorch, updates `model.safetensors`) → log a row and checkpoint, plus a strength-gauge arena match every few iterations.
@@ -47,7 +47,7 @@ The one perennial item: training the network well still needs monster compute.
 - **`polyfish-mod/`**: C# BepInEx/PolyMod mod that auto-plays replays inside the real Steam game and POSTs captured states to the local server.
 - **`polyfish-scraper/`**: Utilities for gathering game data and assets.
 - **`CLAUDE.md`**: The per-file map of the tree, including the traps. The deep reference this README summarises.
-- **`notes.md` / `notes-heuristics.md` / `notes-memory.md`**: Architectural research, branching-factor analysis, and the observation-memory channels.
+- **[notes.md](docs/notes/notes.md) / [notes-heuristics.md](docs/notes/notes-heuristics.md) / [notes-memory.md](docs/notes/notes-memory.md)**: Architectural research, branching-factor analysis, and the observation-memory channels.
 
 ## AI Architecture
 
@@ -73,7 +73,7 @@ Three implementations read the same `model.safetensors`, picked by Cargo feature
 
 ## GameState Ripper (Steam)
 
-`polyfish-reader/` is a separate C++ tree and is **not checked into this repo**. `scan.sh` finds the running `Polytopia.exe` and runs the compiled reader against it, dumping live game state as JSON the simulator can load; it needs `g++` and `sudo`.
+`polyfish-reader/` is a separate C++ tree and is **not checked into this repo**. `scripts/scan.sh` finds the running `Polytopia.exe` and runs the compiled reader against it, dumping live game state as JSON the simulator can load; it needs `g++` and `sudo`.
 
 - **`polyfish-reader.cpp`**: Memory reader that extracts live game state for the simulator.
 - **`inputerv2`**: Interactive tool for manipulating live game memory.

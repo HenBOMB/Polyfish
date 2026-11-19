@@ -113,11 +113,15 @@ fn fuzz_test_p2_moves() {
         }),
     );
 
-    let _ = game.play_move(&m1).expect("P1 Harvest");
+    let _ = game
+        .play(&polyfish::Action::from_move(&m1).expect("move identity"))
+        .expect("P1 Harvest");
 
     // P1 Ends Turn
     let m2 = EndTurnMove;
-    let _ = game.play_move(&m2).expect("P1 EndTurn");
+    let _ = game
+        .play(&polyfish::Action::from_move(&m2).expect("move identity"))
+        .expect("P1 EndTurn");
 
     if game.current_player_id() != p2 {
         panic!("Turn not P2");
@@ -138,7 +142,10 @@ fn fuzz_test_p2_moves() {
         let start_stars = game.current_tribe().unwrap().stars;
 
         // Play
-        if let Some(undo) = game.play_move(m.as_ref()) {
+        if let Some(undo) = game
+            .play(&polyfish::Action::from_move(m.as_ref()).expect("move identity"))
+            .ok()
+        {
             let mid_stars = game.current_tribe().unwrap().stars;
             println!("  Executed. Stars {} -> {}", start_stars, mid_stars);
 

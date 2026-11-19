@@ -115,7 +115,10 @@ fn main() -> anyhow::Result<()> {
         if let Some(m) = best_move {
             println!("🚀 Executing: {}", m.describe(&game.state));
 
-            if game.play_move(m.as_ref()).is_some() {
+            if game
+                .play(&polyfish::Action::from_move(m.as_ref()).expect("move identity"))
+                .is_ok()
+            {
                 // Success
             } else {
                 println!("FATAL ERROR executing move: {}", m.describe(&game.state));

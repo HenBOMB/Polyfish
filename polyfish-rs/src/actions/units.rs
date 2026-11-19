@@ -879,7 +879,7 @@ pub fn attack_unit(
             get_unit_attack(state, unit),
             unit.health,
             get_unit_max_health(unit),
-            get_unit_setting(unit.unit_type).skills.clone(),
+            &get_unit_setting(unit.unit_type).skills,
             unit.unit_type,
             unit.coords.idx,
         )

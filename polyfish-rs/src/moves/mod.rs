@@ -45,13 +45,25 @@ pub struct MoveResult {
     pub rewards: Option<Vec<Box<dyn Move>>>,
 }
 
-/// A game move that can be executed and undone
+#[doc(hidden)]
+#[derive(Clone, Copy)]
+pub struct MoveExecution(());
+
+impl MoveExecution {
+    pub(crate) const INTERNAL: Self = Self(());
+}
+
+/// A generated game move and its descriptive metadata.
 pub trait Move: std::fmt::Debug + Send + Sync + dyn_clone::DynClone {
     /// Get the move type
     fn move_type(&self) -> MoveType;
 
-    /// Execute the move on the game state
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String>;
+    #[doc(hidden)]
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String>;
 
     /// Human-readable description
     fn describe(&self, state: &GameState) -> String;
@@ -89,6 +101,10 @@ pub trait Move: std::fmt::Debug + Send + Sync + dyn_clone::DynClone {
         Err(format!("Move {:?} requires unit type", self.move_type()))
     }
 
+    fn is_upgrade(&self) -> bool {
+        false
+    }
+
     /// Get tech type (for Research moves)
     #[inline]
     fn tech_type(&self) -> Result<TechnologyType, String> {
@@ -117,7 +133,11 @@ impl Move for EndTurnMove {
         MoveType::EndTurn
     }
 
-    fn execute(&self, _state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        _state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         // EndTurn is handled specially in Game::play_move
         Ok(MoveResult {
             undo: Box::new(|_| {}),
@@ -143,7 +163,11 @@ impl Move for ResignMove {
         MoveType::Resign
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let pov_id = state.settings.current_player_turn_id;
         let turn = state.settings.turn;
         let mut undos = Vec::new();
@@ -955,3 +979,6 @@ fn is_navigationable_terrain(
         }
     }
 }
+
+#[cfg(test)]
+mod execute_tests;

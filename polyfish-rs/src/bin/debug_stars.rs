@@ -91,7 +91,9 @@ fn test_harvest_undo() {
     let move_ = HarvestMove::new(city_idx);
     let cost = 2; // Fruit harvest cost
 
-    let undo = game.play_move(&move_).expect("Harvest failed");
+    let undo = game
+        .play(&polyfish::Action::from_move(&move_).expect("move identity"))
+        .expect("Harvest failed");
 
     assert_stars(&game, 10 - cost, "After Harvest");
 
@@ -144,7 +146,9 @@ fn test_build_undo() {
     let move_ = BuildMove::new(tile_idx, StructureType::Road);
     let cost = 3; // Road cost is 3 in this codebase
 
-    let undo = game.play_move(&move_).expect("Build Road failed");
+    let undo = game
+        .play(&polyfish::Action::from_move(&move_).expect("move identity"))
+        .expect("Build Road failed");
 
     assert_stars(&game, 10 - cost, "After Build");
 
@@ -211,7 +215,9 @@ fn test_interaction_sequence() {
 
     // 1. Harvest (Cost 2)
     let move1 = HarvestMove::new(city_idx);
-    let undo1 = game.play_move(&move1).expect("Harvest failed");
+    let undo1 = game
+        .play(&polyfish::Action::from_move(&move1).expect("move identity"))
+        .expect("Harvest failed");
 
     assert_stars(&game, 8, "After Harvest");
 
@@ -242,7 +248,9 @@ fn test_interaction_sequence() {
     use polyfish::types::CityRewardType;
 
     let move_reward = RewardMove::new(city_idx, CityRewardType::Resources);
-    let undo_reward = game.play_move(&move_reward).expect("Reward failed");
+    let undo_reward = game
+        .play(&polyfish::Action::from_move(&move_reward).expect("move identity"))
+        .expect("Reward failed");
 
     // Resources adds 5 Stars.
     // Stars: 8 (After Harvest) + 5 = 13.
@@ -259,11 +267,15 @@ fn test_interaction_sequence() {
 
     // End Turn (P1 -> P2)
     let move2 = EndTurnMove;
-    let undo2 = game.play_move(&move2).expect("EndTurn failed");
+    let undo2 = game
+        .play(&polyfish::Action::from_move(&move2).expect("move identity"))
+        .expect("EndTurn failed");
 
     // End Turn (P2 -> P1)
     let move3 = EndTurnMove;
-    let undo3 = game.play_move(&move3).expect("EndTurn P2 failed");
+    let undo3 = game
+        .play(&polyfish::Action::from_move(&move3).expect("move identity"))
+        .expect("EndTurn P2 failed");
 
     // Now P1's turn again.
     // Production calculation:
@@ -335,7 +347,9 @@ fn test_summon_undo() {
     game.state.tiles.insert(0, tile);
 
     // Play
-    let undo = game.play_move(&move_).expect("Move failed");
+    let undo = game
+        .play(&polyfish::Action::from_move(&move_).expect("move identity"))
+        .expect("Move failed");
     assert_stars(&game, 10 - cost, "After Summon");
 
     // Undo
@@ -363,7 +377,9 @@ fn test_research_undo() {
     let _cost = 5; // Assuming standard
 
     // Play
-    let undo = game.play_move(&move_).expect("Move failed");
+    let undo = game
+        .play(&polyfish::Action::from_move(&move_).expect("move identity"))
+        .expect("Move failed");
 
     // Check stars decreased
     let tribe = game.current_tribe().unwrap();
@@ -392,7 +408,9 @@ fn test_turn_cycling_undo() {
     let move_ = EndTurnMove;
 
     // Play EndTurn -> transitions to Player 2
-    let undo = game.play_move(&move_).expect("EndTurn failed");
+    let undo = game
+        .play(&polyfish::Action::from_move(&move_).expect("move identity"))
+        .expect("EndTurn failed");
 
     if game.current_player_id() == 1 {
         panic!("Did not change player!");
@@ -435,7 +453,9 @@ fn test_game_over_undo() {
     let move_ = EndTurnMove;
 
     // This transitions to Player 2, T30. Not Game Over yet.
-    let undo = game.play_move(&move_).expect("P1 EndTurn failed");
+    let undo = game
+        .play(&polyfish::Action::from_move(&move_).expect("move identity"))
+        .expect("P1 EndTurn failed");
     undo(&mut game.state);
     assert_stars(&game, 10, "After P1 Undo");
 
@@ -451,7 +471,9 @@ fn test_game_over_undo() {
         // Default generator usually makes 2 tribes.
     }
 
-    let undo_p2 = game.play_move(&move_);
+    let undo_p2 = game
+        .play(&polyfish::Action::from_move(&move_).expect("move identity"))
+        .ok();
     // Should trigger Game Over logic inside end_turn
 
     if let Some(u) = undo_p2 {
@@ -486,7 +508,16 @@ fn test_game_over_undo() {
     // 3. P2 ends turn -> Game Over?
     //    If Game Over, loop breaks?
 
-    let undo_sim = game.simulate_move(&move_);
+    let undo_sim = game
+        .simulate(
+            &polyfish::Action::from_move(&move_).expect("move identity"),
+            if polyfish::game::adversarial_search() {
+                polyfish::TurnRotation::NextPlayer
+            } else {
+                polyfish::TurnRotation::SamePlayer
+            },
+        )
+        .ok();
 
     if let Some(u) = undo_sim {
         println!("Simulate executed.");
@@ -549,7 +580,9 @@ fn test_capture_ruin_determinism() {
     let mut results = Vec::new();
 
     for _ in 0..10 {
-        let undo = game.play_move(&move_).expect("Capture failed");
+        let undo = game
+            .play(&polyfish::Action::from_move(&move_).expect("move identity"))
+            .expect("Capture failed");
         let stars = game.current_tribe().unwrap().stars;
         let tech_count = game.current_tribe().unwrap().tech_vanilla.len();
 
@@ -615,7 +648,10 @@ fn test_capture_ruin_stacking() {
 
         // We know from logic that if we get a Unit reward, it spawns a Veteran Swordsman.
         // Let's check if the move executes cleanly.
-        if let Some(undo) = game.play_move(&move_) {
+        if let Some(undo) = game
+            .play(&polyfish::Action::from_move(&move_).expect("move identity"))
+            .ok()
+        {
             let tribe = game.state.tribes.get(&1).unwrap();
             let units_at_ruin = tribe
                 .units

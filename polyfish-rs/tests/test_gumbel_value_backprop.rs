@@ -40,7 +40,6 @@ fn make_evaluator(network: &Arc<PolyZeroNet>) -> Evaluator {
 /// collection path.
 #[test]
 fn test_gumbel_state_restored_after_search() {
-    use polyfish::moves::EndTurnMove;
 
     let network = make_network();
     let evaluator = make_evaluator(&network);
@@ -52,7 +51,7 @@ fn test_gumbel_state_restored_after_search() {
         if polyfish::functions::is_game_over(&game.state) {
             break;
         }
-        let _ = game.play_move(&EndTurnMove);
+        let _ = game.play(&polyfish::Action::EndTurn).ok();
     }
     assert!(polyfish::ai::book::Book::recommend(&game).is_empty());
 
@@ -81,7 +80,6 @@ fn test_gumbel_state_restored_after_search() {
 /// the actual search (not the book) is exercised for every config.
 #[test]
 fn test_gumbel_stability_across_iteration_counts() {
-    use polyfish::moves::EndTurnMove;
 
     let network = make_network();
     let evaluator = make_evaluator(&network);
@@ -90,7 +88,7 @@ fn test_gumbel_stability_across_iteration_counts() {
         if polyfish::functions::is_game_over(&base.state) {
             break;
         }
-        let _ = base.play_move(&EndTurnMove);
+        let _ = base.play(&polyfish::Action::EndTurn).ok();
     }
     assert!(
         polyfish::ai::book::Book::recommend(&base).is_empty(),

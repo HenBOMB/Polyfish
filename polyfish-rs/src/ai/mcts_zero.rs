@@ -522,7 +522,7 @@ impl<'a> ZeroMctsAgent<'a> {
 
             // Apply move
             let m = current.children[child_idx].move_to_here.as_ref()?;
-            let undo = game.simulate_move(m.as_ref());
+            let undo = game.simulate_generated(m.as_ref());
             let undo = match undo {
                 Some(u) => u,
                 None => {
@@ -572,7 +572,7 @@ impl<'a> ZeroMctsAgent<'a> {
                     current.select_child_with_virtual_loss(self.c_puct, -self.virtual_loss)?;
 
                 let m = current.children[child_idx].move_to_here.as_ref()?;
-                let result = game.simulate_move(m.as_ref());
+                let result = game.simulate_generated(m.as_ref());
                 if result.is_none() {
                     let pov_id = game.state.settings.current_player_turn_id;
                     eprintln!("\n=== MOVE EXECUTION FAILED ===");

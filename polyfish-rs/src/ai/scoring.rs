@@ -1228,7 +1228,7 @@ mod tests {
                 let Some(mv) = agent.select_move(&mut game) else {
                     break;
                 };
-                game.play_move(mv.as_ref());
+                game.play_generated(mv.as_ref());
                 steps += 1;
             }
 

@@ -92,14 +92,17 @@ fn main() -> Result<()> {
         } else {
             args.preset2
         };
-        let action =
-            research::choose_move(&game, preset).context("Bot did not select a legal move")?;
-        if let Some(recorder) = &mut recorder {
-            recorder.record_move(game.turn(), seat, action.as_ref())?;
-        }
-        let _undo = game
-            .play_move(action.as_ref())
+        let turn = game.turn();
+        let decision = game.decision();
+        let move_ = research::choose_from_decision(&decision, preset)
+            .context("Bot did not select a legal move")?;
+        let action = polyfish::Action::from_move(move_.as_ref())?;
+        let _undo = decision
+            .play(&action)
             .context("Bot move rejected by the engine")?;
+        if let Some(recorder) = &mut recorder {
+            recorder.record_command(turn, seat, action)?;
+        }
         actions += 1;
     }
     let result = research::result(&game);

@@ -72,7 +72,10 @@ fn test_mcts_matches_ruin_capture_sequence() {
                     actual,
                     best_move.as_ref().unwrap().describe(&game.state)
                 );
-                game.play_move(best_move.as_ref().unwrap().as_ref());
+                let _ = game.play(
+                    &polyfish::Action::from_move(best_move.as_ref().unwrap().as_ref())
+                        .expect("move identity"),
+                );
 
                 // IF we ended turn or for some reason it's not P1's turn anymore,
                 // skip all other players until it's P1's turn again.
@@ -80,7 +83,7 @@ fn test_mcts_matches_ruin_capture_sequence() {
                 let mut safety = 0;
                 while game.current_player_id() != 1 && safety < 16 {
                     println!("  Skipping Turn for Player {}", game.current_player_id());
-                    game.play_move(&polyfish::moves::EndTurnMove);
+                    let _ = game.play(&polyfish::Action::EndTurn);
                     safety += 1;
                 }
             }

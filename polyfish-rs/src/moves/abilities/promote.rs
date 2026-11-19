@@ -22,7 +22,11 @@ impl Move for PromoteMove {
         MoveType::Ability // Or new implementation MoveType::Promote? No, TS uses Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let mut undos: Vec<UndoCallback> = Vec::new();
 
         let unit_owner = state

@@ -1,10 +1,11 @@
 //! Structure settings
 
 use crate::types::{ResourceType, StructureType, TerrainType, TribeType};
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::LazyLock};
+use strum::IntoEnumIterator;
 
 /// Structure configuration
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct StructureSetting {
     pub cost: Option<i32>,
     pub terrain_types: HashSet<TerrainType>,
@@ -53,7 +54,19 @@ pub fn unimplemented_reason(struct_type: StructureType) -> Option<&'static str> 
 }
 
 /// Get structure settings by type
-pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
+pub fn get_structure_setting(struct_type: StructureType) -> &'static StructureSetting {
+    static TABLE: LazyLock<Vec<Option<StructureSetting>>> = LazyLock::new(|| {
+        let max = StructureType::iter().map(|kind| kind as usize).max().unwrap();
+        let mut settings = vec![None; max + 1];
+        for kind in StructureType::iter() {
+            settings[kind as usize] = Some(build_structure_setting(kind));
+        }
+        settings
+    });
+    TABLE[struct_type as usize].as_ref().unwrap()
+}
+
+fn build_structure_setting(struct_type: StructureType) -> StructureSetting {
     match struct_type {
         StructureType::None
         | StructureType::Village
@@ -268,5 +281,18 @@ pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
             terrain_types: terrains![TerrainType::Field, TerrainType::Forest, TerrainType::Water],
             ..Default::default()
         },
+    }
+}
+
+
+#[cfg(test)]
+mod cached_settings_tests {
+    use super::*;
+
+    #[test]
+    fn cached_settings_match_release_definitions() {
+        for kind in StructureType::iter() {
+            assert_eq!(get_structure_setting(kind), &build_structure_setting(kind), "{kind:?}");
+        }
     }
 }

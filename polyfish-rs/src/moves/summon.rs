@@ -32,7 +32,11 @@ impl Move for SummonMove {
         MoveType::Summon
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         // Validation check for cost
         let settings = get_unit_setting(self.unit_type);
         let cost = settings.cost;

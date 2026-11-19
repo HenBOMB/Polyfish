@@ -482,7 +482,7 @@ impl HeuristicMctsAgent {
         if node.is_fully_expanded() && !node.children.is_empty() {
             let child = node.uct_select_child(self.exploration_constant);
             if let Some(m) = &child.move_to_here {
-                if let Some(undo) = game.simulate_move(m.as_ref()) {
+                if let Some(undo) = game.simulate_generated(m.as_ref()) {
                     let val = self.search_iteration(game, child, pov);
                     undo(&mut game.state);
 
@@ -498,7 +498,7 @@ impl HeuristicMctsAgent {
         if let Some(untried) = &mut node.untried_moves {
             if !untried.is_empty() {
                 let m = untried.pop().unwrap();
-                if let Some(undo) = game.simulate_move(m.as_ref()) {
+                if let Some(undo) = game.simulate_generated(m.as_ref()) {
                     let mut child = Node::new(Some(m), game);
                     let val = self.simulate_to_turn_end(game, pov);
                     undo(&mut game.state);
@@ -547,7 +547,7 @@ impl HeuristicMctsAgent {
 
             // If EndTurn is the only move, play it and stop
             if moves.len() == 1 && moves[0].move_type() == crate::types::MoveType::EndTurn {
-                if let Some(undo) = game.simulate_move(moves.remove(0).as_ref()) {
+                if let Some(undo) = game.simulate_generated(moves.remove(0).as_ref()) {
                     undos.push(undo);
                 }
                 break;
@@ -572,7 +572,7 @@ impl HeuristicMctsAgent {
                 .unwrap_or(0);
 
             let best_move = moves.swap_remove(best_idx);
-            if let Some(undo) = game.simulate_move(best_move.as_ref()) {
+            if let Some(undo) = game.simulate_generated(best_move.as_ref()) {
                 undos.push(undo);
             } else {
                 break; // Move failed, stop rollout
@@ -656,7 +656,7 @@ impl StateDiffGreedyAgent {
             // Execute directly on state — no enemy turns, no history, no FOW.
             // This is O(1) overhead vs simulate_move/play_move which both run
             // through the full game loop (including enemy turn cycling).
-            if let Ok(result) = m.execute(&mut game.state) {
+            if let Ok(result) = m.execute(&mut game.state, crate::moves::MoveExecution::INTERNAL) {
                 let score = crate::ai::evaluator::player::evaluate_player(&game.state, pid);
                 (result.undo)(&mut game.state);
 

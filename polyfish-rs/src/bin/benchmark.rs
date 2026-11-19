@@ -100,7 +100,7 @@ fn main() -> anyhow::Result<()> {
             // Benchmark: Move execution
             if let Some(m) = best_move {
                 let exec_start = Instant::now();
-                game.play_move(m.as_ref());
+                let _ = game.play(&polyfish::Action::from_move(m.as_ref()).expect("move identity"));
                 total_move_exec_time += exec_start.elapsed();
                 total_moves += 1;
             }
