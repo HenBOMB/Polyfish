@@ -1,10 +1,11 @@
 //! Unit settings and stats
 
 use crate::types::{SkillType, TribeType, UnitType};
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::LazyLock};
+use strum::IntoEnumIterator;
 
 /// Unit stat configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UnitSetting {
     pub cost: i32,
     pub attack: f32,
@@ -47,7 +48,19 @@ macro_rules! skills {
 }
 
 /// Get unit settings by type
-pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
+pub fn get_unit_setting(unit_type: UnitType) -> &'static UnitSetting {
+    static TABLE: LazyLock<Vec<Option<UnitSetting>>> = LazyLock::new(|| {
+        let max = UnitType::iter().map(|kind| kind as usize).max().unwrap();
+        let mut settings = vec![None; max + 1];
+        for kind in UnitType::iter() {
+            settings[kind as usize] = Some(build_unit_setting(kind));
+        }
+        settings
+    });
+    TABLE[unit_type as usize].as_ref().unwrap()
+}
+
+fn build_unit_setting(unit_type: UnitType) -> UnitSetting {
     use SkillType as S;
     use UnitType as U;
 
@@ -630,5 +643,18 @@ pub fn get_super_unit(tribe_type: TribeType) -> UnitType {
         TribeType::Elyrion => UnitType::DragonEgg,
         TribeType::Cymanti => UnitType::Centipede,
         _ => UnitType::Giant,
+    }
+}
+
+
+#[cfg(test)]
+mod cached_settings_tests {
+    use super::*;
+
+    #[test]
+    fn cached_settings_match_release_definitions() {
+        for kind in UnitType::iter() {
+            assert_eq!(get_unit_setting(kind), &build_unit_setting(kind), "{kind:?}");
+        }
     }
 }
