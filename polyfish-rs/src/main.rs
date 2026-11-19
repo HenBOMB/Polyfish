@@ -651,6 +651,8 @@ struct ResetRequest {
     max_turns: Option<i32>,
     #[serde(rename = "mapSize")]
     map_size: Option<u16>,
+    #[serde(rename = "mapType")]
+    map_type: Option<String>,
     #[serde(rename = "opponentPreset")]
     opponent_preset: Option<polyfish::research::Opponent>,
     seed: Option<i64>,
@@ -672,7 +674,7 @@ async fn reset_game(
     };
 
     if let Some(req) = &payload {
-        if req.map_size.is_some() || req.opponent_preset.is_some() || req.seed.is_some()
+        if req.map_size.is_some() || req.map_type.is_some() || req.opponent_preset.is_some() || req.seed.is_some()
             || req.tribe1.is_some() || req.tribe2.is_some()
         {
             return research_web::reset(&state, req);

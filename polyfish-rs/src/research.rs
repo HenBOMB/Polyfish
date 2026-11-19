@@ -19,6 +19,31 @@ pub const RULES_VERSION: i32 = 115;
 pub const DEFAULT_MAX_TURNS: i32 = 50;
 pub const EXPERT_BUDGET: usize = 256;
 pub const RHEA_HORIZON: usize = 20;
+pub const BOARD_SIZES: [MapSize; 6] = [
+    MapSize::Tiny, MapSize::Small, MapSize::Normal, MapSize::Large, MapSize::Huge, MapSize::Massive,
+];
+pub const MAP_TYPES: [(MapType, &str, &str); 6] = [
+    (MapType::Drylands, "drylands", "Drylands"),
+    (MapType::Lakes, "lakes", "Lakes"),
+    (MapType::Continents, "continents", "Continents"),
+    (MapType::Pangea, "pangea", "Pangea"),
+    (MapType::Archipelago, "archipelago", "Archipelago"),
+    (MapType::WaterWorld, "water-world", "Water World"),
+];
+pub const REGULAR_TRIBES: [(TribeType, &str, &str); 12] = [
+    (TribeType::AiMo, "ai-mo", "Ai-Mo"),
+    (TribeType::Bardur, "bardur", "Bardur"),
+    (TribeType::Hoodrick, "hoodrick", "Hoodrick"),
+    (TribeType::Imperius, "imperius", "Imperius"),
+    (TribeType::Kickoo, "kickoo", "Kickoo"),
+    (TribeType::Luxidoor, "luxidoor", "Luxidoor"),
+    (TribeType::Oumaji, "oumaji", "Oumaji"),
+    (TribeType::Quetzali, "quetzali", "Quetzali"),
+    (TribeType::Vengir, "vengir", "Vengir"),
+    (TribeType::XinXi, "xin-xi", "Xin-Xi"),
+    (TribeType::Yadakk, "yadakk", "Yădakk"),
+    (TribeType::Zebasi, "zebasi", "Zebasi"),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -80,29 +105,50 @@ impl MatchConfig {
 }
 
 pub fn board_size(tiles: u16) -> Option<MapSize> {
-    match tiles {
-        121 => Some(MapSize::Tiny),
-        196 => Some(MapSize::Small),
-        256 => Some(MapSize::Normal),
-        _ => None,
-    }
+    BOARD_SIZES.into_iter().find(|size| size.get_size().pow(2) == i32::from(tiles))
 }
 
 pub fn research_tribe(name: &str) -> Option<TribeType> {
-    match name.to_ascii_lowercase().as_str() {
-        "xin-xi" | "xin_xi" | "xinxi" => Some(TribeType::XinXi),
-        "imperius" => Some(TribeType::Imperius),
-        "bardur" => Some(TribeType::Bardur),
-        "oumaji" => Some(TribeType::Oumaji),
-        _ => None,
-    }
+    let alias = match name.to_lowercase().as_str() {
+        "xin_xi" | "xinxi" => "xin-xi",
+        "ai_mo" | "aimo" => "ai-mo",
+        "yădakk" => "yadakk",
+        _ => name,
+    };
+    REGULAR_TRIBES.iter().find_map(|&(tribe, key, _)| alias.eq_ignore_ascii_case(key).then_some(tribe))
+}
+
+pub fn map_type(name: &str) -> Option<MapType> {
+    let alias = match name.to_ascii_lowercase().as_str() {
+        "waterworld" | "water world" => "water-world",
+        _ => name,
+    };
+    MAP_TYPES.iter().find_map(|&(kind, key, _)| alias.eq_ignore_ascii_case(key).then_some(kind))
+}
+
+pub fn map_type_name(kind: MapType) -> Option<&'static str> {
+    MAP_TYPES.iter().find_map(|&(candidate, key, _)| (candidate == kind).then_some(key))
+}
+
+pub fn map_type_label(kind: MapType) -> Option<&'static str> {
+    MAP_TYPES.iter().find_map(|&(candidate, _, label)| (candidate == kind).then_some(label))
 }
 
 pub fn new_match(size: MapSize, tribes: [TribeType; 2], seed: i64, config: MatchConfig) -> Game {
+    new_match_on(size, MapType::Drylands, tribes, seed, config)
+}
+
+pub fn new_match_on(
+    size: MapSize,
+    map_type: MapType,
+    tribes: [TribeType; 2],
+    seed: i64,
+    config: MatchConfig,
+) -> Game {
     let mut game = Game::new();
     game.state = generate(MapGenSettings {
         size,
-        map_type: MapType::Drylands,
+        map_type,
         tribes: tribes.to_vec(),
         seed,
         version: RULES_VERSION,

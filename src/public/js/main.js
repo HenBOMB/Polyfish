@@ -371,7 +371,8 @@ window.addEventListener('load', () => {
         e.preventDefault();
         const rect = mapViewport.getBoundingClientRect();
         const oldScale = scale;
-        scale = Math.min(2, Math.max(0.2, scale * (e.deltaY > 0 ? 0.9 : 1.1)));
+        const minimumScale = Math.min(0.2, graphicalFitScale());
+        scale = Math.min(2, Math.max(minimumScale, scale * (e.deltaY > 0 ? 0.9 : 1.1)));
         translateX = (rect.width / 2) - ((rect.width / 2) - translateX) * (scale / oldScale);
         translateY = (rect.height / 2) - ((rect.height / 2) - translateY) * (scale / oldScale);
         updateTransform();
