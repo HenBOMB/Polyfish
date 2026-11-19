@@ -6,6 +6,9 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+mod tile_sets;
+pub use tile_sets::{TileEffects, TileExplorers};
+
 /// Helper module for deserializing booleans that may come as integers (0/1)
 mod flex_bool {
     use serde::{self, Deserialize, Deserializer};
@@ -117,7 +120,7 @@ pub struct TileState {
     #[serde(rename = "type")]
     pub terrain_type: TerrainType,
     #[serde(default)]
-    pub explorers: HashSet<i32>,
+    pub explorers: TileExplorers,
     #[serde(alias = "hasRoad", default)]
     pub has_road: bool,
     #[serde(default)]
@@ -133,7 +136,7 @@ pub struct TileState {
     #[serde(default)]
     pub owner: PlayerId,
     #[serde(default)]
-    pub effects: HashSet<TileEffect>,
+    pub effects: TileEffects,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _unit_owner_id: Option<PlayerId>,
 }
@@ -144,7 +147,7 @@ impl Default for TileState {
             coords: Coords::default(),
             ruling_city_coords: None,
             terrain_type: TerrainType::None,
-            explorers: HashSet::new(),
+            explorers: TileExplorers::default(),
             has_road: false,
             has_route: false,
             had_route: false,
@@ -152,7 +155,7 @@ impl Default for TileState {
             skin_type: 0,
             climate: TribeType::Nature,
             owner: 0,
-            effects: HashSet::new(),
+            effects: TileEffects::default(),
             _unit_owner_id: None,
         }
     }

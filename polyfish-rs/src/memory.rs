@@ -105,7 +105,7 @@ pub fn note_unit_removed(state: &mut GameState, tile_idx: i32) -> UndoCallback {
     let witnesses: Vec<PlayerId> = state
         .tiles
         .get(&tile_idx)
-        .map(|t| t.explorers.iter().cloned().collect())
+        .map(|t| t.explorers.iter().collect())
         .unwrap_or_default();
     let mut removed: Vec<(PlayerId, MemUnit)> = Vec::new();
     for w in witnesses {
