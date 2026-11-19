@@ -116,24 +116,18 @@ pub fn get_squared_euclidean_distance(a: i32, b: i32, size: i32) -> i32 {
 
 /// Get adjacent tile indices
 pub fn get_adjacent_indices(state: &GameState, idx: i32, range: i32) -> Vec<i32> {
-    let size = state.settings.size;
+    adjacent_indices(state.settings.size, idx, range).collect()
+}
+
+pub(crate) fn adjacent_indices(size: i32, idx: i32, range: i32) -> impl Iterator<Item = i32> {
     let coords = Coords::from_index(idx, size);
-    let mut result = Vec::new();
-
-    for dy in -range..=range {
-        for dx in -range..=range {
-            if dx == 0 && dy == 0 {
-                continue;
-            }
-            let nx = coords.x + dx;
-            let ny = coords.y + dy;
-            if nx >= 0 && nx < size && ny >= 0 && ny < size {
-                result.push(ny * size + nx);
-            }
-        }
-    }
-
-    result
+    let xs = (coords.x - range).max(0)..=(coords.x + range).min(size - 1);
+    let ys = (coords.y - range).max(0)..=(coords.y + range).min(size - 1);
+    ys.flat_map(move |y| {
+        xs.clone()
+            .filter(move |&x| x != coords.x || y != coords.y)
+            .map(move |x| y * size + x)
+    })
 }
 
 /// Get adjacent tiles

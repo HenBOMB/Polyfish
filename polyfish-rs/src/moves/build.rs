@@ -118,6 +118,14 @@ impl Move for BuildMove {
 
 /// Generate build / structure moves
 pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
+    generate_build_moves_with_occupancy(state, &super::OccupiedTiles::new(state), moves);
+}
+
+pub(super) fn generate_build_moves_with_occupancy(
+    state: &GameState,
+    occupied: &super::OccupiedTiles,
+    moves: &mut Vec<Box<dyn Move>>,
+) {
     let pov_id = state.settings.current_player_turn_id;
     if let Some(tribe) = state.tribes.get(&pov_id) {
         use crate::settings::structures::structure_setting;
@@ -204,7 +212,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
         // Standard structures
         for city in &tribe.cities {
             for &idx in &city._territory {
-                if crate::functions::get_enemy_at(state, idx, pov_id).is_some() {
+                if occupied.enemy_at(state, idx, pov_id).is_some() {
                     continue;
                 }
 
@@ -356,7 +364,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                     && (!state.settings._fow || tile.explorers.contains(&pov_id))
                     && road.terrain_types.contains(&tile.terrain_type)
                     && !tile.is_algae()
-                    && crate::functions::get_enemy_at(state, idx, pov_id).is_none()
+                    && occupied.enemy_at(state, idx, pov_id).is_none()
                 {
                     moves.push(Box::new(BuildMove::new(idx, StructureType::Road)));
                 }
