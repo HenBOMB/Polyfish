@@ -334,15 +334,14 @@ class MapRenderer {
         // Units
         const unit = (isExplored || !ENABLE_FOW) ? unitsByIndex[idx] : null;
         if (unit) {
-            const tribeName = TRIBE_ID_2_NAME[unit.tribe.type];
-            const className = ClassNameToId[unit.unitType || unit.type];
-            if (className) {
+            const unitFile = getUnitFile(unit.tribe.type, unit.unitType || unit.type);
+            if (unitFile) {
                 const classes = ['unit'];
                 if (unit.moved || unit.attacked) classes.push('exausted');
                 if (unit.flipped) classes.push('flipped');
                 if (this.selectedIdx === idx) classes.push('selected-unit-highlight');
 
-                const unitEl = this.updateLayer(idx, 'unit', `units/${tribeName}/default/${tribeName}_default_${className}`, pos, 5000, classes);
+                const unitEl = this.updateLayer(idx, 'unit', unitFile, pos, 5000, classes);
                 unitEl.innerHTML = `<div class="health">${Math.floor(unit.health)}</div>`;
             }
         } else {

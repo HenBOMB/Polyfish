@@ -197,9 +197,23 @@
     transform: scale(0.95);
 }
 
-.poly-action-btn .icon {
-    font-size: 44px;
+.poly-action-btn .poly-action-icon {
+    width: 48px;
+    height: 48px;
+    object-fit: contain;
+    flex-shrink: 0;
+    pointer-events: none;
     filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.4));
+}
+
+.poly-action-btn .poly-action-unit {
+    width: 78px;
+    height: 78px;
+}
+
+.poly-action-btn:disabled {
+    cursor: default;
+    opacity: 0.5;
 }
 
 .poly-action-btn .cost-badge {
@@ -219,12 +233,19 @@
     gap: 4px;
 }
 
+.poly-action-btn .cost-badge img {
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
+}
+
 .poly-action-btn .cost-badge.reward-badge {
     color: #10b981;
     border-color: #10b981;
 }
 
 .poly-action-label {
+    text-align: center;
     font-size: 13px;
     font-weight: 700;
     color: white;

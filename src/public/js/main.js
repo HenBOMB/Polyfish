@@ -458,115 +458,61 @@ function updateSelectionInfo(clickX = null, clickY = null) {
         floatingPopup.style.left = `${clickX}px`;
         floatingPopup.style.top = `${clickY - 20}px`; // Slightly above the click point
 
-        let actionsHtml = '';
-
-        const currentStars = GAME_STATE.tribes[GAME_STATE.settings.currentPlayerTurnId].stars;
-
-        // Harvest
-        if (harvestMove) {
-            const cost = 2; // Default harvest cost
-            const resEmoji = ResourceEmojis[resource.type] || "🥝";
-            const resName = ResourceTypes[resource.type] || `ID=${resource.type}`;
-            const isDisabled = currentStars < cost;
-
-            actionsHtml += `
+        const actions = [];
+        const addAction = (move, label, image, cost = 0, iconClass = '') => {
+            const costBadge = cost === 0 ? '' : `
+                <span class="cost-badge ${cost < 0 ? 'reward-badge' : ''}">
+                    <img src="textures/misc/star.png" alt="">
+                    ${cost < 0 ? '+' : ''}${Math.abs(cost)}
+                </span>`;
+            actions.push(`
                 <div class="poly-action-container">
-                    <button class="poly-action-btn ${isDisabled ? 'disabled' : ''}" data-move-id="${currentLegalMoves.indexOf(harvestMove)}">
-                        <span class="icon">${resEmoji}</span>
-                        <div class="cost-badge">⭐ ${cost}</div>
+                    <button type="button" class="poly-action-btn" aria-label="${label}"
+                        data-move-id="${currentLegalMoves.indexOf(move)}" ${povTribe.stars < cost ? 'disabled' : ''}>
+                        <img class="poly-action-icon ${iconClass}" src="textures/${image || 'misc/infoSymbol'}.png" alt="">
+                        ${costBadge}
                     </button>
-                    <div class="poly-action-label">Harvest ${resName}</div>
+                    <div class="poly-action-label">${label}</div>
                 </div>
-            `;
+            `);
+        };
+
+        if (harvestMove && resource) {
+            const name = ResourceTypes[resource.type] || 'Resource';
+            addAction(harvestMove, `Harvest ${name}`, getResourceFile(resource.type, tile.climate, 'misc/infoSymbol'), 2);
         }
 
-        // Build (Metal Mine, Farm, etc.)
         const buildMoves = currentLegalMoves.filter(m => m.moveType === 6 && (m.target === idx || m.target_index === idx));
+        for (const move of buildMoves) {
+            const name = StructureTypes[move.type] || `ID=${move.type}`;
+            addAction(move, `Build ${name}`, getStructureFile(move.type, tile.climate, 'misc/infoSymbol'), StructureCosts[move.type] || 5);
+        }
 
-        buildMoves.forEach(bm => {
-            const structType = bm.type;
-            const emoji = StructureEmojis[structType] || "🏗️";
-            const name = StructureTypes[structType] || `ID=${structType}`;
-            const cost = StructureCosts[structType] || 5;
-            const isDisabled = currentStars < cost;
-
-            actionsHtml += `
-                <div class="poly-action-container">
-                    <button class="poly-action-btn ${isDisabled ? 'disabled' : ''}" data-move-id="${currentLegalMoves.indexOf(bm)}">
-                        <span class="icon">${emoji}</span>
-                        <div class="cost-badge">⭐ ${cost}</div>
-                    </button>
-                    <div class="poly-action-label">Build ${name}</div>
-                </div>
-            `;
-        });
-
-        const UnitCosts = {
-            2: 2, // Warrior
-            3: 3, // Rider
-            4: 8, // Knight
-            5: 3, // Defender
-            8: 8, // Catapult
-            9: 3, // Archer
-            10: 5, // MindBender
-            11: 5, // Swordsman
-            12: 10, // Giant (Super)
-            28: 3, // Hexapod
-            31: 3, // Kiton
-            32: 8, // Exida
+        const unitCosts = {
+            2: 2, 3: 3, 4: 8, 5: 3, 8: 8, 9: 3, 10: 5, 11: 5, 12: 10, 28: 3, 31: 3, 32: 8,
         };
-        // Summons
-        summonMoves.forEach(m => {
-            const unitType = m.type || m.unitType;
-            const emoji = UnitEmojis[unitType] || "🪖";
-            const name = UnitTypes[unitType] || "Unknown";
-            const cost = UnitCosts[unitType] || 3;
-            const isDisabled = currentStars < cost;
+        for (const move of summonMoves) {
+            const unitType = move.type || move.unitType;
+            const name = UnitTypes[unitType] || 'Unit';
+            const label = move.upgrade ? `Upgrade to ${name}` : `Train ${name}`;
+            addAction(move, label, getUnitFile(povTribe.type, unitType), unitCosts[unitType] || 3, 'poly-action-unit');
+        }
 
-            actionsHtml += `
-                <div class="poly-action-container">
-                    <button class="poly-action-btn ${isDisabled ? 'disabled' : ''}" data-move-id="${currentLegalMoves.indexOf(m)}">
-                        <span class="icon">${emoji}</span>
-                        <div class="cost-badge">⭐ ${cost}</div>
-                    </button>
-                    <div class="poly-action-label">Train ${name}</div>
-                </div>
-            `;
+        for (const move of abilityMoves) {
+            const type = typeof move.type === 'object' ? move.type?.Ok : move.type;
+            const name = AbilityNames[type] || `ID=${type}`;
+            addAction(move, name, getAbilityFile(type, tile.climate), AbilityCosts[type] || 0);
+        }
+
+        floatingPopup.innerHTML = `<div style="display: flex; gap: 15px; flex-wrap: wrap; justify-content: center;">${actions.join('')}</div>`;
+        floatingPopup.querySelectorAll('.poly-action-icon').forEach(icon => {
+            icon.addEventListener('error', () => { icon.src = 'textures/misc/infoSymbol.png'; }, { once: true });
         });
-
-        // Abilities (Clear Forest, Grow Forest, Recover, etc.)
-        abilityMoves.forEach(am => {
-            const abilityType = (am.type && typeof am.type === 'object') ? am.type.Ok : am.type;
-            const emoji = AbilityEmojis[abilityType] || "🪄";
-            const name = AbilityNames[abilityType] || `ID=${abilityType}`;
-            const costValue = AbilityCosts[abilityType] || 0;
-            const isDisabled = costValue > 0 && currentStars < costValue;
-
-            let costHtml = `<div class="cost-badge">⭐ ${costValue}</div>`;
-            if (costValue < 0) {
-                costHtml = `<div class="cost-badge reward-badge">⭐ +${Math.abs(costValue)}</div>`;
-            } else if (costValue === 0) {
-                costHtml = ''; // No badge for free actions
-            }
-
-            actionsHtml += `
-                <div class="poly-action-container">
-                    <button class="poly-action-btn ${isDisabled ? 'disabled' : ''}" data-move-id="${currentLegalMoves.indexOf(am)}">
-                        <span class="icon">${emoji}</span>
-                        ${costHtml}
-                    </button>
-                    <div class="poly-action-label">${name}</div>
-                </div>
-            `;
-        });
-
-        floatingPopup.innerHTML = `<div style="display: flex; gap: 15px; flex-wrap: wrap; justify-content: center;">${actionsHtml}</div>`;
 
         // Bind clicks
         floatingPopup.querySelectorAll('.poly-action-btn').forEach(btn => {
             btn.onclick = (e) => {
                 e.stopPropagation();
-                if (btn.classList.contains('disabled')) return;
                 const moveIdx = parseInt(btn.getAttribute('data-move-id'));
                 const move = currentLegalMoves[moveIdx];
                 if (move) {
@@ -798,7 +744,7 @@ function getUnitAt(idx) {
     return null;
 }
 
-function getStructureFile(type, climate) {
+function getStructureFile(type, climate, fallback = 'misc/missing') {
     const tribeName = TRIBE_ID_2_NAME[climate];
     const textureIndex = terrainTextureIndex(climate);
     const map = {
@@ -810,20 +756,35 @@ function getStructureFile(type, climate) {
         8: `buildings/common/Port`,
         12: `buildings/common/Lumber Hut`,
         13: 'buildings/common/Sawmill_1',
-        21: `buildings/common/Mine`,
+        17: 'buildings/common/Temple_1',
+        18: 'buildings/common/Forest Temple_1',
+        19: 'buildings/common/Water Temple_1',
+        20: 'buildings/common/Mountain Temple_1',
+        21: 'buildings/common/Mine',
         22: 'buildings/common/Forge_1',
+        23: `buildings/${tribeName}/Default/Monuments/Monument1_${textureIndex}`,
+        24: `buildings/${tribeName}/Default/Monuments/Monument2_${textureIndex}`,
+        25: `buildings/${tribeName}/Default/Monuments/Monument3_${textureIndex}`,
+        26: `buildings/${tribeName}/Default/Monuments/Monument4_${textureIndex}`,
         27: `buildings/${tribeName}/Default/Monuments/Monument5_${textureIndex}`,
         28: `buildings/${tribeName}/Default/Monuments/Monument6_${textureIndex}`,
         29: `buildings/${tribeName}/Default/Monuments/Monument7_${textureIndex}`,
         37: `buildings/Cymanti/Default/Unique/spores_4`,
+        32: 'buildings/∑∫ỹriȱŋ/Default/Unique/sanctuary_1',
+        34: 'buildings/Polaris/Default/Unique/ice_bank_1',
+        35: 'buildings/Polaris/Default/Unique/Ice Temple_1',
+        39: 'buildings/Cymanti/Default/Unique/Mycelium_1',
         47: 'misc/lighthouse',
+        48: 'buildings/common/bridge',
+        50: 'buildings/common/Market01',
+        71: 'misc/Road',
     };
     !map[type] && console.log(`MISSING STRUCTURE: ${type}`);
 
-    return map[type] || 'misc/missing';
+    return map[type] || fallback;
 }
 
-function getResourceFile(type, climate) {
+function getResourceFile(type, climate, fallback = 'misc/missing') {
     const textureIndex = terrainTextureIndex(climate);
     const map = {
         1: `animals/${TEXTURE_INDEX_TO_ANIMAL[textureIndex]}`,
@@ -831,11 +792,35 @@ function getResourceFile(type, climate) {
         3: `animals/fish`,
         5: `terrain/misc/ResourceGFX_metal`,
         6: `fruits/ResourceGFX_fruit_${textureIndex}`,
-        // 7: `buildings/Cymanti/Default/Unique/spores_4`, // requires different texture
-        8: `terrain/misc/ResourceGFX_starfish`
+        7: 'buildings/Cymanti/Default/Unique/spores_4',
+        8: 'terrain/misc/ResourceGFX_starfish',
+        9: 'terrain/misc/ResourceGFX_aquacrop',
     };
     !map[type] && console.log(`MISSING RESOURCE: ${type}`);
-    return map[type] || 'misc/missing';
+    return map[type] || fallback;
+}
+
+function getAbilityFile(type, climate) {
+    const files = {
+        1: 'misc/FlameGFX',
+        2: 'misc/club',
+        3: `terrain/forests/Forest_${terrainTextureIndex(climate)}`,
+        4: 'misc/explo',
+        5: 'misc/PoisonGFX',
+        6: 'misc/magic',
+        7: 'misc/heal',
+        8: 'misc/citizen',
+        9: 'misc/heal',
+        11: 'terrain/water/water',
+        13: 'terrain/tiles/ice',
+        14: 'misc/boost_1',
+        15: 'misc/explo',
+        16: 'misc/acheivement',
+        17: 'terrain/tiles/ice',
+        18: 'misc/swords',
+        23: getResourceFile(1, climate),
+    };
+    return files[type];
 }
 
 function updateTurnIndicator(tribe) {

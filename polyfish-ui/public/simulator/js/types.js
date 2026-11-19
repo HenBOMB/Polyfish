@@ -237,40 +237,6 @@ const StructureTypes = {
     48: "Bridge", 50: "Market", 70: "Embassy"
 };
 
-const StructureEmojis = {
-    3: "🛣️",
-    5: "🌾",
-    6: "🌬️",
-    8: "⚓",
-    12: "🪵",
-    13: "🪚",
-    17: "⛩️",
-    18: "🌲",
-    19: "🌊",
-    20: "⛰️",
-    21: "⛏️",
-    22: "⚒️",
-    23: "☮️",
-    24: "🦉",
-    25: "🏪",
-    26: "⚰️",
-    27: "⚡",
-    28: "🏆",
-    29: "👁️",
-    32: "⛩️",
-    33: "🏰",
-    34: "💰",
-    35: "🧊",
-    37: "🍄",
-    38: "🌿",
-    39: "🧶",
-    41: "🕸️",
-    47: "🗼",
-    48: "🌉",
-    50: "💰",
-    70: "🏛️",
-};
-
 const ResourceTypes = {
     0: "None",
     1: "Game",
@@ -346,33 +312,6 @@ const UnitTypes = {
     125: "Mantis",
 };
 
-const UnitEmojis = {
-    2: "🪖", // Warrior
-    3: "🏇", // Rider
-    4: "🤺", // Knight
-    5: "🛡️", // Defender
-    8: "☄️", // Catapult
-    9: "🏹", // Archer
-    10: "🧙", // MindBender
-    11: "🗡️", // Swordsman
-    12: "👹", // Giant
-    15: "🐮", // Polytaur
-    20: "🐸", // Amphibian
-    21: "🔱", // Tridention
-    22: "❄️", // Mooni
-    23: "🛷", // BattleSled
-    24: "🏰", // IceFortress
-    25: "🏹", // IceArcher
-    28: "🕷️", // Hexapod
-    29: "🪲", // Doomux
-    30: "🦟", // Phychi
-    31: "🐚", // Kiton
-    32: "🐝", // Exida
-    33: "🐛", // Centipede
-    36: "🪄", // Shaman
-    121: "🧨", // Boomchi
-};
-
 const CaptureTypes = {
     0: 'None',
     1: 'Ruins',
@@ -420,26 +359,6 @@ const AbilityNames = {
     17: "Break Ice",
     18: "Break Peace",
     23: "Enchant Animal",
-};
-
-const AbilityEmojis = {
-    1: "🔥",
-    2: "🪓",
-    3: "🌿",
-    4: "💣",
-    5: "♻️",
-    6: "🌀",
-    7: "🩹",
-    8: "👋",
-    9: "💖",
-    11: "🩸",
-    13: "🧊",
-    14: "⚡",
-    15: "💥",
-    16: "🎖️",
-    17: "⛏️",
-    18: "💔",
-    23: "🦄",
 };
 
 const AbilityCosts = {

@@ -147,3 +147,9 @@ function getCityFile(tribeType, variant) {
     if (!textureIndex) return 'buildings/common/Tribe';
     return `buildings/${tribeName}/Default/Houses/House_${textureIndex}_${variant}`;
 }
+
+function getUnitFile(tribeType, unitType) {
+    const tribeName = TRIBE_ID_2_NAME[tribeType];
+    const className = ClassNameToId[unitType] || UnitTypes[unitType];
+    return tribeName && className ? `units/${tribeName}/default/${tribeName}_default_${className}` : null;
+}
