@@ -53,6 +53,7 @@ async function runGraphicalTurn(action) {
         let match = action === undefined
             ? graphicalMatch
             : await researchRequest('/research/move', JSON.stringify({ revision: graphicalMatch.revision, action }));
+        for (const message of match.messages || []) showToast(message);
         if (match.botTurn && !graphicalMatch.botTurn) await refreshGraphicalBoard();
         while (match.botTurn) {
             match = await researchRequest('/research/bot', '{}');

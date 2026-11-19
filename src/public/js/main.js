@@ -444,16 +444,30 @@ function updateSelectionInfo(clickX = null, clickY = null) {
         </div>
     `;
 
-    // 2. UPDATE FLOATING ACTIONS (Polytopia Style)
-    // Only show city actions if we are NOT in unit selection mode for this tile
-    const harvestMove = !isUnitMode ? currentLegalMoves.find(m => m.moveType === 5 && (m.target === idx || m.target_index === idx)) : null;
-    const buildMovesCheck = !isUnitMode ? currentLegalMoves.filter(m => m.moveType === 6 && (m.target === idx || m.target_index === idx)) : [];
-    const summonMoves = !isUnitMode ? currentLegalMoves.filter(m => m.moveType === 4 && (m.src === idx || m.src_index === idx)) : [];
-    const abilityMoves = currentLegalMoves.filter(m =>
-        m.moveType === 3 && (m.target === idx || m.target_index === idx || m.src === idx || m.src_index === idx)
+    const harvestMove = !isUnitMode && currentLegalMoves.find(move =>
+        move.moveType === 5 && (move.target ?? move.target_index) === idx
     );
+    const buildMoves = isUnitMode ? [] : currentLegalMoves.filter(move =>
+        move.moveType === 6 && (move.target ?? move.target_index) === idx
+    );
+    const summonMoves = currentLegalMoves.filter(move =>
+        move.moveType === 4 && (move.src ?? move.src_index) === idx && Boolean(unit) === isUnitMode
+    );
+    const terrainAbilities = [
+        AbilityType.BurnForest, AbilityType.ClearForest, AbilityType.GrowForest,
+        AbilityType.Destroy, AbilityType.Decompose, AbilityType.BreakIce, AbilityType.EnchantAnimal,
+    ];
+    const abilityMoves = currentLegalMoves.filter(move => {
+        if (move.moveType !== 3) return false;
+        const type = typeof move.type === 'object' ? move.type?.Ok : move.type;
+        const source = move.src ?? move.src_index;
+        if (terrainAbilities.includes(type)) {
+            return !isUnitMode && (move.target ?? move.target_index ?? source) === idx;
+        }
+        return isUnitMode && type !== AbilityType.BreakPeace && source === idx;
+    });
 
-    if ((harvestMove || buildMovesCheck.length > 0 || summonMoves.length > 0 || abilityMoves.length > 0) && floatingPopup && clickX !== null && clickY !== null) {
+    if ((harvestMove || buildMoves.length || summonMoves.length || abilityMoves.length) && floatingPopup && clickX !== null && clickY !== null) {
         floatingPopup.classList.remove('hidden');
         floatingPopup.style.left = `${clickX}px`;
         floatingPopup.style.top = `${clickY - 20}px`; // Slightly above the click point
@@ -482,7 +496,6 @@ function updateSelectionInfo(clickX = null, clickY = null) {
             addAction(harvestMove, `Harvest ${name}`, getResourceFile(resource.type, tile.climate, 'misc/infoSymbol'), 2);
         }
 
-        const buildMoves = currentLegalMoves.filter(m => m.moveType === 6 && (m.target === idx || m.target_index === idx));
         for (const move of buildMoves) {
             const name = StructureTypes[move.type] || `ID=${move.type}`;
             addAction(move, `Build ${name}`, getStructureFile(move.type, tile.climate, 'misc/infoSymbol'), StructureCosts[move.type] || 5);
@@ -494,7 +507,7 @@ function updateSelectionInfo(clickX = null, clickY = null) {
         for (const move of summonMoves) {
             const unitType = move.type || move.unitType;
             const name = UnitTypes[unitType] || 'Unit';
-            const label = move.upgrade ? `Upgrade to ${name}` : `Train ${name}`;
+            const label = isUnitMode ? `Upgrade to ${name}` : `Train ${name}`;
             addAction(move, label, getUnitFile(povTribe.type, unitType), unitCosts[unitType] || 3, 'poly-action-unit');
         }
 

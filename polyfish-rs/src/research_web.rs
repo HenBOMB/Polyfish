@@ -10,7 +10,7 @@ use polyfish::game::Game;
 use polyfish::replay::{Replay, ReplayPlayback};
 use polyfish::research::{self, MatchConfig, MatchResult, Opponent};
 use polyfish::states::GameState;
-use polyfish::types::TribeType;
+use polyfish::types::{MoveType, StructureType, TribeType};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -237,10 +237,22 @@ async fn play(State(app): State<Arc<AppState>>, Json(req): Json<ActionRequest>) 
         .into_iter()
         .find(|candidate| candidate.serialize() == req.action)
         .ok_or_else(|| bad_request("That action is no longer available"))?;
-    let _undo = game
-        .play_move(action.as_ref())
-        .ok_or_else(|| bad_request("Could not apply the action"))?;
-    Ok(Json(snapshot(&game, app.network.is_some(), false)))
+    let excavating = action.move_type() == MoveType::Capture
+        && action.source_idx().ok().is_some_and(|idx| {
+            polyfish::functions::get_structure_type_at(&game.state, idx as i32)
+                == Some(StructureType::Ruin)
+        });
+    game.state._messages.clear();
+    let verbose = std::mem::replace(&mut game.state.settings._verbose, excavating);
+    let applied = game.play_move(action.as_ref());
+    game.state.settings._verbose = verbose;
+    let messages = std::mem::take(&mut game.state._messages);
+    let _undo = applied.ok_or_else(|| bad_request("Could not apply the action"))?;
+    let mut response = snapshot(&game, app.network.is_some(), false);
+    if !messages.is_empty() {
+        response["messages"] = json!(messages);
+    }
+    Ok(Json(response))
 }
 
 async fn bot(State(app): State<Arc<AppState>>) -> WebResult {

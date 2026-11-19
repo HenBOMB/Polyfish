@@ -145,9 +145,11 @@ async function transact(operation, finishBotTurn = true) {
   if (busy) return;
   busy = true;
   setError('');
+  byId('action-notice').textContent = '';
   render();
   try {
     match = await operation();
+    byId('action-notice').textContent = (match.messages || []).join(' ');
     render();
     if (finishBotTurn) {
       while (match.botTurn) {

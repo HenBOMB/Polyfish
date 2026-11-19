@@ -36,6 +36,17 @@ def verify(base_url, binary, size, preset, output, full_api):
             error.add_note(error.read().decode())
             raise
 
+    def play_human(game, command):
+        action = browser_key(command)
+        excavates_ruin = command["type"] == "capture" and any(
+            tile["index"] == action["src"] and tile.get("structure") == "Ruin" for tile in game["tiles"]
+        )
+        played = request("/research/move", {"revision": game["revision"], "action": action})
+        if excavates_ruin:
+            assert any(message.startswith("Ruin reward:") for message in played.get("messages", []))
+            assert "messages" not in request("/research/current")
+        return played
+
     result = json.loads(subprocess.check_output([
         str(binary), "--map-size", str(size), "--preset1", "normal", "--preset2", preset,
         "--seed", "42", "--replay", str(output),
@@ -57,7 +68,7 @@ def verify(base_url, binary, size, preset, output, full_api):
 
     # Replay the human seat's first turn, then ask the browser API to play its opponent.
     for command in replay["turns"][0]["commands"]:
-        game = request("/research/move", {"revision": game["revision"], "action": browser_key(command)})
+        game = play_human(game, command)
     start = game["revision"]
     saved = request("/research/save")
     for pass_index in range(2):
@@ -84,7 +95,7 @@ def verify(base_url, binary, size, preset, output, full_api):
                 assert request("/research/save")["history"][start:] == expected
             else:
                 for command in replay_turn["commands"]:
-                    game = request("/research/move", {"revision": game["revision"], "action": browser_key(command)})
+                    game = play_human(game, command)
         assert game["result"] == result["result"]
     playback = request("/research/replay", replay)
     final = request("/research/replay/seek", {"position": playback["replay"]["total"]})

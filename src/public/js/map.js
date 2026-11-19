@@ -64,6 +64,8 @@ class MapRenderer {
         });
         if (this.territorySvg) this.territorySvg.innerHTML = '';
         this.elements.clear();
+        this.selectedIdx = null;
+        selectedUnitIdx = null;
     }
 
     getPos(x, y) {
@@ -208,6 +210,7 @@ class MapRenderer {
         if (!isExplored) {
             this.updateLayer(idx, 'ground', 'terrain/tiles/undiscovered', pos, 10, ['ground', 'undiscovered']);
             this.removeLayer(idx, 'unit');
+            this.removeLayer(idx, 'unit-hit');
             this.removeLayer(idx, 'city');
             this.removeLayer(idx, 'city-stats');
             this.removeLayer(idx, 'resource');
@@ -331,21 +334,21 @@ class MapRenderer {
             this.removeLayer(idx, 'city-stats');
         }
 
-        // Units
-        const unit = (isExplored || !ENABLE_FOW) ? unitsByIndex[idx] : null;
-        if (unit) {
-            const unitFile = getUnitFile(unit.tribe.type, unit.unitType || unit.type);
-            if (unitFile) {
-                const classes = ['unit'];
-                if (unit.moved || unit.attacked) classes.push('exausted');
-                if (unit.flipped) classes.push('flipped');
-                if (this.selectedIdx === idx) classes.push('selected-unit-highlight');
+        const unit = unitsByIndex[idx];
+        const unitFile = unit && getUnitFile(unit.tribe.type, unit.unitType || unit.type);
+        if (unitFile) {
+            const classes = ['unit'];
+            if (unit.moved || unit.attacked) classes.push('exausted');
+            if (unit.flipped) classes.push('flipped');
+            if (selectedUnitIdx === idx) classes.push('selected-unit-highlight');
 
-                const unitEl = this.updateLayer(idx, 'unit', unitFile, pos, 5000, classes);
-                unitEl.innerHTML = `<div class="health">${Math.floor(unit.health)}</div>`;
-            }
+            const unitEl = this.updateLayer(idx, 'unit', unitFile, pos, 5000, classes);
+            unitEl.innerHTML = `<div class="health">${Math.floor(unit.health)}</div>`;
+            const hit = this.updateLayer(idx, 'unit-hit', '', pos, 27000, ['unit-hit']);
+            hit.onclick = event => this.handleTileClick(event, idx, true);
         } else {
             this.removeLayer(idx, 'unit');
+            this.removeLayer(idx, 'unit-hit');
         }
     }
 
@@ -409,10 +412,7 @@ class MapRenderer {
         mask.style.top = `${pos.y}px`;
         mask.style.zIndex = Math.floor(pos.y + 10000); // Topmost for interaction
 
-        mask.onclick = (e) => {
-            const unit = this.getUnitAt(idx);
-            this.handleTileClick(e, idx, unit, this.isTileVisible(idx));
-        };
+        mask.onclick = event => this.handleTileClick(event, idx, false);
         this.setupHover(mask, idx, this.isTileVisible(idx));
     }
 
@@ -430,83 +430,15 @@ class MapRenderer {
         }
     }
 
-    handleTileClick(e, idx, unit, isExplored) {
-        e.stopPropagation();
+    handleTileClick(event, idx, selectUnit) {
+        event.stopPropagation();
 
-        if (ENABLE_FOW) {
-            const tile = GAME_STATE.tiles[idx];
-            const currentTribeId = this.currentPovId;
-            const isExplored = tile && tile.explorers && tile.explorers.map(Number).includes(Number(currentTribeId));
-
-            if (!isExplored) {
-                this.selectedIdx = null;
-                selectedUnitIdx = null;
-                this.render(GAME_STATE, currentLegalMoves);
-                updateSelectionInfo();
-                return;
-            }
-        }
-
-        const hasUnit = !!unit;
-        const struct = GAME_STATE.structures[idx];
-        const resource = GAME_STATE.resources[idx];
-        // Village (3) or City (4)
-        const isCity = struct && (struct.structureType === 3 || struct.structureType === 4 || struct.type === 3 || struct.type === 4);
-        const hasActions = isCity || !!resource;
-
-        // Toggle selection with cycle: Unit -> City -> None
-        if (this.selectedIdx !== idx) {
-            // New tile selected
-            this.selectedIdx = idx;
-            selectedUnitIdx = hasUnit ? idx : null;
-        } else {
-            // Same tile clicked again
-            if (selectedUnitIdx === idx) {
-                // Check if we can trigger a self-action/ability (e.g. Recover)
-                // Filter for Ability moves (Type 3)
-                // Exclude Disband (Type 8) to avoid accidents
-                // Prioritize: Promote > Recover > Others
-                const abilityMoves = currentLegalMoves.filter(m =>
-                    m.src === idx &&
-                    m.moveType === 3 &&
-                    m.type !== 8 // Exclude Disband
-                );
-
-                if (abilityMoves.length > 0) {
-                    // Sort by priority (Recover=7, Promote=16, HealOthers=9)
-                    // We want Promote first, then Recover, then others.
-                    abilityMoves.sort((a, b) => {
-                        const score = (type) => {
-                            if (type === 16) return 100; // Promote
-                            if (type === 7) return 50;  // Recover
-                            if (type === 9) return 40;  // HealOthers
-                            return 0; // Others
-                        };
-                        return score(b.type) - score(a.type);
-                    });
-
-                    // Execute the best move
-                    playMove(abilityMoves[0]);
-                    return;
-                }
-
-                // Was on Unit, move to City if it has actions
-                if (hasActions) {
-                    selectedUnitIdx = null;
-                } else {
-                    // No city, deselect
-                    this.selectedIdx = null;
-                    selectedUnitIdx = null;
-                }
-            } else {
-                // Was on City (or tile with neither), deselect
-                this.selectedIdx = null;
-                selectedUnitIdx = null;
-            }
-        }
+        const repeatSelection = this.selectedIdx === idx && (selectedUnitIdx === idx) === selectUnit;
+        this.selectedIdx = this.isTileVisible(idx) && !repeatSelection ? idx : null;
+        selectedUnitIdx = selectUnit ? this.selectedIdx : null;
 
         this.render(GAME_STATE, currentLegalMoves);
-        updateSelectionInfo(e.clientX, e.clientY);
+        updateSelectionInfo(event.clientX, event.clientY);
     }
 
     setupHover(el, idx, isExplored) {
@@ -594,9 +526,14 @@ class MapRenderer {
         this.clearMoveHighlight();
         document.querySelectorAll('.move-overlay').forEach(el => el.remove());
         document.querySelectorAll('.combat-preview:not(.temp-highlight)').forEach(el => el.remove());
-        if (this.selectedIdx === null) return;
+        if (selectedUnitIdx === null) return;
 
-        const unitMoves = legalMoves.filter(m => m && typeof m === 'object' && m.src === this.selectedIdx);
+        const unitMoves = legalMoves.filter(move =>
+            move?.src === selectedUnitIdx && (
+                move.moveType === 1 || move.moveType === 2
+                || (move.moveType === 3 && move.type === AbilityType.Convert)
+            )
+        );
 
         unitMoves.forEach(move => {
             const targetIdx = move.target;
@@ -614,8 +551,10 @@ class MapRenderer {
 
             const img = document.createElement('img');
             const isAttack = move.moveType === 2;
-            img.src = isAttack ? 'textures/misc/attackTarget.png' : 'textures/misc/moveTarget.png';
-            img.style.width = '128px';
+            const occupiesTarget = isAttack || move.moveType === 3;
+            if (occupiesTarget) overlay.classList.add('occupied-target');
+            img.src = occupiesTarget ? 'textures/misc/attackTarget.png' : 'textures/misc/moveTarget.png';
+            img.style.width = occupiesTarget ? '52px' : '128px';
             overlay.appendChild(img);
 
             // Add combat preview for attack moves when predictions are enabled (permanent)
@@ -623,13 +562,16 @@ class MapRenderer {
                 this.renderCombatPreview(this.selectedIdx, targetIdx, pos);
             }
 
-            overlay.onclick = (e) => {
-                e.stopPropagation();
+            const hit = document.createElement('span');
+            hit.className = 'movement-hit';
+            hit.title = isAttack ? 'Attack' : occupiesTarget ? 'Convert' : 'Move';
+            hit.onclick = event => {
+                event.stopPropagation();
                 playMove(move);
             };
-
-            overlay.onmouseenter = () => this.highlightMove(move);
-            overlay.onmouseleave = () => this.clearMoveHighlight();
+            hit.onmouseenter = () => this.highlightMove(move);
+            hit.onmouseleave = () => this.clearMoveHighlight();
+            overlay.appendChild(hit);
 
             this.container.appendChild(overlay);
         });
@@ -660,12 +602,8 @@ class MapRenderer {
 
             const img = document.createElement('img');
             img.src = 'textures/misc/Capture.png';
-            img.style.width = '64px'; // Smaller than full tile
-            img.style.height = '64px';
-            img.style.position = 'absolute';
-            img.style.left = '32px';
-            img.style.top = '32px';
-            img.className = 'pulse-animation'; // Add CSS animation class
+            img.alt = 'Capture';
+            img.className = 'capture-hit pulse-animation';
 
             indicator.appendChild(img);
 

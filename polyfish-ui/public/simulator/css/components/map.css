@@ -311,6 +311,32 @@
     transition: left 0.4s ease-in-out, top 0.4s ease-in-out, transform 0.2s ease;
 }
 
+.tile.unit-hit {
+    width: 50px;
+    height: 56px;
+    margin-left: 44px;
+    margin-top: -4px;
+    clip-path: polygon(26% 0, 74% 0, 100% 52%, 83% 100%, 17% 100%, 0 52%);
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.capture-indicator {
+    pointer-events: none;
+}
+
+.capture-hit {
+    position: absolute;
+    left: 84px;
+    top: 4px;
+    width: 48px;
+    height: 48px;
+    clip-path: circle(36%);
+    pointer-events: auto;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
 .exausted {
     opacity: 0.8 !important;
     filter: grayscale(100%) !important;
@@ -530,11 +556,35 @@
 }
 
 .move-overlay {
-    pointer-events: auto;
-    cursor: pointer;
+    pointer-events: none;
     animation: fadeIn 0.3s ease;
     z-index: 5000;
     clip-path: polygon(50% 0%, 100% 30%, 50% 60%, 0% 30%);
+}
+
+.movement-hit {
+    position: absolute;
+    left: 32px;
+    top: 18px;
+    width: 64px;
+    height: 42px;
+    clip-path: ellipse(50% 50%);
+    pointer-events: auto;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.move-overlay.occupied-target {
+    clip-path: none;
+}
+
+.occupied-target img,
+.occupied-target .movement-hit {
+    position: absolute;
+    left: 38px;
+    top: 52px;
+    width: 52px;
+    height: 32px;
 }
 
 .move-overlay:hover {
