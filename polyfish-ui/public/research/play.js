@@ -2,12 +2,7 @@ const byId = (id) => document.getElementById(id);
 const setup = byId('setup');
 const board = byId('board');
 const viewport = byId('viewport');
-const tribes = [['random', 'Random'], ['xin-xi', 'Xin-Xi'], ['imperius', 'Imperius'], ['bardur', 'Bardur'], ['oumaji', 'Oumaji']];
-for (const field of ['tribe1', 'tribe2']) {
-  for (const [value, name] of tribes) {
-    setup.elements[field].add(new Option(name, value));
-  }
-}
+const startMatch = setup.querySelector('[type=submit]');
 
 let match;
 let selected = null;
@@ -35,7 +30,8 @@ function setError(message) {
 function updateLearned() {
   const opponent = setup.elements.opponentPreset;
   const learned = opponent.querySelector('[value=learned]');
-  learned.disabled = !learnedAvailable || setup.elements.mapSize.value !== '121';
+  learned.disabled = !learnedAvailable || setup.elements.mapSize.value !== '121'
+    || setup.elements.mapType.value !== 'drylands';
   if (opponent.value === 'learned' && learned.disabled) opponent.value = 'normal';
 }
 
@@ -43,8 +39,8 @@ function fitBoard() {
   if (!match?.size) return;
   const { clientWidth, clientHeight } = viewport;
   const available = Math.min(clientWidth, clientHeight) - 24 - 2 * (match.size - 1);
-  const cell = Math.max(14, Math.min(66, available / match.size));
-  board.style.setProperty('--cell', Math.floor(cell * zoom) + 'px');
+  const cell = Math.min(66, available / match.size);
+  board.style.setProperty('--cell', Math.max(1, Math.floor(cell * zoom)) + 'px');
 }
 
 function formatName(value) {
@@ -118,7 +114,7 @@ function render() {
   if (match.replay) status = 'Replay · ' + status;
   byId('status').textContent = status;
   byId('match-detail').textContent = [
-    'Might', 'Drylands', match.size + ' × ' + match.size, 'Seed ' + match.seed,
+    'Might', match.mapLabel, match.size + ' × ' + match.size, 'Seed ' + match.seed,
     match.stars != null ? match.stars + ' stars' : null,
     match.production != null ? '+' + match.production + ' per turn' : null,
   ].filter(Boolean).join(' · ');
@@ -182,8 +178,10 @@ function executeAction(action) {
 }
 
 setup.elements.mapSize.addEventListener('change', updateLearned);
+setup.elements.mapType.addEventListener('change', updateLearned);
 setup.addEventListener('submit', (event) => {
   event.preventDefault();
+  if (startMatch.disabled) return;
   const data = Object.fromEntries(new FormData(setup));
   const seed = data.seed.trim();
   delete data.seed;
@@ -250,9 +248,20 @@ byId('previous').onclick = () => transact(() => request('/research/replay/seek',
 byId('next').onclick = () => transact(() => request('/research/replay/seek', { position: match.replay.position + 1 }), false);
 
 try {
-  const state = await request('/research/current');
+  const [state, { mapSizes, mapTypes, tribes }] = await Promise.all([
+    request('/research/current'), request('/research/options'),
+  ]);
+  for (const size of mapSizes) {
+    setup.elements.mapSize.add(new Option(`${size * size} tiles (${size}×${size})`, size * size));
+  }
+  for (const { value, label } of mapTypes) setup.elements.mapType.add(new Option(label, value));
+  for (const field of ['tribe1', 'tribe2']) {
+    setup.elements[field].add(new Option('Random', 'random'));
+    for (const { value, label } of tribes) setup.elements[field].add(new Option(label, value));
+  }
   learnedAvailable = state.learnedAvailable;
   updateLearned();
+  startMatch.disabled = false;
   if (state.match) await transact(() => Promise.resolve(state));
 } catch (error) {
   setError(error.message);

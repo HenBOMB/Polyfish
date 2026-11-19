@@ -186,13 +186,11 @@ impl ReplayCommand {
                 m.move_type() == MoveType::Research && m.tech_type().ok() == Some(*technology)
             }
             Self::Summon { target: t, unit } => {
+                // Older Polyfish replays recorded naval upgrades as summons. A ship upgrade
+                // cannot also be a trained unit with the same type and source.
                 m.move_type() == MoveType::Summon
                     && source() == Some(*t)
                     && m.unit_type().ok() == Some(*unit)
-                    && m.serialize()
-                        .get("upgrade")
-                        .and_then(|value| value.as_bool())
-                        != Some(true)
             }
             Self::Upgrade { source: s, unit } => {
                 m.move_type() == MoveType::Summon

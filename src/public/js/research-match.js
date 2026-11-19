@@ -5,7 +5,10 @@ const researchSetup = document.getElementById('research-setup');
 const researchForm = researchSetup.querySelector('form');
 const researchSetupError = document.getElementById('research-setup-error');
 const fogControl = document.getElementById('btn-fow');
+const matchMapType = document.getElementById('match-map-type');
+const startMatch = researchForm.querySelector('[type=submit]');
 let learnedAvailable = false;
+let setupOptions;
 
 async function researchRequest(path, body) {
     const response = await fetch(path, body === undefined ? undefined : {
@@ -20,6 +23,8 @@ async function researchRequest(path, body) {
 function showGraphicalTurn() {
     fogControl.classList.toggle('hidden', Boolean(graphicalMatch));
     fogControl.setAttribute('aria-pressed', ENABLE_FOW);
+    matchMapType.hidden = !graphicalMatch;
+    matchMapType.textContent = graphicalMatch?.mapLabel || '';
     if (!graphicalMatch) return false;
 
     const { botTurn, opponent, result } = graphicalMatch;
@@ -75,20 +80,27 @@ function playGraphicalMove(action) {
     runGraphicalTurn(action);
 }
 
-function fitGraphicalBoard() {
-    if (!GAME_STATE.settings) return;
+function graphicalFitScale() {
+    if (!GAME_STATE.settings) return 1;
     const last = GAME_STATE.settings.size - 1;
     const { x, y } = renderer.getPos(last, 0);
     const width = 2 * x + tileSize;
     const height = 2 * y + tileSize;
-    scale = Math.min(2, 0.9 * mapViewport.clientWidth / width, 0.9 * mapViewport.clientHeight / height);
+    return Math.min(2, 0.9 * mapViewport.clientWidth / width, 0.9 * mapViewport.clientHeight / height);
+}
+
+function fitGraphicalBoard() {
+    if (!GAME_STATE.settings) return;
+    const last = GAME_STATE.settings.size - 1;
+    scale = graphicalFitScale();
     centerOnCoordinates(last / 2, last / 2);
 }
 
 function updateLearnedOption() {
     const opponent = researchForm.elements.opponentPreset;
     const learned = opponent.querySelector('[value="learned"]');
-    learned.disabled = !learnedAvailable || researchForm.elements.mapSize.value !== '121';
+    learned.disabled = !learnedAvailable || researchForm.elements.mapSize.value !== '121'
+        || researchForm.elements.mapType.value !== 'drylands';
     if (learned.disabled && opponent.value === 'learned') opponent.value = 'normal';
 }
 
@@ -97,22 +109,35 @@ async function openResearchSetup() {
     researchSetupError.hidden = true;
     researchSetup.showModal();
     try {
+        if (!setupOptions) {
+            const { mapSizes, mapTypes, tribes } = await researchRequest('/research/options');
+            researchForm.elements.mapSize.replaceChildren(...mapSizes.map(size =>
+                new Option(`${size * size} tiles (${size}×${size})`, size * size)));
+            researchForm.elements.mapType.replaceChildren(...mapTypes.map(({ value, label }) => new Option(label, value)));
+            for (const field of ['tribe1', 'tribe2']) {
+                const select = researchForm.elements[field];
+                for (const { value, label } of tribes) select.add(new Option(label, value));
+            }
+            setupOptions = true;
+        }
         learnedAvailable = graphicalMatch?.learnedAvailable ?? (await researchRequest('/research/current')).learnedAvailable;
         updateLearnedOption();
+        startMatch.disabled = false;
     } catch (error) {
-        console.error(error);
+        researchSetupError.textContent = error.message;
+        researchSetupError.hidden = false;
     }
 }
 
 researchForm.elements.mapSize.addEventListener('change', updateLearnedOption);
+researchForm.elements.mapType.addEventListener('change', updateLearnedOption);
 document.getElementById('btn-cancel-setup').onclick = () => researchSetup.close();
 researchForm.addEventListener('submit', async event => {
     event.preventDefault();
-    if (graphicalBusy) return;
+    if (graphicalBusy || startMatch.disabled) return;
     graphicalBusy = true;
     researchSetupError.hidden = true;
-    const submit = event.submitter;
-    submit.disabled = true;
+    startMatch.disabled = true;
     try {
         const { seed, mapSize, ...options } = Object.fromEntries(new FormData(researchForm));
         const settings = JSON.stringify({ ...options, mapSize: Number(mapSize) });
@@ -126,7 +151,7 @@ researchForm.addEventListener('submit', async event => {
         researchSetupError.textContent = error.message;
         researchSetupError.hidden = false;
     } finally {
-        submit.disabled = false;
+        startMatch.disabled = false;
         graphicalBusy = false;
         showGraphicalTurn();
     }

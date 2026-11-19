@@ -605,7 +605,15 @@ pub fn step_unit(
         .map(crate::score::get_unit_score)
         .unwrap_or(0);
     let struct_at_dest = get_structure_type_at(state, to_tile_idx);
-    let is_port = struct_at_dest == Some(StructureType::Port);
+    let destination = &state.tiles[&to_tile_idx];
+    let is_port = struct_at_dest == Some(StructureType::Port) && destination.owner == unit_owner;
+    let passenger = old_passenger.or(match old_type {
+        UnitType::Juggernaut => Some(UnitType::Giant),
+        UnitType::Dinghy => Some(UnitType::Cloak),
+        UnitType::Pirate => Some(UnitType::Dagger),
+        _ => None,
+    });
+    let disembark = passenger.filter(|_| !destination.is_water_terrain());
     let mut should_remove_invis = false;
 
     // Embark logic
@@ -643,21 +651,12 @@ pub fn step_unit(
         }
     }
     // Carry disembark: Naval units with passengers moving to land transform and spawn passenger
-    else if has_skill(old_type, SkillType::Carry) && old_passenger.is_some() {
-        let tile = state.tiles.get(&to_tile_idx);
-        let is_water = tile.map_or(false, |t| is_water_terrain_type(t.terrain_type));
-
-        if !is_water {
-            // Determine land unit type based on carrier type
-            let land_unit_type = old_passenger.unwrap();
-
-            // Transform carrier to land unit
-            if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
-                if let Some(unit) = tribe.units.get_mut(unit_idx) {
-                    unit.unit_type = land_unit_type;
-                    unit.passenger_type = None;
-                    unit.attacked = true; // Ends the unit's turn
-                }
+    else if let Some(land_unit_type) = disembark {
+        if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
+            if let Some(unit) = tribe.units.get_mut(unit_idx) {
+                unit.unit_type = land_unit_type;
+                unit.passenger_type = None;
+                unit.attacked = true;
             }
         }
     }
@@ -712,6 +711,7 @@ pub fn step_unit(
     // Dash logic (must be before ending turn/attacked status update if we want to allow move-then-attack)
     // If unit has dash, we might want to reset it.
     if !involuntary
+        && disembark.is_none()
         && !old_moved
         && !old_attacked  // prevent Dash after Escape (which resets moved but not attacked)
         && has_dash
@@ -1537,11 +1537,6 @@ pub fn heal_unit(
 }
 
 // Helper functions
-
-/// Check if terrain is water
-fn is_water_terrain_type(terrain: TerrainType) -> bool {
-    terrain == TerrainType::Water || terrain == TerrainType::Ocean
-}
 
 // /// Check if there are enemies in range from a tile
 // fn has_enemies_in_range(state: &GameState, owner: PlayerId, from_idx: i32, range: i32) -> bool {

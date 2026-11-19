@@ -138,6 +138,8 @@ function updateUI(data) {
             renderer.clear();
         }
         GAME_STATE = data.state;
+        graphicalMatch = data.researchMatch ?? null;
+        if (graphicalMatch) ENABLE_FOW = true;
     }
     if (data.legalMoves) currentLegalMoves = data.legalMoves;
     const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
@@ -177,7 +179,6 @@ function updateUI(data) {
         // Clear them so they don't reappear on every UI sync if we don't have a fresh state
         GAME_STATE._messages = [];
     }
-
 }
 
 function renderTechTree(tribe) {
@@ -343,37 +344,67 @@ function focusCamera(smooth = false) {
 }
 
 window.addEventListener('load', () => {
-    fetch('/current').then(r => r.json()).then(data => {
-        updateUI(data);
+    refreshGraphicalBoard().then(() => {
         setTimeout(focusCamera, 100);
-    });
+        if (graphicalMatch?.botTurn) runGraphicalTurn();
+    }).catch(error => showToast(error.message));
 
-    // Drag, Zoom, Event listeners...
-    let dragging = false, lx, ly;
-    mapViewport.addEventListener('mousedown', e => {
-        if (e.button !== 0) return;
-        dragging = true; lx = e.clientX; ly = e.clientY;
-        mapViewport.style.cursor = 'grabbing';
-    });
-    window.addEventListener('mousemove', e => {
-        if (!dragging) return;
-        translateX += (e.clientX - lx);
-        translateY += (e.clientY - ly);
-        lx = e.clientX; ly = e.clientY;
+    const pointers = new Map();
+    let dragging = false;
+    const pinch = () => {
+        const [a, b] = pointers.values();
+        return {
+            x: (a.x + b.x) / 2,
+            y: (a.y + b.y) / 2,
+            span: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+        };
+    };
+    const zoomAt = (factor, fromX, fromY, toX = fromX, toY = fromY) => {
+        const { left, top } = mapViewport.getBoundingClientRect();
+        const oldScale = scale;
+        const minimumScale = Math.min(0.2, graphicalFitScale());
+        scale = Math.min(2, Math.max(minimumScale, scale * factor));
+        translateX = toX - left - (fromX - left - translateX) * (scale / oldScale);
+        translateY = toY - top - (fromY - top - translateY) * (scale / oldScale);
         updateTransform();
+    };
+    mapViewport.addEventListener('pointerdown', e => {
+        if (e.button !== 0 || pointers.size >= 2) return;
+        if (!pointers.size) dragging = false;
+        if (e.target.closest('button')) return;
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pointers.size === 2) dragging = true;
     });
-    window.addEventListener('mouseup', () => {
-        dragging = false;
-        mapViewport.style.cursor = 'default';
+    window.addEventListener('pointermove', e => {
+        const previous = pointers.get(e.pointerId);
+        if (!previous) return;
+        const dx = e.clientX - previous.x;
+        const dy = e.clientY - previous.y;
+        if (!dragging && Math.hypot(dx, dy) < 5) return;
+        const before = pointers.size === 2 ? pinch() : null;
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        dragging = true;
+        mapViewport.style.cursor = 'grabbing';
+        if (before) {
+            const after = pinch();
+            zoomAt(after.span / before.span, before.x, before.y, after.x, after.y);
+        } else {
+            translateX += dx;
+            translateY += dy;
+            updateTransform();
+        }
     });
+    const finishPointer = e => {
+        if (pointers.delete(e.pointerId) && !pointers.size) mapViewport.style.cursor = '';
+    };
+    window.addEventListener('pointerup', finishPointer);
+    window.addEventListener('pointercancel', finishPointer);
+    mapViewport.addEventListener('click', e => {
+        if (dragging && e.detail) e.stopPropagation();
+    }, true);
     mapViewport.addEventListener('wheel', e => {
         e.preventDefault();
-        const rect = mapViewport.getBoundingClientRect();
-        const oldScale = scale;
-        scale = Math.min(2, Math.max(0.2, scale * (e.deltaY > 0 ? 0.9 : 1.1)));
-        translateX = (rect.width / 2) - ((rect.width / 2) - translateX) * (scale / oldScale);
-        translateY = (rect.height / 2) - ((rect.height / 2) - translateY) * (scale / oldScale);
-        updateTransform();
+        zoomAt(e.deltaY > 0 ? 0.9 : 1.1, e.clientX, e.clientY);
     }, { passive: false });
 
 });
@@ -450,7 +481,7 @@ function updateSelectionInfo(clickX = null, clickY = null) {
         move.moveType === 6 && (move.target ?? move.target_index) === idx
     );
     const summonMoves = currentLegalMoves.filter(move =>
-        move.moveType === 4 && (move.src ?? move.src_index) === idx && Boolean(unit) === isUnitMode
+        move.moveType === 4 && (move.src ?? move.src_index) === idx && (move.upgrade === true) === isUnitMode
     );
     const terrainAbilities = [
         AbilityType.BurnForest, AbilityType.ClearForest, AbilityType.GrowForest,
@@ -505,6 +536,7 @@ function updateSelectionInfo(clickX = null, clickY = null) {
 
         const unitCosts = {
             2: 2, 3: 3, 4: 8, 5: 3, 8: 8, 9: 3, 10: 5, 11: 5, 12: 10, 28: 3, 31: 3, 32: 8,
+            41: 15, 42: 5, 44: 5,
         };
         for (const move of summonMoves) {
             const unitType = move.type || move.unitType;
@@ -838,6 +870,7 @@ function getAbilityFile(type, climate) {
 }
 
 function updateTurnIndicator(tribe) {
+    if (showGraphicalTurn()) return;
     document.getElementById('btn-end-turn').disabled =
         !currentLegalMoves.some(move => move?.moveType === 10);
     const name = tribe.username || TRIBE_ID_2_NAME[tribe.type];
@@ -847,7 +880,7 @@ function updateTurnIndicator(tribe) {
 }
 
 document.getElementById('btn-fow').onclick = event => {
-    if (!GAME_STATE.settings) return;
+    if (graphicalMatch || !GAME_STATE.settings) return;
     ENABLE_FOW = !ENABLE_FOW;
     event.currentTarget.setAttribute('aria-pressed', ENABLE_FOW);
     renderer.render(GAME_STATE, currentLegalMoves, GAME_STATE.settings.currentPlayerTurnId);
@@ -895,17 +928,8 @@ gameFiles.addEventListener('keydown', event => {
     }
 });
 
-document.getElementById('btn-reset').onclick = async () => {
-    try {
-        const response = await fetch('/reset', { method: 'POST' });
-        if (!response.ok) throw new Error(await response.text());
-        renderer.clear();
-        updateUI(await response.json());
-        focusCamera();
-    } catch (error) {
-        showToast(error.message);
-    }
-};
+document.getElementById('btn-reset').onclick = openResearchSetup;
+document.getElementById('btn-fit-board').onclick = fitGraphicalBoard;
 document.getElementById('btn-save-state').onclick = async () => {
     try {
         const res = await fetch('/save', { method: 'POST' });
@@ -924,6 +948,7 @@ document.getElementById('btn-load-state').onclick = async () => {
         const data = await res.json();
         if (data.state) {
             updateUI(data);
+            if (graphicalMatch?.botTurn) runGraphicalTurn();
             showToast("📂 Game State Loaded!");
         }
     } catch (e) {

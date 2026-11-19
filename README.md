@@ -12,7 +12,7 @@ An `AI NN` + MCTS `Rust` capable of playing the award winning `Polytopia` strate
 
 ## Quick Start
 
-For a model-free match, the [research simulator quickstart](research/README.md) covers browser play, seeded headless matches, and the Tribes-style opponent presets.
+The model-free simulator supports 1v1 Might with fog of war on six map types, all 12 regular tribes, and boards up to 900 tiles. The quickstart covers browser play, seeded headless matches, and the Tribes-style opponent presets. [Research simulator quickstart](research/README.md)
 
 1. Install **Rust**, **Node**, and **Python 3**.
 2. Build the frontend once: `cd polyfish-ui && npm install && npm run build` (the server serves `polyfish-ui/dist`).

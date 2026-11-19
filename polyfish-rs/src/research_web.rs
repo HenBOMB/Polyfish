@@ -10,7 +10,7 @@ use polyfish::game::Game;
 use polyfish::replay::{Replay, ReplayPlayback};
 use polyfish::research::{self, MatchConfig, MatchResult, Opponent};
 use polyfish::states::GameState;
-use polyfish::types::{MoveType, StructureType, TribeType};
+use polyfish::types::{MapType, MoveType, StructureType, TribeType};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -22,6 +22,7 @@ type WebResult = Result<Json<Value>, WebError>;
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/research/options", get(options))
         .route("/research/current", get(current))
         .route("/research/move", post(play))
         .route("/research/bot", post(bot))
@@ -35,6 +36,18 @@ fn bad_request(message: impl ToString) -> WebError {
     (StatusCode::BAD_REQUEST, message.to_string())
 }
 
+async fn options() -> Json<Value> {
+    Json(json!({
+        "mapSizes": research::BOARD_SIZES.map(|size| size.get_size()),
+        "mapTypes": research::MAP_TYPES.map(|(kind, value, label)| json!({
+            "id": kind, "value": value, "label": label,
+        })),
+        "tribes": research::REGULAR_TRIBES.map(|(_, value, label)| json!({
+            "value": value, "label": label,
+        })),
+    }))
+}
+
 fn config(game: &Game) -> Result<MatchConfig, WebError> {
     game.state
         .settings
@@ -45,17 +58,20 @@ fn config(game: &Game) -> Result<MatchConfig, WebError> {
 
 pub(super) fn reset(state: &AppState, req: &ResetRequest) -> WebResult {
     let size = research::board_size(req.map_size.unwrap_or(121))
-        .ok_or_else(|| bad_request("Choose a map with 121, 196, or 256 tiles"))?;
+        .ok_or_else(|| bad_request("Choose 121, 196, 256, 324, 400, or 900 tiles"))?;
+    let kind = research::map_type(req.map_type.as_deref().unwrap_or("drylands"))
+        .ok_or_else(|| bad_request("Unsupported map type"))?;
+    let learned_available = size.get_size() == 11 && kind == MapType::Drylands && state.network.is_some();
     let opponent =
         req.opponent_preset
-            .unwrap_or(if size.get_size() == 11 && state.network.is_some() {
+            .unwrap_or(if learned_available {
                 Opponent::Learned
             } else {
                 Opponent::Heuristic
             });
-    if opponent == Opponent::Learned && (size.get_size() != 11 || state.network.is_none()) {
+    if opponent == Opponent::Learned && !learned_available {
         return Err(bad_request(
-            "The learned opponent needs an 11×11 map and a compatible checkpoint",
+            "The learned opponent needs 11×11 Drylands and a compatible checkpoint",
         ));
     }
     let seed = req.seed.unwrap_or_else(rand::random);
@@ -78,8 +94,9 @@ pub(super) fn reset(state: &AppState, req: &ResetRequest) -> WebResult {
     if req.max_turns.is_some_and(|turns| turns < 1) {
         return Err(bad_request("The turn limit must be positive"));
     }
-    let mut game = research::new_match(
+    let mut game = research::new_match_on(
         size,
+        kind,
         tribes,
         seed,
         MatchConfig::new(opponent, 2),
@@ -134,6 +151,8 @@ pub(super) fn graphical_snapshot(game: &Game, has_network: bool) -> Option<Value
         "legalMoves": legal_moves,
         "researchMatch": {
             "opponent": config.opponent,
+            "mapType": research::map_type_name(state.settings.map_type),
+            "mapLabel": research::map_type_label(state.settings.map_type),
             "seed": game.state.initial_seed.to_string(),
             "revision": game.state._history.len(),
             "result": result,
@@ -150,7 +169,9 @@ fn snapshot(game: &Game, has_network: bool, replaying: bool) -> Value {
     let (observed, bot_turn) = board_view(game, replaying);
     let state = &observed.state;
     let pov = observed.current_player_id();
-    let tiles: Vec<_> = state.tiles.values().map(|tile| {
+    let mut tiles: Vec<_> = state.tiles.values().collect();
+    tiles.sort_unstable_by_key(|tile| tile.coords.idx);
+    let tiles: Vec<_> = tiles.into_iter().map(|tile| {
         if !tile.explorers.contains(&pov) && state.settings._fow {
             return json!({"index": tile.coords.idx, "visible": false});
         }
@@ -191,6 +212,8 @@ fn snapshot(game: &Game, has_network: bool, replaying: bool) -> Value {
     json!({
         "match": cfg,
         "size": game.map_size(),
+        "mapType": research::map_type_name(state.settings.map_type),
+        "mapLabel": research::map_type_label(state.settings.map_type),
         "seed": game.state.initial_seed.to_string(),
         "turn": game.turn(),
         "active": active,
@@ -273,7 +296,7 @@ async fn bot(State(app): State<Arc<AppState>>) -> WebResult {
                 let net = app
                     .network
                     .as_ref()
-                    .filter(|_| game.map_size() == 11)
+                    .filter(|_| game.map_size() == 11 && game.state.settings.map_type == MapType::Drylands)
                     .ok_or_else(|| {
                         bad_request("The learned opponent is unavailable for this match")
                     })?;
@@ -308,10 +331,14 @@ async fn load(State(app): State<Arc<AppState>>, Json(state): Json<GameState>) ->
     let mut game = Game::new();
     game.state = state;
     let cfg = config(&game)?;
-    if !matches!(game.map_size(), 11 | 14 | 16)
+    if !research::BOARD_SIZES.iter().any(|size| size.get_size() == game.map_size())
         || game.state.tiles.len() != (game.map_size() * game.map_size()) as usize
+        || research::map_type_name(game.state.settings.map_type).is_none()
         || game.state.tribes.len() != 2
-        || (cfg.opponent == Opponent::Learned && (game.map_size() != 11 || app.network.is_none()))
+        || (cfg.opponent == Opponent::Learned
+            && (game.map_size() != 11
+                || game.state.settings.map_type != MapType::Drylands
+                || app.network.is_none()))
     {
         return Err(bad_request("This save is incompatible with the simulator"));
     }

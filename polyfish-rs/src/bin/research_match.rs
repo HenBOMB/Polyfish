@@ -14,6 +14,8 @@ use serde_json::json;
 struct Args {
     #[arg(long, default_value_t = 121)]
     map_size: u16,
+    #[arg(long, default_value = "drylands", value_parser = ["drylands", "lakes", "continents", "pangea", "archipelago", "water-world"])]
+    map_type: String,
     #[arg(long, default_value_t = 42)]
     seed: i64,
     #[arg(long, default_value = "imperius")]
@@ -55,6 +57,7 @@ fn record(game: &Game, args: &Args) -> ReplayRecorder {
                 "presetVersion": research::PRESET_VERSION,
                 "presets": [args.preset1, args.preset2],
                 "seed": args.seed,
+                "mapType": args.map_type,
             })),
         },
     )
@@ -62,7 +65,9 @@ fn record(game: &Game, args: &Args) -> ReplayRecorder {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let size = research::board_size(args.map_size).context("Choose 121, 196, or 256 tiles")?;
+    let size = research::board_size(args.map_size)
+        .context("Choose 121, 196, 256, 324, 400, or 900 tiles")?;
+    let kind = research::map_type(&args.map_type).context("Unsupported map type")?;
     let tribes = [
         research::research_tribe(&args.tribe1).context("Unsupported player-one tribe")?,
         research::research_tribe(&args.tribe2).context("Unsupported player-two tribe")?,
@@ -70,8 +75,9 @@ fn main() -> Result<()> {
     if args.max_turns < 1 {
         bail!("The turn limit must be positive");
     }
-    let mut game = research::new_match(
+    let mut game = research::new_match_on(
         size,
+        kind,
         tribes,
         args.seed,
         MatchConfig::new(args.preset2.into(), 2),
@@ -128,6 +134,7 @@ fn main() -> Result<()> {
             "result": result,
             "seed": args.seed,
             "mapSize": args.map_size,
+            "mapType": args.map_type,
             "turn": game.turn(),
             "actions": actions,
         })

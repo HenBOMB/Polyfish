@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#171d21">
   <title>Polyfish Simulator</title>
-  <link rel="stylesheet" href="/simulator/play.css">
-  <script src="/simulator/play.js?v=2" type="module"></script>
+  <link rel="stylesheet" href="/simulator/play.css?v=2">
+  <script src="/simulator/play.js?v=3" type="module"></script>
 </head>
 <body>
   <header class="topbar">
@@ -14,12 +14,9 @@
   </header>
   <main>
     <form id="setup" aria-label="Match setup">
+      <label>Map type <select name="mapType"></select></label>
       <label>Board
-        <select name="mapSize">
-          <option value="121">Tiny · 11 × 11</option>
-          <option value="196">Small · 14 × 14</option>
-          <option value="256">Normal · 16 × 16</option>
-        </select>
+        <select name="mapSize"></select>
       </label>
       <label>Your tribe <select name="tribe1"></select></label>
       <label>Rival tribe <select name="tribe2"></select></label>
@@ -29,18 +26,18 @@
           <option value="easy">Easy</option>
           <option value="normal" selected>Normal</option>
           <option value="expert">Expert</option>
-          <option value="learned" disabled>Learned</option>
+          <option value="learned" disabled>Learned (11×11 Drylands)</option>
         </select>
       </label>
       <label>Seed <input name="seed" type="text" inputmode="numeric" placeholder="Random"></label>
-      <button class="primary" type="submit">New match</button>
+      <button class="primary" type="submit" disabled>New match</button>
     </form>
     <section class="play" aria-label="Match">
       <div class="stage">
         <div class="statusbar">
           <div>
             <strong id="status" role="status">Start a match</strong>
-            <small id="match-detail">Might · Drylands</small>
+            <small id="match-detail">Might</small>
             <div id="action-notice" role="status"></div>
           </div>
           <div class="zoom" aria-label="Board zoom">

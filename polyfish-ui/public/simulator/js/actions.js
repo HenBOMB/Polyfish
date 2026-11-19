@@ -5,6 +5,11 @@ function playMove(move) {
     document.querySelectorAll('.move-overlay').forEach(el => el.remove());
     document.querySelectorAll('.combat-preview').forEach(el => el.remove());
 
+    if (graphicalMatch) {
+        playGraphicalMove(move);
+        return;
+    }
+
     document.querySelectorAll('.rts-btn').forEach(b => b.disabled = true);
     fetch('/step', {
         method: 'POST',

@@ -16,6 +16,8 @@ MOVE_TYPES = {
     "step": 1, "attack": 2, "ability": 3, "summon": 4, "upgrade": 4,
     "harvest": 5, "build": 6, "research": 7, "capture": 8, "reward": 9, "endTurn": 10,
 }
+MAP_TYPES = ("drylands", "lakes", "continents", "pangea", "archipelago", "water-world")
+MAP_SIZES = (121, 196, 256, 324, 400, 900)
 
 
 def browser_key(command):
@@ -25,6 +27,8 @@ def browser_key(command):
                            ("structure", "type"), ("unit", "type"), ("ability", "type"), ("reward", "type")]:
         if source in command:
             key[target] = command[source]
+    if command["type"] == "upgrade":
+        key["upgrade"] = True
     return key
 
 
@@ -67,7 +71,45 @@ def verify_save_rejects_invalid_turn_order(base_url):
     assert after["active"] == 2 and after["revision"] == before["revision"] + 1
 
 
-def verify(base_url, binary, size, preset, output, full_api):
+def verify_setup_matrix(base_url):
+    request = partial(request_json, base_url)
+    options = request("/research/options")
+    assert [width ** 2 for width in options["mapSizes"]] == list(MAP_SIZES)
+    assert [kind["value"] for kind in options["mapTypes"]] == list(MAP_TYPES)
+    tribes = [tribe["value"] for tribe in options["tribes"]]
+    assert len(set(tribes)) == 12
+    seed = 2**63 - 1
+    for index, (kind, size) in enumerate(itertools.product(options["mapTypes"], MAP_SIZES)):
+        setup = {
+            "mapType": kind["value"], "mapSize": size, "seed": seed,
+            "tribe1": tribes[index % len(tribes)], "tribe2": tribes[(index + 1) % len(tribes)],
+            "opponentPreset": "human",
+        }
+        before = request("/reset", setup)
+        assert before["mapType"] == kind["value"]
+        assert before["mapLabel"] == kind["label"]
+        assert before["seed"] == str(seed) and len(before["tiles"]) == size
+        saved = request("/research/save")
+        assert saved["settings"]["mapType"] == kind["id"]
+        after = request("/research/load", saved)
+        assert sorted(map(json.dumps, after.pop("actions"))) == sorted(map(json.dumps, before.pop("actions")))
+        assert after == before
+    before = request("/research/current")
+    for invalid in [
+        {"mapSize": 401}, {"mapType": "invalid"}, {"tribe2": "aquarion"},
+        {"mapType": "lakes", "opponentPreset": "learned"},
+        {"mapSize": 900, "opponentPreset": "learned"},
+    ]:
+        try:
+            request("/reset", {**setup, **invalid})
+        except HTTPError as error:
+            assert error.code == 400
+        else:
+            raise AssertionError(f"Invalid match options accepted: {invalid}")
+        assert request("/research/current") == before
+
+
+def verify(base_url, binary, size, kind, preset, output, full_api):
     request = partial(request_json, base_url)
 
     def play_human(game, command):
@@ -83,22 +125,17 @@ def verify(base_url, binary, size, preset, output, full_api):
 
     result = json.loads(subprocess.check_output([
         str(binary), "--map-size", str(size), "--preset1", "normal", "--preset2", preset,
+        "--map-type", kind,
         "--seed", "42", "--replay", str(output),
     ], text=True))
     replay = json.loads(output.read_text())
     game = request("/reset", {
-        "mapSize": size, "seed": 42, "opponentPreset": preset,
+        "mapSize": size, "mapType": kind, "seed": 42, "opponentPreset": preset,
         "tribe1": "imperius", "tribe2": "bardur",
     })
     assert game["seed"] == "42" and len(game["tiles"]) == size
     assert any(tile == {"index": tile["index"], "visible": False} for tile in game["tiles"])
-    try:
-        request("/reset", {"mapSize": 400})
-    except HTTPError as error:
-        assert error.code == 400
-    else:
-        raise AssertionError("Invalid map size accepted")
-    assert request("/research/current") == game
+    assert game["mapType"] == kind
 
     # Replay the human seat's first turn, then ask the browser API to play its opponent.
     for command in replay["turns"][0]["commands"]:
@@ -134,6 +171,7 @@ def verify(base_url, binary, size, preset, output, full_api):
     playback = request("/research/replay", replay)
     final = request("/research/replay/seek", {"position": playback["replay"]["total"]})
     assert final["result"] == result["result"]
+    assert final["mapType"] == kind and len(final["tiles"]) == size
     print(json.dumps(dict(result, browserBotActions=actions, preset=preset)), flush=True)
 
 
@@ -142,11 +180,21 @@ def main():
     p.add_argument("binary", type=Path)
     p.add_argument("--server", default="http://127.0.0.1:3000")
     p.add_argument("--full-api", action="store_true", help="Replay all decisions through the live browser API")
+    p.add_argument("--water", action="store_true", help="Verify all water maps with every preset across 121- and 900-tile boards")
     args = p.parse_args()
     verify_save_rejects_invalid_turn_order(args.server)
+    verify_setup_matrix(args.server)
     with tempfile.TemporaryDirectory(prefix="polyfish-smoke-") as tmp:
-        for size, preset in itertools.product((121, 196, 256), ("easy", "normal", "expert")):
-            verify(args.server, args.binary.resolve(), size, preset, Path(tmp) / "match.json", args.full_api)
+        presets = ("easy", "normal", "expert")
+        cases = ((size, "drylands", preset) for size, preset in itertools.product(MAP_SIZES[:3], presets))
+        if args.water:
+            cases = (
+                (121 if (index + offset) % 2 == 0 else 900, kind, preset)
+                for index, kind in enumerate(MAP_TYPES[1:])
+                for offset, preset in enumerate(presets)
+            )
+        for size, kind, preset in cases:
+            verify(args.server, args.binary.resolve(), size, kind, preset, Path(tmp) / "match.json", args.full_api)
 
 
 if __name__ == "__main__":

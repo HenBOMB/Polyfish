@@ -13,6 +13,8 @@ use crate::states::{GameState, TileState, TribeState};
 use crate::types::{MapSize, MapType, TerrainType, TribeType};
 use std::collections::HashSet;
 
+mod water;
+
 fn tribe_to_climate(tribe: TribeType) -> TribeType {
     match tribe {
         TribeType::AiMo => TribeType::AiMo,
@@ -233,7 +235,16 @@ pub fn generate(settings: MapGenSettings) -> GameState {
 
     // 1. Capital Placement
     let player_count = settings.tribes.len();
+    // The v1.1 simulator exposes non-symmetric 1v1 maps. Keep the legacy
+    // generation path for the other modes and Drylands seed compatibility.
+    let shape_water = player_count == 2
+        && !settings.symmetric
+        && matches!(
+            settings.map_type,
+            MapType::Lakes | MapType::Continents | MapType::Pangea | MapType::Archipelago | MapType::WaterWorld
+        );
     let mut capital_cells: Vec<i32> = Vec::new();
+    let mut fishing_capitals = Vec::new();
 
     let use_quadrants = matches!(
         settings.map_type,
@@ -349,6 +360,10 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                         let (x, y) = get_coords(idx, size);
                         x > 0 && x < size - 1 && y > 0 && y < size - 1 // At least 1 tile from edge
                     }
+                    && (!shape_water
+                        || get_square(idx, 2, size)
+                            .into_iter()
+                            .all(|n| village_map[n as usize] == 0))
                 })
                 .collect();
 
@@ -533,17 +548,31 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             noise = smoothed;
         }
 
-        // 3. SetTerrainFromNoise: Compute quantile threshold to exactly match target_land
-        let mut sorted_noise = noise.clone();
-        sorted_noise.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-        let threshold_idx = target_land.min(sorted_noise.len().saturating_sub(1));
-        let threshold = sorted_noise.get(threshold_idx).copied().unwrap_or(0.0);
-
-        for i in 0..tile_count {
-            if village_map[i as usize] > 0 || noise[i as usize] >= threshold {
-                is_land[i as usize] = true;
-            } else {
-                is_land[i as usize] = false;
+        if shape_water {
+            is_land = water::layout(
+                settings.map_type, size, &noise, &mut village_map, &mut capital_cells, &mut rng,
+            );
+            for (&cap, &tribe) in capital_cells.iter().zip(&settings.tribes) {
+                map[cap as usize].orig_tribe_affinity = Some(tribe);
+                if matches!(tribe, TribeType::Kickoo | TribeType::Aquarion) {
+                    water::open_fishing_coast(&mut is_land, &village_map, cap, size, &noise);
+                    fishing_capitals.push(cap);
+                }
+            }
+            for (tile, settlement) in map.iter_mut().zip(&village_map) {
+                tile.above = match settlement {
+                    1 => Some("village".to_string()),
+                    2 => Some("capital".to_string()),
+                    _ => None,
+                };
+            }
+        } else {
+            let mut sorted_noise = noise.clone();
+            sorted_noise.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+            let threshold_idx = target_land.min(sorted_noise.len().saturating_sub(1));
+            let threshold = sorted_noise.get(threshold_idx).copied().unwrap_or(0.0);
+            for i in 0..tile_count as usize {
+                is_land[i] = village_map[i] > 0 || noise[i] >= threshold;
             }
         }
     }
@@ -556,7 +585,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         };
     }
 
-    if !use_quadrants {
+    if !shape_water && !use_quadrants {
         if settings.map_type == MapType::Continents {
             // Continents: Identify landmasses and place villages
             // First, identify all distinct landmasses using flood-fill
@@ -913,7 +942,10 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     }
 
     for i in 0..tile_count {
-        if !is_land[i as usize] && plus_sign(i, size).iter().any(|&n| is_land[n as usize]) {
+        if !is_land[i as usize]
+            && (plus_sign(i, size).iter().any(|&n| is_land[n as usize])
+                || fishing_capitals.iter().any(|&cap| distance(i, cap, size) == 1))
+        {
             map[i as usize].terrain_type = TerrainType::Water;
         } else if is_land[i as usize] && village_map[i as usize] == 0 {
             let tribe = map[i as usize]
@@ -930,10 +962,12 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     }
 
     // Post-terrain Villages (only for quadrant-based maps: Drylands, Lakes, Archipelago, WaterWorld)
-    if matches!(
-        settings.map_type,
-        MapType::Drylands | MapType::Lakes | MapType::Archipelago | MapType::WaterWorld
-    ) {
+    if (!shape_water || settings.map_type == MapType::Lakes)
+        && matches!(
+            settings.map_type,
+            MapType::Drylands | MapType::Lakes | MapType::Archipelago | MapType::WaterWorld
+        )
+    {
         loop {
             let candidates: Vec<i32> = (0..tile_count)
                 .filter(|&i| {
@@ -970,9 +1004,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     }
 
     // Tiny Island Villages (Pangea/Continents/WaterWorld)
-    if settings.map_type == MapType::Pangea
-        || settings.map_type == MapType::Continents
-        || settings.map_type == MapType::WaterWorld
+    if !shape_water && matches!(settings.map_type, MapType::Pangea | MapType::Continents | MapType::WaterWorld)
     {
         let island_count = match settings.size {
             MapSize::Tiny => 0,
@@ -1048,8 +1080,10 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             .iter()
             .cloned()
             .filter(|&n| {
+                let terrain = map[n as usize].terrain_type;
                 n != cap
                     && map[n as usize].above.is_none()
+                    && (!shape_water || (terrain == TerrainType::Water) == (target_terrain == TerrainType::Water))
                     && (map[n as usize].terrain_type == target_terrain
                         || map[n as usize].terrain_type == TerrainType::Field
                         || map[n as usize].terrain_type == TerrainType::Forest
@@ -1062,7 +1096,21 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             if candidates.is_empty() {
                 break;
             }
-            let idx = candidates.remove(rng.next_index(candidates.len()));
+            let pick = if !shape_water && target_terrain == TerrainType::Water
+                && settings.map_type != MapType::Drylands
+            {
+                let coastal: Vec<_> = candidates.iter().enumerate().filter_map(|(slot, &idx)| {
+                    (map[idx as usize].terrain_type == TerrainType::Water).then_some(slot)
+                }).collect();
+                if coastal.is_empty() {
+                    rng.next_index(candidates.len())
+                } else {
+                    coastal[rng.next_index(coastal.len())]
+                }
+            } else {
+                rng.next_index(candidates.len())
+            };
+            let idx = candidates.remove(pick);
             map[idx as usize].terrain_type = target_terrain;
             map[idx as usize].above = Some(resource.to_string());
         }
@@ -1304,7 +1352,11 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         }
     }
 
-    let starfish_count = tile_count / 25;
+    let starfish_count = if shape_water {
+        is_land.iter().filter(|&&land| !land).count() as i32 / 25
+    } else {
+        tile_count / 25
+    };
     let mut placed_starfish = 0;
     for _ in 0..1000 {
         if placed_starfish >= starfish_count {
