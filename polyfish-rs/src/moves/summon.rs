@@ -6,7 +6,7 @@ use crate::actions::units::summon_unit;
 use crate::functions::get_city_unit_count;
 use crate::functions::{self, is_tile_occupied};
 use crate::moves::{Move, MoveResult};
-use crate::settings::get_unit_setting;
+use crate::settings::unit_setting;
 use crate::states::GameState;
 use crate::types::{MoveType, SkillType, UnitType};
 
@@ -34,7 +34,7 @@ impl Move for SummonMove {
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         // Validation check for cost
-        let settings = get_unit_setting(self.unit_type);
+        let settings = unit_setting(self.unit_type);
         let cost = settings.cost;
         let pov_id = state.settings.current_player_turn_id;
 
@@ -93,7 +93,7 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
     let mut spawnables = Vec::new();
 
     // Always include Warrior (base unit) if affordable
-    let warrior_settings = get_unit_setting(UnitType::Warrior);
+    let warrior_settings = unit_setting(UnitType::Warrior);
     if tribe.stars >= warrior_settings.cost {
         spawnables.push(UnitType::Warrior);
     } else {
@@ -111,7 +111,7 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
                 continue;
             }
 
-            let settings = get_unit_setting(u_type);
+            let settings = unit_setting(u_type);
             if settings.cost >= 1 && settings.upgrade_from.is_none() {
                 if tribe.stars >= settings.cost {
                     spawnables.push(u_type);
@@ -150,7 +150,7 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
         // }
 
         for &u_type in &spawnables {
-            let settings = get_unit_setting(u_type);
+            let settings = unit_setting(u_type);
 
             // Training restriction: Water/Navigate units require adjacent water,
             // UNLESS they are Amphibious (like the Boomchi).

@@ -5,7 +5,7 @@
 use crate::actions::UndoCallback;
 use crate::coords::Coords;
 use crate::functions::*;
-use crate::settings::{get_unit_setting, has_skill};
+use crate::settings::{unit_setting, has_skill};
 use crate::states::*;
 use crate::types::*;
 
@@ -91,10 +91,10 @@ pub fn remove_unit(
     }
 
     // Get unit and passenger cost for score
-    let cost = get_unit_setting(removed_unit.unit_type).cost
+    let cost = unit_setting(removed_unit.unit_type).cost
         + removed_unit
             .passenger_type
-            .map(|p| get_unit_setting(p).cost)
+            .map(|p| unit_setting(p).cost)
             .unwrap_or(0);
     let score_deduction = 5 * cost;
 
@@ -879,7 +879,7 @@ pub fn attack_unit(
             get_unit_attack(state, unit),
             unit.health,
             get_unit_max_health(unit),
-            get_unit_setting(unit.unit_type).skills.clone(),
+            unit_setting(unit.unit_type).skills.clone(),
             unit.unit_type,
             unit.coords.idx,
         )
@@ -1039,7 +1039,7 @@ pub fn attack_unit(
     );
 
     // Firing changes a ranged unit's facing without changing its position.
-    if get_unit_setting(atk_type).range > 1 {
+    if unit_setting(atk_type).range > 1 {
         let tribe = state.tribes.get_mut(&attacker_owner).unwrap();
         let unit = tribe.units.get_mut(attacker_idx).unwrap();
         let target = Coords::from_index(def_coords, state.settings.size);
@@ -1316,7 +1316,7 @@ pub fn attack_unit(
         }
 
         // Move attacker to defender's position if melee
-        let atk_settings = get_unit_setting({
+        let atk_settings = unit_setting({
             state
                 .tribes
                 .get(&attacker_owner)
@@ -1345,7 +1345,7 @@ pub fn attack_unit(
         }
     } else {
         // Apply retaliation damage to attacker (skip if defender has Stiff, attacker has Surprise, or is out of range)
-        let def_setting = get_unit_setting({
+        let def_setting = unit_setting({
             state
                 .tribes
                 .get(&defender_owner)
@@ -1634,7 +1634,7 @@ pub fn spawn_unit(
     tile_idx: i32,
     force_independent: bool,
 ) -> UndoCallback {
-    let settings = get_unit_setting(unit_type);
+    let settings = unit_setting(unit_type);
     let independent = force_independent || settings.skills.contains(&SkillType::Independent);
     let map_size = state.settings.size;
 
@@ -1709,7 +1709,7 @@ pub fn summon_unit(
     use crate::moves::MoveResult;
 
     let pov_id = state.settings.current_player_turn_id;
-    let settings = get_unit_setting(unit_type);
+    let settings = unit_setting(unit_type);
 
     // Push occupied unit away if any
     let push_result = push_unit(state, spawn_tile_idx)?;
@@ -2133,10 +2133,10 @@ pub fn convert_unit(
 
     // 3. Update scores
     // Old tribe loses points (5 * cumulative cost of unit + passenger)
-    let cost = get_unit_setting(original_unit.unit_type).cost
+    let cost = unit_setting(original_unit.unit_type).cost
         + original_unit
             .passenger_type
-            .map(|p| get_unit_setting(p).cost)
+            .map(|p| unit_setting(p).cost)
             .unwrap_or(0);
     let score_loss = 5 * cost;
 
@@ -2199,7 +2199,7 @@ pub fn disband_unit(
     unit_idx: usize,
 ) -> Result<UndoCallback, String> {
     use crate::actions::{chain_undos, gain_stars};
-    use crate::settings::get_unit_setting;
+    use crate::settings::unit_setting;
 
     let unit_type = if let Some(tribe) = state.tribes.get(&unit_owner) {
         if let Some(u) = tribe.units.get(unit_idx) {
@@ -2211,7 +2211,7 @@ pub fn disband_unit(
         return Err("Tribe not found".to_string());
     };
 
-    let settings = get_unit_setting(unit_type);
+    let settings = unit_setting(unit_type);
     let refund = (settings.cost as f32 * 0.5).floor() as i32;
 
     let mut undos = Vec::new();
@@ -2230,9 +2230,9 @@ pub fn upgrade_unit(
     target_type: crate::types::UnitType,
 ) -> Result<UndoCallback, String> {
     use crate::actions::spend_stars;
-    use crate::settings::get_unit_setting;
+    use crate::settings::unit_setting;
 
-    let settings = get_unit_setting(target_type);
+    let settings = unit_setting(target_type);
     let mut undos: Vec<UndoCallback> = Vec::new();
 
     // 1. Spend stars
@@ -2280,8 +2280,8 @@ pub fn upgrade_unit(
             let damage = old_max_hp - unit.health;
 
             // Score adjustment
-            let old_settings = get_unit_setting(old_type);
-            let new_settings = get_unit_setting(target_type);
+            let old_settings = unit_setting(old_type);
+            let new_settings = unit_setting(target_type);
             let old_cost = old_settings.cost;
             let new_cost = new_settings.cost;
             let score_diff = 5 * (new_cost - old_cost);
@@ -2309,7 +2309,7 @@ pub fn upgrade_unit(
 
     // 3. Discover around the newly upgraded unit
     let new_discovery_undo = {
-        let settings = get_unit_setting(target_type);
+        let settings = unit_setting(target_type);
         let range = if settings.skills.contains(&crate::types::SkillType::Scout) {
             2
         } else {

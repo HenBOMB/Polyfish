@@ -33,10 +33,10 @@ impl Move for BuildMove {
     }
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
-        use crate::settings::structures::get_structure_setting;
+        use crate::settings::structures::structure_setting;
 
         let pov_id = state.settings.current_player_turn_id;
-        let settings = get_structure_setting(self.structure_type);
+        let settings = structure_setting(self.structure_type);
 
         // 0. Validation
         if let Some(reason) = crate::settings::structures::unimplemented_reason(self.structure_type)
@@ -120,7 +120,7 @@ impl Move for BuildMove {
 pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
     let pov_id = state.settings.current_player_turn_id;
     if let Some(tribe) = state.tribes.get(&pov_id) {
-        use crate::settings::structures::get_structure_setting;
+        use crate::settings::structures::structure_setting;
         use crate::settings::tasks::{check_task, get_task_setting};
         use strum::IntoEnumIterator;
 
@@ -128,7 +128,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
 
         let mut unlocked_structures = Vec::new();
         for struct_type in crate::types::StructureType::iter() {
-            let settings = get_structure_setting(struct_type);
+            let settings = structure_setting(struct_type);
 
             if settings.cost.is_none() || settings.resource_type.is_some() {
                 continue;
@@ -194,7 +194,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
             }
 
             if check_task(state, task) {
-                let struct_settings = get_structure_setting(setting.structure_type);
+                let struct_settings = structure_setting(setting.structure_type);
                 if tribe.stars >= struct_settings.cost.unwrap_or(0) {
                     pending_monument_structures.push((setting.structure_type, struct_settings));
                 }
@@ -224,7 +224,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                     if let Some(res_type) = get_resource_at(state, idx) {
                         let res_settings = get_resource_setting(res_type);
                         if let Some(struct_type) = res_settings.struct_required {
-                            let struct_settings = get_structure_setting(struct_type);
+                            let struct_settings = structure_setting(struct_type);
                             let cost = struct_settings.cost.unwrap_or(0);
 
                             if tribe.stars >= cost {
@@ -345,21 +345,20 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
             }
         }
 
-        // 4. Roads in neutral territory
-        for (&idx, tile) in &state.tiles {
-            if tile.owner == 0 && crate::functions::is_tile_explored(state, idx, pov_id) && !tile.has_road {
-                // Cannot build if an enemy unit is on the tile
-                if crate::functions::get_enemy_at(state, idx, pov_id).is_some() {
-                    continue;
-                }
-
-                for &(struct_type, ref settings) in &unlocked_structures {
-                    if struct_type == StructureType::Road {
-                        if settings.terrain_types.contains(&tile.terrain_type) && !tile.is_algae() {
-                            moves.push(Box::new(BuildMove::new(idx, struct_type)));
-                        }
-                        break;
-                    }
+        // 4. Roads in neutral territory. Skip the board scan when roads are unavailable.
+        if let Some((_, road)) = unlocked_structures
+            .iter()
+            .find(|(kind, _)| *kind == StructureType::Road)
+        {
+            for (&idx, tile) in &state.tiles {
+                if tile.owner == 0
+                    && !tile.has_road
+                    && (!state.settings._fow || tile.explorers.contains(&pov_id))
+                    && road.terrain_types.contains(&tile.terrain_type)
+                    && !tile.is_algae()
+                    && crate::functions::get_enemy_at(state, idx, pov_id).is_none()
+                {
+                    moves.push(Box::new(BuildMove::new(idx, StructureType::Road)));
                 }
             }
         }
@@ -367,12 +366,12 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
 }
 
 fn is_structure_unlocked(tribe: &crate::states::TribeState, struct_type: StructureType) -> bool {
-    use crate::settings::structures::get_structure_setting;
-    use crate::settings::technology::get_technology_setting;
+    use crate::settings::structures::structure_setting;
+    use crate::settings::technology::technology_setting;
     use crate::types::TribeType;
 
     // Check if the structure itself is tribe-restricted
-    let struct_setting = get_structure_setting(struct_type);
+    let struct_setting = structure_setting(struct_type);
     if let Some(required_tribe) = struct_setting.tribe_type {
         if required_tribe != tribe.tribe_type {
             return false;
@@ -393,7 +392,7 @@ fn is_structure_unlocked(tribe: &crate::states::TribeState, struct_type: Structu
         if !tech.discovered {
             continue;
         }
-        let settings = get_technology_setting(tech.tech_type);
+        let settings = technology_setting(tech.tech_type);
         if settings.unlocks_structure == Some(target) {
             return true;
         }

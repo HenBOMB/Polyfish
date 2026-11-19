@@ -33,7 +33,7 @@ use crate::functions::{
     get_adjacent_indices, get_enemy_at, get_structure_at, get_structure_type_at, get_unit_at,
 };
 use crate::settings::resources::get_resource_setting;
-use crate::settings::{get_unit_setting, has_skill};
+use crate::settings::{unit_setting, has_skill};
 use crate::states::*;
 use crate::types::*;
 
@@ -463,16 +463,18 @@ fn compute_reachable_tiles(
             // "Rounding up" rule: We allow the move even if new_cost > effective_movement,
             // provided current.cost < effective_movement (checked above).
 
-            let terminal = is_terminal(state, unit, n_idx);
-
             let existing_cost = reachable.get(&n_idx);
             if existing_cost.is_none() || new_cost < *existing_cost.unwrap() {
                 reachable.insert(n_idx, new_cost);
-                open_list.push(ReachableNode {
-                    index: n_idx,
-                    cost: new_cost,
-                    terminal,
-                });
+                // Keep endpoints in the result without queuing tiles from
+                // which the unit cannot start another step.
+                if new_cost < effective_movement && !is_terminal(state, unit, n_idx) {
+                    open_list.push(ReachableNode {
+                        index: n_idx,
+                        cost: new_cost,
+                        terminal: false,
+                    });
+                }
             }
         }
     }
@@ -489,6 +491,15 @@ pub fn compute_shortest_path(
     // Cap movement at 1 if unit has segments attached
     if unit.child_unit_idx.is_some() {
         effective_movement = 1.0;
+    }
+    // Each edge costs at least half a move. A legal adjacent step costing at
+    // most one cannot be improved, and the search keeps the direct path on ties.
+    if effective_movement > 0.0
+        && crate::functions::get_chebyshev_distance(unit.coords.idx, target_idx, state.settings.size) == 1
+        && is_steppable(state, unit, target_idx, true)
+        && (0.0..=1.0).contains(&compute_movement_cost(state, unit, unit.coords.idx, target_idx))
+    {
+        return Some(vec![target_idx]);
     }
     let mut reachable = std::collections::HashMap::new();
     let mut parent = std::collections::HashMap::new();
@@ -570,7 +581,7 @@ pub fn compute_shortest_path(
 fn compute_movement_cost(state: &GameState, unit: &UnitState, from_idx: i32, to_idx: i32) -> f32 {
     let cost: f32 = 1.0;
 
-    let settings = get_unit_setting(unit.unit_type);
+    let settings = unit_setting(unit.unit_type);
 
     // Flying and creeping disable road bonuses
     if settings.skills.contains(&SkillType::Fly) || settings.skills.contains(&SkillType::Creep) {
@@ -618,7 +629,7 @@ fn compute_movement_cost(state: &GameState, unit: &UnitState, from_idx: i32, to_
 }
 
 fn is_terminal(state: &GameState, unit: &UnitState, tile_idx: i32) -> bool {
-    let settings = get_unit_setting(unit.unit_type);
+    let settings = unit_setting(unit.unit_type);
     if settings.skills.contains(&SkillType::Fly) {
         return false;
     }
@@ -728,7 +739,7 @@ fn is_roadpath_and_usable(state: &GameState, unit: &UnitState, idx: i32) -> bool
 }
 
 fn is_naval_unit(unit_type: UnitType) -> bool {
-    crate::settings::units::get_unit_setting(unit_type)
+    crate::settings::units::unit_setting(unit_type)
         .skills
         .contains(&SkillType::Carry)
 }
@@ -774,7 +785,7 @@ fn generate_attack_moves(
             return;
         }
 
-        let range = get_unit_setting(unit.unit_type).range;
+        let range = unit_setting(unit.unit_type).range;
 
         // Check all tiles in range
         for target_idx in get_tiles_in_range(state, from_idx, range) {
@@ -827,7 +838,7 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32, strict: bool) -> 
         return false;
     }
 
-    let settings = get_unit_setting(unit.unit_type);
+    let settings = unit_setting(unit.unit_type);
 
     let tribe = state.tribes.get(&unit.owner).unwrap();
     let tile = state.tiles.get(&idx).unwrap();
@@ -931,15 +942,15 @@ fn is_navigationable_terrain(
 
     match terrain {
         TerrainType::Water => tribe.tech_vanilla.iter().any(|t| {
-            let s = crate::settings::technology::get_technology_setting(t.tech_type);
+            let s = crate::settings::technology::technology_setting(t.tech_type);
             s.unlocks_terrain == Some(TerrainType::Water)
         }),
         TerrainType::Ocean => tribe.tech_vanilla.iter().any(|t| {
-            let s = crate::settings::technology::get_technology_setting(t.tech_type);
+            let s = crate::settings::technology::technology_setting(t.tech_type);
             s.unlocks_terrain == Some(TerrainType::Ocean)
         }),
         TerrainType::Mountain => tribe.tech_vanilla.iter().any(|t| {
-            let s = crate::settings::technology::get_technology_setting(t.tech_type);
+            let s = crate::settings::technology::technology_setting(t.tech_type);
             s.unlocks_terrain == Some(TerrainType::Mountain)
         }),
         _ => {
@@ -947,7 +958,7 @@ fn is_navigationable_terrain(
             // Flooded land is treated like water.
             if tile.is_flooded() {
                 return tribe.tech_vanilla.iter().any(|t| {
-                    let s = crate::settings::technology::get_technology_setting(t.tech_type);
+                    let s = crate::settings::technology::technology_setting(t.tech_type);
                     s.unlocks_terrain == Some(TerrainType::Water)
                 });
             }

@@ -48,6 +48,20 @@ macro_rules! skills {
 
 /// Get unit settings by type
 pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
+    unit_setting(unit_type).clone()
+}
+
+/// Borrow the immutable rule data used by move generation and application.
+#[inline]
+pub(crate) fn unit_setting(unit_type: UnitType) -> &'static UnitSetting {
+    static SETTINGS: std::sync::LazyLock<[Option<UnitSetting>; 256]> =
+        std::sync::LazyLock::new(|| {
+            std::array::from_fn(|id| UnitType::from_repr(id as i8).map(make_unit_setting))
+        });
+    SETTINGS[unit_type as u8 as usize].as_ref().expect("known unit type")
+}
+
+fn make_unit_setting(unit_type: UnitType) -> UnitSetting {
     use SkillType as S;
     use UnitType as U;
 
@@ -619,7 +633,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
 
 /// Check if a unit type has a specific skill
 pub fn has_skill(unit_type: UnitType, skill: SkillType) -> bool {
-    get_unit_setting(unit_type).skills.contains(&skill)
+    unit_setting(unit_type).skills.contains(&skill)
 }
 
 /// Get super unit type for a tribe

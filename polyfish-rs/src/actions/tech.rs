@@ -2,7 +2,7 @@
 
 use crate::actions::{UndoCallback, spend_stars};
 use crate::functions::get_tech_cost;
-use crate::settings::technology::get_technology_setting;
+use crate::settings::technology::technology_setting;
 use crate::states::{GameState, TechnologyState};
 use crate::types::TechnologyType;
 
@@ -42,7 +42,7 @@ pub fn unlock_tech(
     if let Some(tribe) = state.tribes.get_mut(&pov_id) {
         tribe.tech_vanilla.push(tech_state);
 
-        let settings = get_technology_setting(tech_type);
+        let settings = technology_setting(tech_type);
         let score_gain = 100 * settings.tier.unwrap_or(1);
         tribe.score += score_gain;
 

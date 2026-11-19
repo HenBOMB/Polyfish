@@ -61,7 +61,7 @@ impl Move for AttackMove {
                 // Attacker must have Infiltrate
                 if let Some(att_tribe) = state.tribes.get(&attacker_owner) {
                     if let Some(att_unit) = att_tribe.units.get(attacker_idx) {
-                        let settings = crate::settings::units::get_unit_setting(att_unit.unit_type);
+                        let settings = crate::settings::units::unit_setting(att_unit.unit_type);
                         if settings
                             .skills
                             .contains(&crate::types::SkillType::Infiltrate)

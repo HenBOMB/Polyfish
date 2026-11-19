@@ -54,6 +54,20 @@ pub fn unimplemented_reason(struct_type: StructureType) -> Option<&'static str> 
 
 /// Get structure settings by type
 pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
+    structure_setting(struct_type).clone()
+}
+
+/// Borrow the immutable rule data used by move generation and application.
+#[inline]
+pub(crate) fn structure_setting(struct_type: StructureType) -> &'static StructureSetting {
+    static SETTINGS: std::sync::LazyLock<[Option<StructureSetting>; 256]> =
+        std::sync::LazyLock::new(|| {
+            std::array::from_fn(|id| StructureType::from_repr(id as i8).map(make_structure_setting))
+        });
+    SETTINGS[struct_type as u8 as usize].as_ref().expect("known structure type")
+}
+
+fn make_structure_setting(struct_type: StructureType) -> StructureSetting {
     match struct_type {
         StructureType::None
         | StructureType::Village
