@@ -182,7 +182,7 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
         },
         Navigation => TechnologySetting {
             tier: Some(3),
-            requires: Some(Ramming),
+            requires: Some(Sailing),
             unlocks_unit: Some(UnitType::Bomber),
             ..Default::default()
         },

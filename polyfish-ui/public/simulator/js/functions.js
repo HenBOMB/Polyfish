@@ -65,16 +65,13 @@ function getCityProduction(state, city) {
         return 0;
     }
 
-    let prod = city.level || 0;
+    let prod = city.production ?? city.level ?? 0;
 
     // Capitals get a +1 star bonus
     const centerTile = state.tiles[city.idx];
     if (centerTile && centerTile.capitalOf === city.owner && centerTile.capitalOf !== 0) {
         prod += 1;
     }
-
-    const rewards = (city.rewards || []).filter(r => r === RewardTypes.Park || r === 2);
-    prod += rewards.length;
 
     const size = state.settings.size;
 
@@ -128,3 +125,28 @@ window.getCityProduction = getCityProduction;
 window.getAdjacentIndices = getAdjacentIndices;
 window.getStructureAt = getStructureAt;
 window.getEnemyAt = getEnemyAt;
+function getGroundFile(terrain, climate) {
+    const fixed = {
+        1: 'terrain/water/water',
+        2: 'terrain/water/ocean',
+        6: 'terrain/tiles/ice'
+    };
+    return fixed[terrain] || `terrain/tiles/ground_${terrainTextureIndex(climate)}`;
+}
+
+function cityArtTribe(tile, ownerTribe) {
+    return TRIBE_TEXTURE_INDEX[tile.climate] ? tile.climate : ownerTribe;
+}
+
+function getCityFile(tribeType, variant) {
+    const tribeName = TRIBE_ID_2_NAME[tribeType];
+    const textureIndex = TRIBE_TEXTURE_INDEX[tribeType];
+    if (!textureIndex) return 'buildings/common/Tribe';
+    return `buildings/${tribeName}/Default/Houses/House_${textureIndex}_${variant}`;
+}
+
+function getUnitFile(tribeType, unitType) {
+    const tribeName = TRIBE_ID_2_NAME[tribeType];
+    const className = ClassNameToId[unitType] || UnitTypes[unitType];
+    return tribeName && className ? `units/${tribeName}/default/${tribeName}_default_${className}` : null;
+}

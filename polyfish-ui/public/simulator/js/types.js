@@ -1,41 +1,3 @@
-const CLIMATE_IDS = {
-    0: null,
-    1: "Nature",
-    2: "Xin-xi",
-    3: "Imperius",
-    4: "Bardur",
-    5: "Oumaji",
-    6: "Kickoo",
-    7: "Hoodrick",
-    8: "Luxidoor",
-    9: "Vengir",
-    10: "Zebasi",
-    11: "Ai-Mo",
-    12: "Aquarion",
-    13: "Quetzali",
-    14: "∑∫ỹriȱŋ",
-    15: "Yădakk",
-    16: "Polaris",
-    17: "Cymanti",
-    "Nature": 0,
-    "Xin-xi": 1,
-    "Imperius": 2,
-    "Bardur": 3,
-    "Oumaji": 4,
-    "Kickoo": 5,
-    "Hoodrick": 6,
-    "Luxidoor": 7,
-    "Vengir": 8,
-    "Zebasi": 9,
-    "Ai-Mo": 10,
-    "Aquarion": 11,
-    "Quetzali": 12,
-    "∑∫ỹriȱŋ": 13,
-    "Yădakk": 14,
-    "Polaris": 15,
-    "Cymanti": 16,
-};
-
 const TRIBE_ID_2_NAME = [
     null, 'Nature', 'Ai-Mo', 'Aquarion', 'Bardur',
     '∑∫ỹriȱŋ', 'Hoodrick', 'Imperius', 'Kickoo',
@@ -95,7 +57,7 @@ const ClassNameToId = {
     45: "Juggernaut",
 };
 
-const CLIMATE_TO_ANIMAL = [
+const TEXTURE_INDEX_TO_ANIMAL = [
     'Invalid',
     'horse0001', // xinxi,
     'horse0002', // imperius,
@@ -115,9 +77,14 @@ const CLIMATE_TO_ANIMAL = [
     'lytheti', // cymanti
 ]
 
-const OWNER_TO_ID_INDEX = [
+// Tile climate IDs use the tribe enum, while sprite filenames use the artwork order.
+const TRIBE_TEXTURE_INDEX = [
     null, 0, 10, 11, 3, 13, 6, 2, 5, 7, 4, 12, 8, 1, 14, 9, 15, 16
 ]
+
+function terrainTextureIndex(climate) {
+    return TRIBE_TEXTURE_INDEX[climate] || 2;
+}
 
 const TerrainType = {
     0: "None",
@@ -168,12 +135,12 @@ const TechnologyNames = {
     10: "Fishing", 12: "Aquatism", 13: "Sailing", 14: "Navigation",
     15: "Hunting", 16: "Forestry", 17: "Mathematics", 18: "Archery", 19: "Spiritualism",
     20: "Climbing", 21: "Meditation", 22: "Philosophy", 23: "Mining", 24: "Smithery",
-    25: "Free Diving", 26: "Spearing", 28: "Waterways", 30: "Frostwork", 31: "Polar Warfare",
-    32: "Polarism", 35: "Shock Tactics", 36: "Recycling", 38: "Diplomacy", 39: "Ramming",
-    41: "Sledding", 42: "Ice Fishing", 43: "Pascetism", 49: "Oceantology", 121: "Rituals"
+    25: "Free Diving", 26: "Spearing", 28: "Forest Magic", 30: "Frostwork", 31: "Polar Warfare",
+    32: "Polarism", 35: "Shock Tactics", 36: "Recycling", 37: "Hydrology", 38: "Diplomacy",
+    41: "Sledding", 42: "Ice Fishing", 44: "Ramming", 48: "Waterways", 49: "Oceantology",
+    120: "Synergy", 121: "Rituals"
 }
 
-// Tech tree dependencies: tech_id -> [next techs that require it]
 // Tech tree dependencies: tech_id -> [next techs that require it]
 const TechTree = {
     // Unrequired (implicit) -> Tier 1 roots
@@ -191,9 +158,9 @@ const TechTree = {
     23: [24],     // Mining -> Smithery
     21: [22],     // Meditation -> Philosophy
     // Fishing branch
-    10: [13, 39], // Fishing -> Sailing, Ramming
+    10: [13, 44], // Fishing -> Sailing, Ramming
     13: [14],     // Sailing -> Navigation
-    39: [12],     // Ramming -> Aquatism
+    44: [12],     // Ramming -> Aquatism
     // Hunting branch
     15: [18, 16], // Hunting -> Archery, Forestry
     18: [19],     // Archery -> Spiritualism
@@ -203,42 +170,41 @@ const TechTree = {
 // Visual Nodes Configuration (Radial Layout - 72deg separation)
 // Branch Angles: Org(0), Climbing(72), Fishing(144), Hunting(216/-144), Riding(288/-72)
 const TechNodes = {
-    0: { x: 0, y: 0, icon: "🏛️" }, // Start
 
     // Organization Branch (0 deg - East)
-    6: { x: 160, y: 0, icon: "🤲" }, // Organization
-    8: { x: 260, y: 30, icon: "🌾" }, // Farming
-    9: { x: 360, y: 60, icon: "🏗️" }, // Construction
-    7: { x: 260, y: -30, icon: "🛡️" }, // Strategy
-    38: { x: 360, y: -60, icon: "🤝" }, // Diplomacy
+    6: { x: 160, y: 0, icon: "fruits/ResourceGFX_fruit_2" }, // Organization
+    8: { x: 260, y: 62, icon: "buildings/common/Farm" }, // Farming
+    9: { x: 360, y: 92, icon: "buildings/common/Windmill_0" }, // Construction
+    7: { x: 260, y: -62, icon: "units/Imperius/default/Imperius_default_Defender" }, // Strategy
+    38: { x: 360, y: -92, icon: "buildings/Imperius/Default/Houses/House_2_5" }, // Diplomacy
 
     // Climbing Branch (72 deg - South East)
-    20: { x: 60, y: 160, icon: "🧗" }, // Climbing
-    23: { x: 100, y: 240, icon: "⛏️" }, // Mining
-    24: { x: 140, y: 320, icon: "⚔️" }, // Smithery
-    21: { x: 0, y: 240, icon: "🧘" }, // Meditation
-    22: { x: -20, y: 340, icon: "🦉" }, // Philosophy
+    20: { x: 60, y: 160, icon: "terrain/mountains/mountain_2" }, // Climbing
+    23: { x: 100, y: 240, icon: "buildings/common/Mine" }, // Mining
+    24: { x: 140, y: 320, icon: "units/Imperius/default/Imperius_default_Swordsman" }, // Smithery
+    21: { x: 0, y: 240, icon: "buildings/common/Mountain Temple_1" }, // Meditation
+    22: { x: -20, y: 340, icon: "misc/literacy" }, // Philosophy
 
     // Fishing Branch (144 deg - South West)
-    10: { x: -130, y: 100, icon: "🎣" }, // Fishing
-    13: { x: -240, y: 120, icon: "⛵" }, // Sailing
-    14: { x: -340, y: 140, icon: "🧭" }, // Navigation
-    12: { x: -200, y: 200, icon: "🐢" }, // Aquatism
-    39: { x: -280, y: 280, icon: "🐏" }, // Ramming
+    10: { x: -130, y: 100, icon: "animals/fish" }, // Fishing
+    13: { x: -240, y: 120, icon: "units/Imperius/default/Imperius_default_Scoutship" }, // Sailing
+    14: { x: -340, y: 140, icon: "units/Imperius/default/Imperius_default_Bombership" }, // Navigation
+    44: { x: -165, y: 235, icon: "units/Imperius/default/Imperius_default_Rammership" }, // Ramming
+    12: { x: -230, y: 335, icon: "terrain/water/ocean" }, // Aquatism
 
     // Hunting Branch (-144 deg - North West)
-    15: { x: -130, y: -100, icon: "🏹" }, // Hunting
-    18: { x: -240, y: -120, icon: "🎯" }, // Archery
-    19: { x: -340, y: -140, icon: "👻" }, // Spiritualism
-    16: { x: -200, y: -200, icon: "🌲" }, // Forestry
-    17: { x: -280, y: -280, icon: "📐" }, // Mathematics
+    15: { x: -130, y: -100, icon: "animals/horse0003" }, // Hunting
+    18: { x: -240, y: -120, icon: "units/Imperius/default/Imperius_default_Archer" }, // Archery
+    19: { x: -340, y: -140, icon: "buildings/common/Forest Temple_1" }, // Spiritualism
+    16: { x: -200, y: -200, icon: "buildings/common/Lumber Hut" }, // Forestry
+    17: { x: -280, y: -280, icon: "units/Imperius/default/Imperius_default_Catapult" }, // Mathematics
 
     // Riding Branch (-72 deg - North East)
-    1: { x: 60, y: -160, icon: "🏇" }, // Riding
-    4: { x: 140, y: -250, icon: "🛣️" }, // Roads
-    5: { x: 200, y: -340, icon: "💰" }, // Trade (Far out)
-    2: { x: 0, y: -240, icon: "🕊️" }, // Free Spirit
-    3: { x: -40, y: -320, icon: "⚔️" }, // Chivalry
+    1: { x: 60, y: -160, icon: "units/Imperius/default/Imperius_default_Rider" }, // Riding
+    4: { x: 140, y: -250, icon: "misc/Road" }, // Roads
+    5: { x: 200, y: -340, icon: "buildings/common/Market01" }, // Trade (Far out)
+    2: { x: 0, y: -240, icon: "misc/citizen" }, // Free Spirit
+    3: { x: -40, y: -320, icon: "units/Imperius/default/Imperius_default_Knight" }, // Chivalry
 };
 
 const StructureCosts = {
@@ -253,11 +219,18 @@ const StructureCosts = {
     20: 20, // Mountain Temple
     21: 5, // Mine
     22: 5, // Forge
-    25: 5, // Grand Bazaar
+    23: 0, // Altar of Peace
+    24: 0, // Tower of Wisdom
+    25: 0, // Grand Bazaar
+    26: 0, // Emperor's Tomb
+    27: 0, // Gate of Power
+    28: 0, // Park of Fortune
+    29: 0, // Eye of God
     33: 5, // Outpost
     50: 5, // Market
     69: 20, // Ice Temple
     71: 3, // Road
+    123: 0, // Cult of Ciru
 };
 
 const StructureTypes = {
@@ -269,40 +242,6 @@ const StructureTypes = {
     32: "Sanctuary", 33: "Outpost", 34: "Ice Bank", 35: "Ice Temple",
     37: "Fungi", 38: "Algae", 39: "Mycelium", 41: "Clathrus", 47: "Lighthouse",
     48: "Bridge", 50: "Market", 70: "Embassy"
-};
-
-const StructureEmojis = {
-    3: "🛣️",
-    5: "🌾",
-    6: "🌬️",
-    8: "⚓",
-    12: "🪵",
-    13: "🪚",
-    17: "⛩️",
-    18: "🌲",
-    19: "🌊",
-    20: "⛰️",
-    21: "⛏️",
-    22: "⚒️",
-    23: "☮️",
-    24: "🦉",
-    25: "🏪",
-    26: "⚰️",
-    27: "⚡",
-    28: "🏆",
-    29: "👁️",
-    32: "⛩️",
-    33: "🏰",
-    34: "💰",
-    35: "🧊",
-    37: "🍄",
-    38: "🌿",
-    39: "🧶",
-    41: "🕸️",
-    47: "🗼",
-    48: "🌉",
-    50: "💰",
-    70: "🏛️",
 };
 
 const ResourceTypes = {
@@ -380,33 +319,6 @@ const UnitTypes = {
     125: "Mantis",
 };
 
-const UnitEmojis = {
-    2: "🪖", // Warrior
-    3: "🏇", // Rider
-    4: "🤺", // Knight
-    5: "🛡️", // Defender
-    8: "☄️", // Catapult
-    9: "🏹", // Archer
-    10: "🧙", // MindBender
-    11: "🗡️", // Swordsman
-    12: "👹", // Giant
-    15: "🐮", // Polytaur
-    20: "🐸", // Amphibian
-    21: "🔱", // Tridention
-    22: "❄️", // Mooni
-    23: "🛷", // BattleSled
-    24: "🏰", // IceFortress
-    25: "🏹", // IceArcher
-    28: "🕷️", // Hexapod
-    29: "🪲", // Doomux
-    30: "🦟", // Phychi
-    31: "🐚", // Kiton
-    32: "🐝", // Exida
-    33: "🐛", // Centipede
-    36: "🪄", // Shaman
-    121: "🧨", // Boomchi
-};
-
 const CaptureTypes = {
     0: 'None',
     1: 'Ruins',
@@ -454,26 +366,6 @@ const AbilityNames = {
     17: "Break Ice",
     18: "Break Peace",
     23: "Enchant Animal",
-};
-
-const AbilityEmojis = {
-    1: "🔥",
-    2: "🪓",
-    3: "🌿",
-    4: "💣",
-    5: "♻️",
-    6: "🌀",
-    7: "🩹",
-    8: "👋",
-    9: "💖",
-    11: "🩸",
-    13: "🧊",
-    14: "⚡",
-    15: "💥",
-    16: "🎖️",
-    17: "⛏️",
-    18: "💔",
-    23: "🦄",
 };
 
 const AbilityCosts = {

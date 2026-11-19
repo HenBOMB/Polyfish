@@ -492,14 +492,6 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
         }
     }
 
-    let rewards = city
-        .rewards
-        .iter()
-        // workshops or parks give +1 production
-        .filter(|r| **r == CityRewardType::Workshop || **r == CityRewardType::Park);
-
-    prod += rewards.count() as i32;
-
     // Clathrus and Market bonuses
     for &idx in &city._territory {
         if let Some(structure) = crate::functions::get_structure_at(state, idx) {
@@ -722,93 +714,51 @@ pub fn get_city_unit_count(state: &GameState, city: &crate::states::CityState) -
     count
 }
 
-/// Calculate a valid position to push a unit to
+/// Calculate a valid position for a forced spawn to push an occupying unit to.
 pub fn calculate_pushable_position(state: &GameState, unit: &UnitState) -> Option<i32> {
+    // Clockwise in the isometric view, starting at screen north.
+    const DIRECTIONS: [(i32, i32); 8] = [
+        (1, 1),
+        (1, 0),
+        (1, -1),
+        (0, -1),
+        (-1, -1),
+        (-1, 0),
+        (-1, 1),
+        (0, 1),
+    ];
+    const SEARCH_ORDER: [i32; 8] = [0, -1, 1, -2, 2, -3, 3, 4];
+
     let size = state.settings.size;
-    let initial_x = unit.coords.x;
-    let initial_y = unit.coords.y;
+    let Coords { x, y, .. } = unit.coords;
+    let facing = unit
+        .last_attack_coords
+        .filter(|_| get_unit_setting(unit.unit_type).range > 1)
+        .map(|target| ((target.x - x).signum(), (target.y - y).signum()))
+        .or_else(|| {
+            unit.prev_coords.is_valid().then(|| {
+                ((x - unit.prev_coords.x).signum(), (y - unit.prev_coords.y).signum())
+            })
+        })
+        .filter(|&direction| direction != (0, 0));
 
-    let center_x = size / 2;
-    let center_y = size / 2;
-
-    let (dx, dy) = if let Some(target) = unit.last_attack_coords {
-        // Rule 3: Ranged units (or any unit that attacked)
-        let settings = get_unit_setting(unit.unit_type);
-        let is_ranged = settings.range > 1;
-
-        // "last move or last attack"
-        // If it attacked, the attack direction is typically the "last" action for ranged units
-        // unless they have Escape and moved after.
-        let attacker_moved_after = has_skill(unit, SkillType::Escape) && unit.moved;
-
-        if is_ranged && unit.attacked && !attacker_moved_after {
-            let mut dx = if target.x > initial_x {
-                1
-            } else if target.x < initial_x {
-                -1
-            } else {
-                0
-            };
-            let mut dy = if target.y > initial_y {
-                1
-            } else if target.y < initial_y {
-                -1
-            } else {
-                0
-            };
-
-            // Apply flip for enemies (treating attack direction as movement direction for consistency)
-            if unit.owner != state.settings.current_player_turn_id {
-                dx = -dx;
-                dy = -dy;
-            }
-
-            if state.settings._verbose {
-                println!("Chosen ranged using attacked and !moved after");
-            }
-
+    let preferred = if let Some((dx, dy)) = facing {
+        if unit.owner == state.settings.current_player_turn_id {
             (dx, dy)
-        } else if unit.moved
-            && unit.prev_coords.is_valid()
-            && unit.prev_coords.idx != unit.coords.idx
-        {
-            if state.settings._verbose {
-                println!("Chosen ranged using moved");
-            }
-            // Revert to move logic if move was last or not a ranged attack
-            calculate_move_push_direction(state, unit)
         } else {
-            if state.settings._verbose {
-                println!("Chosen ranged using center");
-            }
-            get_direction_toward_center(initial_x, initial_y, center_x, center_y)
+            (-dx, -dy)
         }
-    } else if unit.prev_coords.is_valid() && unit.prev_coords.idx != unit.coords.idx {
-        if state.settings._verbose {
-            println!("Chosen using moved");
-        }
-        calculate_move_push_direction(state, unit)
     } else {
-        if state.settings._verbose {
-            println!("Chosen using center");
-        }
-        // Rule 4: Not previously moved or attacked: push towards center
-        get_direction_toward_center(initial_x, initial_y, center_x, center_y)
+        // Twice the center coordinate preserves the midpoint on even-sized boards.
+        let dx = (size - 1 - 2 * x).signum();
+        let dy = (size - 1 - 2 * y).signum();
+        if (dx, dy) == (0, 0) { (-1, -1) } else { (dx, dy) }
     };
 
-    // If tile occupied or impassable, try CCW then CW one tile at a time.
-    // 8 neighbors. Direction (dx, dy) is target.
-    // Order: Target, Target rotated CCW 45, Target rotated CW 45, Target CCW 90, ...
-    // Wait, "try counterclockwise and then clockwise one tile at a time".
-    // Does this mean: [Target, Target+CCW1, Target+CW1, Target+CCW2, Target+CW2...] ?
-    // Or strictly spiraling one way?
-    // "counterclockwise and then clockwise" implies an alternating search or preference?
-    // Let's implement an alternating search starting from the target direction vector.
-    // Directions are 8 neighbors.
-    // Neighbors in order: (0,-1) N, (1,-1) NE, (1,0) E, (1,1) SE, (0,1) S, (-1,1) SW, (-1,0) W, (-1,-1) NW.
-
-    let candidates = get_push_search_order(initial_x, initial_y, dx, dy, center_x, center_y);
-    for (nx, ny) in candidates {
+    let first = DIRECTIONS.iter().position(|&offset| offset == preferred)? as i32;
+    for step in SEARCH_ORDER {
+        let (dx, dy) = DIRECTIONS[(first + step).rem_euclid(8) as usize];
+        let (nx, ny) = (x + dx, y + dy);
         if is_in_bounds(nx, ny, size) {
             let idx = ny * size + nx;
             if is_steppable_for_push(state, unit, idx) {
@@ -820,141 +770,10 @@ pub fn calculate_pushable_position(state: &GameState, unit: &UnitState) -> Optio
     None
 }
 
-fn get_direction_toward_center(x: i32, y: i32, cx: i32, cy: i32) -> (i32, i32) {
-    let dx = if x < cx {
-        1
-    } else if x > cx {
-        -1
-    } else {
-        0
-    };
-    let mut dy = if y < cy {
-        1
-    } else if y > cy {
-        -1
-    } else {
-        0
-    };
-
-    // If exact center, push South
-    if dx == 0 && dy == 0 {
-        dy = 1;
-    }
-    (dx, dy)
-}
-
-fn calculate_move_push_direction(_state: &GameState, unit: &UnitState) -> (i32, i32) {
-    let initial_x = unit.coords.x;
-    let initial_y = unit.coords.y;
-    let prev = unit.prev_coords;
-
-    let mut dx = if initial_x > prev.x {
-        1
-    } else if initial_x < prev.x {
-        -1
-    } else {
-        0
-    };
-    let mut dy = if initial_y > prev.y {
-        1
-    } else if initial_y < prev.y {
-        -1
-    } else {
-        0
-    };
-
-    if _state.settings._verbose {
-        println!("Using prev_coords: {}", unit.prev_coords.idx);
-        println!("Chosen using moved: dx = {}, dy = {}", dx, dy);
-    }
-
-    // Rule 2: Enemy units pushed in opposite direction
-    if unit.owner != _state.settings.current_player_turn_id {
-        dx = -dx;
-        dy = -dy;
-    }
-    (dx, dy)
-}
-
-fn get_push_search_order(x: i32, y: i32, dx: i32, dy: i32, cx: i32, cy: i32) -> Vec<(i32, i32)> {
-    // 8 directions. Finding index of (dx, dy) in standard loop.
-    let dirs = [
-        (0, -1),
-        (1, -1),
-        (1, 0),
-        (1, 1),
-        (0, 1),
-        (-1, 1),
-        (-1, 0),
-        (-1, -1),
-    ];
-
-    let start_idx = dirs
-        .iter()
-        .position(|&(d_x, d_y)| d_x == dx && d_y == dy)
-        .unwrap_or(0);
-
-    // Alternating expansion: 0, 1, -1, 2, -2 ...
-    // prioritizing tiles that are closer to the map center as tie-breakers
-    let mut search_dirs = Vec::new();
-    search_dirs.push(dirs[start_idx]);
-
-    for i in 1..=4 {
-        let ccw_idx = (start_idx as i32 - i).rem_euclid(8) as usize;
-        let cw_idx = (start_idx as i32 + i).rem_euclid(8) as usize;
-
-        if ccw_idx == cw_idx {
-            search_dirs.push(dirs[ccw_idx]);
-        } else {
-            let (ccw_dx, ccw_dy) = dirs[ccw_idx];
-            let (cw_dx, cw_dy) = dirs[cw_idx];
-
-            let ccw_x = x + ccw_dx;
-            let ccw_y = y + ccw_dy;
-            let cw_x = x + cw_dx;
-            let cw_y = y + cw_dy;
-
-            // 1. Distance Tie-break: Which one is Euclidean-closer to the map center?
-            let dist_ccw = (ccw_x - cx).pow(2) + (ccw_y - cy).pow(2);
-            let dist_cw = (cw_x - cx).pow(2) + (cw_y - cy).pow(2);
-
-            if dist_cw < dist_ccw {
-                search_dirs.push(dirs[cw_idx]);
-                search_dirs.push(dirs[ccw_idx]);
-            } else if dist_ccw < dist_cw {
-                search_dirs.push(dirs[ccw_idx]);
-                search_dirs.push(dirs[cw_idx]);
-            } else {
-                // 2. Visual Tie-break: Prioritize visual horizontal center (x-y closer to 0)
-                let visual_ccw = (ccw_x - ccw_y).abs();
-                let visual_cw = (cw_x - cw_y).abs();
-                if visual_cw < visual_ccw {
-                    search_dirs.push(dirs[cw_idx]);
-                    search_dirs.push(dirs[ccw_idx]);
-                } else {
-                    search_dirs.push(dirs[ccw_idx]);
-                    search_dirs.push(dirs[cw_idx]);
-                }
-            }
-        }
-    }
-
-    search_dirs
-        .into_iter()
-        .map(|(d_x, d_y)| (x + d_x, y + d_y))
-        .collect()
-}
-
 pub fn is_steppable_for_push(state: &GameState, unit: &UnitState, idx: i32) -> bool {
-    // Hidden enemies block pushing
-    if get_enemy_at(state, idx, unit.owner).is_some() {
+    // Every occupant blocks the push, including unseen units.
+    if get_true_unit_at(state, idx).is_some() {
         return false;
-    }
-    // Our own units also block pushing
-    if let Some(tribe) = state.tribes.get(&unit.owner) {
-        if tribe.units.iter().any(|u| u.coords.idx == idx) {
-            return false;
-        }
     }
 
     // Terrain validity

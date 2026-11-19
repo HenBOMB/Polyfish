@@ -217,7 +217,7 @@ pub struct UnitState {
     pub veteran: bool,
     #[serde(default, alias = "xp")]
     pub kills: i32,
-    #[serde(default)]
+    #[serde(default = "Coords::invalid")]
     pub prev_coords: Coords,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub home_coords: Option<Coords>,
@@ -259,7 +259,7 @@ impl Default for UnitState {
             veteran: false,
             kills: 0,
             coords: Coords::default(),
-            prev_coords: Coords::default(),
+            prev_coords: Coords::invalid(),
             home_coords: None,
             direction: 0,
             flipped: false,
@@ -477,6 +477,10 @@ pub struct GameSettings {
     pub win_by_capital: bool,
     #[serde(default)]
     pub win_by_extermination: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research: Option<crate::research::MatchConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub might_winner: Option<PlayerId>,
     // Custom fields
     #[serde(default)]
     #[serde(rename = "_lastPlayerTurnId")]
@@ -538,6 +542,8 @@ impl Default for GameSettings {
             seed: 0,
             win_by_capital: false,
             win_by_extermination: false,
+            research: None,
+            might_winner: None,
             _last_player_turn_id: 0,
             _are_you_sure: false,
             _game_over: false,

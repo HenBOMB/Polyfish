@@ -213,6 +213,11 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                     Some(t) => t,
                     None => continue,
                 };
+                if tile.owner != pov_id
+                    || tile.ruling_city_coords.is_some_and(|coords| coords.idx != city.idx)
+                {
+                    continue;
+                }
 
                 // 1. Resource-based structures
                 if existing_struct.is_none() {

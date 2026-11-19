@@ -2,11 +2,10 @@
 
 #replay-controls {
     position: absolute;
-    bottom: 140px;
-    /* Above console */
+    bottom: 20px;
     left: 50%;
     transform: translateX(-50%);
-    width: 700px;
+    width: min(700px, calc(100% - 24px));
     background: rgba(16, 18, 27, 0.95);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 12px;

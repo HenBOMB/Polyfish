@@ -1,3 +1,17 @@
+const CITY_HOUSE_SPOTS = [
+    [1, 50, 53],
+    [2, 77, 51],
+    [3, 64, 66],
+    [4, 40, 61],
+    [1, 88, 60],
+    [2, 49, 40],
+    [3, 79, 39],
+    [4, 64, 78],
+];
+
+// World art shares the same depth scale. Offsets only break ties on the same tile.
+const WORLD_DEPTH = 2000;
+
 class MapRenderer {
     constructor(container) {
         this.container = container;
@@ -17,28 +31,7 @@ class MapRenderer {
             svg.style.height = '1px';
             svg.style.overflow = 'visible';
             svg.style.pointerEvents = 'none';
-            svg.style.zIndex = '500'; // Below units (5000) but above ground? Ground is 0..fog. 
-            // Ground zIndex is pos.y. We need borders to be visible. pos.y is large.
-            // Actually zIndex in CSS works differently. If tiles are position:absolute, they interleave based on z-index.
-            // SVG is one big element. If we put z-index 500, it might be behind some tiles and in front of others?
-            // Problem: SVG is a single flat layer. Tiles are sorted by Z.
-            // If we put SVG at z-index 500, it cuts through the map 3D-wise?
-            // Solution: Borders should probably be drawn PER TILE as an overlay div/img, or SVG needs to be very high Z to sit on top of everything?
-            // "borders of the city... around the edges". Usually this is on the ground.
-            // If we draw on top of everything (z 10000), it might overlay units?
-            // Dash border usually implies ground level.
-            // Let's try z-index 20 (just above ground which is 0-10, but below objects like cities/units which are 4000+).
-            // Actually objects have zIndex = pos.y + offsets.
-            // pos.y can be 0 to ~2000+.
-            // If SVG is z-index 20, it will be behind "southern" tiles.
-            // Isometric map layering is tricky with a single SVG.
-            // ALTERNATIVE: Create individual border divs for each tile edge?
-            // OR: SVG per tile?
-            // User asked for "dashed outline".
-            // Let's stick to SVG on top (z-index 6000) for now. It will overlay units slightly if they stand on the edge, but that's acceptable for a prompt.
-            svg.style.zIndex = '1500'; // Above ground, below most units/cities/trees ideally? 
-            // Trees are 2000+. Cities 4000. Units 5000.
-            // So 1500 is good: above ground, below objects.
+            svg.style.zIndex = '1500'; // Draw territory borders beneath world art.
             this.container.appendChild(svg);
         }
         this.territorySvg = svg;
@@ -53,6 +46,8 @@ class MapRenderer {
         });
         if (this.territorySvg) this.territorySvg.innerHTML = '';
         this.elements.clear();
+        this.selectedIdx = null;
+        selectedUnitIdx = null;
     }
 
     getPos(x, y) {
@@ -197,6 +192,7 @@ class MapRenderer {
         if (!isExplored) {
             this.updateLayer(idx, 'ground', 'terrain/tiles/undiscovered', pos, 10, ['ground', 'undiscovered']);
             this.removeLayer(idx, 'unit');
+            this.removeLayer(idx, 'unit-hit');
             this.removeLayer(idx, 'city');
             this.removeLayer(idx, 'city-stats');
             this.removeLayer(idx, 'resource');
@@ -205,20 +201,19 @@ class MapRenderer {
             return;
         }
 
-        // Ground
-        const tilefile = [null, 'terrain/water/water', 'terrain/water/ocean', null, null, null, 'terrain/tiles/ice'][tile.type]
-            || `terrain/tiles/ground_${tile.climate === 17 ? 16 : tile.climate}`;
-
-        const groundEl = this.updateLayer(idx, 'ground', tilefile, pos, 0, ['ground']);
+        const textureIndex = terrainTextureIndex(tile.climate);
+        const tileFile = getGroundFile(tile.type, tile.climate);
+        const groundEl = this.updateLayer(idx, 'ground', tileFile, pos, 0, ['ground']);
         groundEl.dataset.tileIdx = idx;
 
         groundEl.classList.remove('fog');
 
         // Ambient (Mountains/Forests)
         if (tile.type === 4) { // Mountain
-            this.updateLayer(idx, 'ambient', `terrain/mountains/mountain_${tile.climate === 17 ? 16 : tile.climate}`, pos, 1200, ['mountain']);
+            const classes = tile.climate === 8 ? ['mountain', 'kickoo-mountain'] : ['mountain'];
+            this.updateLayer(idx, 'ambient', `terrain/mountains/mountain_${textureIndex}`, pos, WORLD_DEPTH, classes);
         } else if (tile.type === 5) { // Forest
-            this.updateLayer(idx, 'ambient', `terrain/forests/Forest_${tile.climate === 17 ? 16 : tile.climate}`, pos, 2000, ['forest']);
+            this.updateLayer(idx, 'ambient', `terrain/forests/Forest_${textureIndex}`, pos, WORLD_DEPTH, ['forest']);
         } else {
             this.removeLayer(idx, 'ambient');
         }
@@ -248,7 +243,7 @@ class MapRenderer {
                 resClasses.push('interactive-outline');
             }
 
-            this.updateLayer(idx, 'resource', resFile, pos, 2500, resClasses);
+            this.updateLayer(idx, 'resource', resFile, pos, WORLD_DEPTH + 2, resClasses);
         } else {
             this.removeLayer(idx, 'resource');
         }
@@ -262,8 +257,16 @@ class MapRenderer {
                 const classes = ['structure'];
                 if (struct.type === 1) classes.push('village');
                 if (struct.type === 2) classes.push('ruins');
-                if (struct.type === 29) classes.push('monument');
-                this.updateLayer(idx, 'structure', structFile, pos, 2000, classes);
+                if (struct.type >= 23 && struct.type <= 29) classes.push('monument');
+                if (struct.type === 29) classes.push('eye-of-god');
+                if (struct.type === 47) {
+                    classes.push('lighthouse');
+                } else if (struct.type === 12) {
+                    classes.push('lumber-hut');
+                } else if ([5, 6, 8, 13, 21, 22].includes(struct.type)) {
+                    classes.push('improvement');
+                }
+                this.updateLayer(idx, 'structure', structFile, pos, WORLD_DEPTH + 1, classes);
             }
         } else {
             this.removeLayer(idx, 'structure');
@@ -275,8 +278,9 @@ class MapRenderer {
             const tribeName = TRIBE_ID_2_NAME[city.tribe.type];
             const tribeColor = TRIBE_COLORS[city.tribe.type] || 'rgba(0,0,0,0.5)';
 
+            const isCapital = tile.capitalOf > 0;
+            this.renderCityBuildings(idx, pos, city, tile, isCapital);
             const statsEl = this.updateLayer(idx, 'city-stats', '', pos, 4100, ['city-stats-layer']);
-            statsEl.style.backgroundImage = 'none'; // No background for stats container
 
             // Calculate segments (Polytopia style: dots for units, fill for population)
             const totalSegments = city.level + 1;
@@ -290,8 +294,6 @@ class MapRenderer {
             }
 
             const income = getCityProduction(state, city);
-            const isCapital = tile.capitalOf > 0;
-            const isConnected = city.connectedToCapital;
 
             statsEl.innerHTML = `
                 <div class="city-container">
@@ -315,23 +317,39 @@ class MapRenderer {
             this.removeLayer(idx, 'city-stats');
         }
 
-        // Units
-        const unit = (isExplored || !ENABLE_FOW) ? unitsByIndex[idx] : null;
-        if (unit) {
-            const tribeName = TRIBE_ID_2_NAME[unit.tribe.type];
-            const className = ClassNameToId[unit.unitType || unit.type];
-            if (className) {
-                const classes = ['unit'];
-                if (unit.moved || unit.attacked) classes.push('exausted');
-                if (unit.flipped) classes.push('flipped');
-                if (this.selectedIdx === idx) classes.push('selected-unit-highlight');
+        const unit = unitsByIndex[idx];
+        const unitFile = unit && getUnitFile(unit.tribe.type, unit.unitType || unit.type);
+        if (unitFile) {
+            const classes = ['unit'];
+            if (unit.moved || unit.attacked) classes.push('exausted');
+            if (unit.flipped) classes.push('flipped');
+            if (selectedUnitIdx === idx) classes.push('selected-unit-highlight');
 
-                const unitEl = this.updateLayer(idx, 'unit', `units/${tribeName}/default/${tribeName}_default_${className}`, pos, 5000, classes);
-                unitEl.innerHTML = `<div class="health">${Math.floor(unit.health)}</div>`;
-            }
+            const unitEl = this.updateLayer(idx, 'unit', unitFile, pos, WORLD_DEPTH + 4, classes);
+            unitEl.innerHTML = `<div class="health">${Math.floor(unit.health)}</div>`;
+            const hit = this.updateLayer(idx, 'unit-hit', '', pos, 27000, ['unit-hit']);
+            hit.onclick = event => this.handleTileClick(event, idx, true);
         } else {
             this.removeLayer(idx, 'unit');
+            this.removeLayer(idx, 'unit-hit');
         }
+    }
+
+    renderCityBuildings(idx, pos, city, tile, isCapital) {
+        const art = this.updateLayer(idx, 'city', '', pos, WORLD_DEPTH + 3, ['city']);
+        const tribeType = cityArtTribe(tile, city.tribe.type);
+        const houseCount = Math.min(CITY_HOUSE_SPOTS.length, Math.max(1, city.level) + 2);
+        const key = `${tribeType}:${houseCount}:${isCapital}`;
+        if (art.dataset.buildingLayout === key) return;
+
+        const buildings = CITY_HOUSE_SPOTS.slice(0, houseCount);
+        if (isCapital) buildings.push([7, 63, 47]);
+        art.innerHTML = buildings.map(([variant, x, y]) => {
+            const image = getCityFile(tribeType, variant);
+            const castle = variant === 7 ? ' city-castle' : '';
+            return `<span class="city-building${castle}" style="left:${x}px;top:${y}px;z-index:${y};background-image:url('textures/${image}.png')"></span>`;
+        }).join('');
+        art.dataset.buildingLayout = key;
     }
 
     updateLayer(idx, layerName, filename, pos, zIndex, classes = []) {
@@ -345,7 +363,7 @@ class MapRenderer {
             data.layers[layerName] = el;
         }
 
-        el.style.backgroundImage = `url('textures/${filename}.png')`;
+        el.style.backgroundImage = filename ? `url('textures/${filename}.png')` : 'none';
         el.style.left = `${pos.x}px`;
         el.style.top = `${pos.y}px`;
         el.style.zIndex = Math.floor(pos.y + zIndex);
@@ -377,10 +395,7 @@ class MapRenderer {
         mask.style.top = `${pos.y}px`;
         mask.style.zIndex = Math.floor(pos.y + 10000); // Topmost for interaction
 
-        mask.onclick = (e) => {
-            const unit = this.getUnitAt(idx);
-            this.handleTileClick(e, idx, unit, this.isTileVisible(idx));
-        };
+        mask.onclick = event => this.handleTileClick(event, idx, false);
         this.setupHover(mask, idx, this.isTileVisible(idx));
     }
 
@@ -398,83 +413,15 @@ class MapRenderer {
         }
     }
 
-    handleTileClick(e, idx, unit, isExplored) {
-        e.stopPropagation();
+    handleTileClick(event, idx, selectUnit) {
+        event.stopPropagation();
 
-        if (ENABLE_FOW) {
-            const tile = GAME_STATE.tiles[idx];
-            const currentTribeId = this.currentPovId;
-            const isExplored = tile && tile.explorers && tile.explorers.map(Number).includes(Number(currentTribeId));
-
-            if (!isExplored) {
-                this.selectedIdx = null;
-                selectedUnitIdx = null;
-                this.render(GAME_STATE, currentLegalMoves);
-                updateSelectionInfo();
-                return;
-            }
-        }
-
-        const hasUnit = !!unit;
-        const struct = GAME_STATE.structures[idx];
-        const resource = GAME_STATE.resources[idx];
-        // Village (3) or City (4)
-        const isCity = struct && (struct.structureType === 3 || struct.structureType === 4 || struct.type === 3 || struct.type === 4);
-        const hasActions = isCity || !!resource;
-
-        // Toggle selection with cycle: Unit -> City -> None
-        if (this.selectedIdx !== idx) {
-            // New tile selected
-            this.selectedIdx = idx;
-            selectedUnitIdx = hasUnit ? idx : null;
-        } else {
-            // Same tile clicked again
-            if (selectedUnitIdx === idx) {
-                // Check if we can trigger a self-action/ability (e.g. Recover)
-                // Filter for Ability moves (Type 3)
-                // Exclude Disband (Type 8) to avoid accidents
-                // Prioritize: Promote > Recover > Others
-                const abilityMoves = currentLegalMoves.filter(m =>
-                    m.src === idx &&
-                    m.moveType === 3 &&
-                    m.type !== 8 // Exclude Disband
-                );
-
-                if (abilityMoves.length > 0) {
-                    // Sort by priority (Recover=7, Promote=16, HealOthers=9)
-                    // We want Promote first, then Recover, then others.
-                    abilityMoves.sort((a, b) => {
-                        const score = (type) => {
-                            if (type === 16) return 100; // Promote
-                            if (type === 7) return 50;  // Recover
-                            if (type === 9) return 40;  // HealOthers
-                            return 0; // Others
-                        };
-                        return score(b.type) - score(a.type);
-                    });
-
-                    // Execute the best move
-                    playMove(abilityMoves[0]);
-                    return;
-                }
-
-                // Was on Unit, move to City if it has actions
-                if (hasActions) {
-                    selectedUnitIdx = null;
-                } else {
-                    // No city, deselect
-                    this.selectedIdx = null;
-                    selectedUnitIdx = null;
-                }
-            } else {
-                // Was on City (or tile with neither), deselect
-                this.selectedIdx = null;
-                selectedUnitIdx = null;
-            }
-        }
+        const repeatSelection = this.selectedIdx === idx && (selectedUnitIdx === idx) === selectUnit;
+        this.selectedIdx = this.isTileVisible(idx) && !repeatSelection ? idx : null;
+        selectedUnitIdx = selectUnit ? this.selectedIdx : null;
 
         this.render(GAME_STATE, currentLegalMoves);
-        updateSelectionInfo(e.clientX, e.clientY);
+        updateSelectionInfo(event.clientX, event.clientY);
     }
 
     setupHover(el, idx, isExplored) {
@@ -562,9 +509,14 @@ class MapRenderer {
         this.clearMoveHighlight();
         document.querySelectorAll('.move-overlay').forEach(el => el.remove());
         document.querySelectorAll('.combat-preview:not(.temp-highlight)').forEach(el => el.remove());
-        if (this.selectedIdx === null) return;
+        if (selectedUnitIdx === null) return;
 
-        const unitMoves = legalMoves.filter(m => m && typeof m === 'object' && m.src === this.selectedIdx);
+        const unitMoves = legalMoves.filter(move =>
+            move?.src === selectedUnitIdx && (
+                move.moveType === 1 || move.moveType === 2
+                || (move.moveType === 3 && move.type === AbilityType.Convert)
+            )
+        );
 
         unitMoves.forEach(move => {
             const targetIdx = move.target;
@@ -582,8 +534,10 @@ class MapRenderer {
 
             const img = document.createElement('img');
             const isAttack = move.moveType === 2;
-            img.src = isAttack ? 'textures/misc/attackTarget.png' : 'textures/misc/moveTarget.png';
-            img.style.width = '128px';
+            const occupiesTarget = isAttack || move.moveType === 3;
+            if (occupiesTarget) overlay.classList.add('occupied-target');
+            img.src = occupiesTarget ? 'textures/misc/attackTarget.png' : 'textures/misc/moveTarget.png';
+            img.style.width = occupiesTarget ? '52px' : '128px';
             overlay.appendChild(img);
 
             // Add combat preview for attack moves when predictions are enabled (permanent)
@@ -591,13 +545,16 @@ class MapRenderer {
                 this.renderCombatPreview(this.selectedIdx, targetIdx, pos);
             }
 
-            overlay.onclick = (e) => {
-                e.stopPropagation();
+            const hit = document.createElement('span');
+            hit.className = 'movement-hit';
+            hit.title = isAttack ? 'Attack' : occupiesTarget ? 'Convert' : 'Move';
+            hit.onclick = event => {
+                event.stopPropagation();
                 playMove(move);
             };
-
-            overlay.onmouseenter = () => this.highlightMove(move);
-            overlay.onmouseleave = () => this.clearMoveHighlight();
+            hit.onmouseenter = () => this.highlightMove(move);
+            hit.onmouseleave = () => this.clearMoveHighlight();
+            overlay.appendChild(hit);
 
             this.container.appendChild(overlay);
         });
@@ -628,12 +585,8 @@ class MapRenderer {
 
             const img = document.createElement('img');
             img.src = 'textures/misc/Capture.png';
-            img.style.width = '64px'; // Smaller than full tile
-            img.style.height = '64px';
-            img.style.position = 'absolute';
-            img.style.left = '32px';
-            img.style.top = '32px';
-            img.className = 'pulse-animation'; // Add CSS animation class
+            img.alt = 'Capture';
+            img.className = 'capture-hit pulse-animation';
 
             indicator.appendChild(img);
 
@@ -856,15 +809,12 @@ class MapRenderer {
                 const overlay = document.createElement('div');
                 overlay.classList.add('tile', 'predicted-terrain');
 
-                // Map terrain type to texture
-                // 1: Water, 2: Ocean, 3: Field, 4: Mountain, 5: Forest, 6: Ice
-                const tilefile = [null, 'terrain/water/water', 'terrain/water/ocean', null, 'terrain/mountains/mountain', 'terrain/forests/Forest', 'terrain/tiles/ice'][terrainType]
-                    || `terrain/tiles/ground_${climate === 17 ? 16 : climate}`;
-
-                // Handle specific suffixes for mountain/forest
-                let finalFile = tilefile;
-                if (terrainType === 4) finalFile = `terrain/mountains/mountain_${climate}`;
-                if (terrainType === 5) finalFile = `terrain/forests/Forest_${climate}`;
+                const textureIndex = terrainTextureIndex(climate);
+                const terrainFile = {
+                    4: `terrain/mountains/mountain_${textureIndex}`,
+                    5: `terrain/forests/Forest_${textureIndex}`,
+                };
+                const finalFile = terrainFile[terrainType] || getGroundFile(terrainType, climate);
 
                 overlay.style.backgroundImage = `url('textures/${finalFile}.png')`;
                 overlay.style.left = `${pos.x}px`;

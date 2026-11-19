@@ -205,6 +205,12 @@ pub fn generate_forest_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
 
     for city in &tribe.cities {
         for &tile_idx in &city._territory {
+            if state.tiles.get(&tile_idx).is_none_or(|tile| {
+                tile.owner != pov_id
+                    || tile.ruling_city_coords.is_some_and(|coords| coords.idx != city.idx)
+            }) {
+                continue;
+            }
             // Check enemy
             if crate::functions::get_enemy_at(state, tile_idx, pov_id).is_some() {
                 continue;

@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use Polyfish in research, cite the version used."
+title: "Polyfish"
+type: software
+version: "1.0.0-rc.1"
+authors:
+  - name: "Polyfish contributors"
+repository-code: "https://github.com/HenBOMB/Polyfish"
+abstract: "A Rust simulator, playable browser interface, and headless environment for strategy-game AI research."

@@ -25,13 +25,6 @@
     font-size: 18px;
 }
 
-.game-logo small {
-    font-weight: 400;
-    font-size: 10px;
-    color: var(--rts-text-dim);
-    margin-left: 8px;
-}
-
 .resource-item {
     display: flex;
     align-items: center;
@@ -95,7 +88,7 @@
 #tile-action-popup {
     position: fixed;
     z-index: 3000;
-    pointer-events: auto;
+    pointer-events: none;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -121,13 +114,12 @@
 #selection-rich-content {
     display: flex;
     align-items: center;
-    gap: 15px;
-    height: 100%;
+    gap: 8px;
 }
 
 .tile-thumbnail-container {
-    width: 70px;
-    height: 70px;
+    width: 44px;
+    height: 44px;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 12px;
@@ -141,8 +133,8 @@
 }
 
 .tile-thumbnail-sprite {
-    width: 60px;
-    height: 60px;
+    width: 38px;
+    height: 38px;
     background-size: contain;
     background-repeat: no-repeat;
     background-position: center;
@@ -181,6 +173,7 @@
 }
 
 .poly-action-btn {
+    pointer-events: auto;
     width: 65px;
     height: 65px;
     border-radius: 50%;
@@ -205,9 +198,31 @@
     transform: scale(0.95);
 }
 
-.poly-action-btn .icon {
-    font-size: 44px;
+.poly-action-btn .poly-action-icon {
+    width: 48px;
+    height: 48px;
+    object-fit: contain;
+    flex-shrink: 0;
+    pointer-events: none;
     filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.4));
+}
+
+.poly-action-btn .poly-action-unit {
+    width: 78px;
+    height: 78px;
+}
+
+.poly-action-btn .poly-action-heal {
+    width: 36px;
+    height: 36px;
+    background-color: #f0fff8;
+    clip-path: polygon(34% 0, 66% 0, 66% 34%, 100% 34%, 100% 66%, 66% 66%,
+        66% 100%, 34% 100%, 34% 66%, 0 66%, 0 34%, 34% 34%);
+}
+
+.poly-action-btn:disabled {
+    cursor: default;
+    opacity: 0.5;
 }
 
 .poly-action-btn .cost-badge {
@@ -227,12 +242,19 @@
     gap: 4px;
 }
 
+.poly-action-btn .cost-badge img {
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
+}
+
 .poly-action-btn .cost-badge.reward-badge {
     color: #10b981;
     border-color: #10b981;
 }
 
 .poly-action-label {
+    text-align: center;
     font-size: 13px;
     font-weight: 700;
     color: white;
@@ -242,59 +264,131 @@
 }
 
 
-/* COMMAND CONSOLE (BOTTOM BAR) */
 #command-console {
-    height: 150px;
-    background: var(--rts-panel);
-    border-top: 2px solid var(--rts-border);
-    display: grid;
-    /* Reduced last column from 100px to auto or just clamp it */
-    grid-template-columns: 280px 1fr 320px 140px;
-    z-index: 1000;
-    flex-shrink: 0;
-}
-
-.sys-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px;
-    /* Tighter gap */
-    width: 100%;
-}
-
-.console-section {
-    padding: 10px;
-    /* Reduce padding from 20px */
-    border-right: 1px solid var(--rts-border);
     display: flex;
-    flex-direction: column;
-    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    min-height: 62px;
+    padding: 8px 12px;
+    background: var(--rts-panel);
+    border-top: 1px solid var(--rts-border);
+    flex-shrink: 0;
+    z-index: 1000;
 }
 
-.console-section:last-child {
-    border-right: none;
-}
-
-.info-panel {
+#selection-container {
+    flex: 1 1 10rem;
+    min-width: 0;
     font-size: 14px;
     color: var(--rts-text-dim);
-    line-height: 1.4;
 }
 
-.actions-panel {
-    flex-direction: row;
-    gap: 24px;
+.command-actions, .turn-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
 }
 
-.action-grid {
+.turn-actions {
+    border-inline-start: 1px solid var(--rts-border);
+    padding-inline-start: 10px;
+    margin-inline-start: 4px;
+}
+
+#command-console .rts-btn {
+    min-height: 40px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    line-height: 1.2;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: none;
+    white-space: nowrap;
+}
+
+#command-console .rts-btn:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
+#game-files {
+    position: relative;
+}
+
+#game-files summary {
+    list-style: none;
+}
+
+#game-files summary::-webkit-details-marker {
+    display: none;
+}
+
+#game-files summary::after {
+    content: "▾";
+    color: var(--rts-text-dim);
+}
+
+.game-files-menu {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    min-width: max-content;
     display: grid;
-    grid-template-columns: repeat(2, 130px);
-    gap: 12px;
+    gap: 4px;
+    padding: 6px;
+    border: 1px solid var(--rts-border);
+    border-radius: 8px;
+    background: var(--rts-bg);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
 }
 
-.action-grid.secondary {
-    grid-template-columns: repeat(2, 90px);
-    gap: 10px;
+#command-console .game-files-menu .rts-btn {
+    justify-content: flex-start;
+    padding-inline: 10px;
+}
+
+#app-container.replay-mode #command-console {
+    display: none;
+}
+
+@media (max-width: 640px) {
+    #command-console {
+        gap: 6px;
+        padding: 6px;
+    }
+
+    .command-actions {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        flex: 1 1 100%;
+        gap: 4px;
+    }
+
+    .turn-actions {
+        display: contents;
+    }
+
+    #command-console .rts-btn {
+        width: 100%;
+        padding-inline: 3px;
+        font-size: clamp(11px, 3.3vw, 13px);
+        gap: 4px;
+    }
+
+    #top-rts-bar {
+        height: auto;
+        min-height: 44px;
+        flex-wrap: wrap;
+        gap: 6px 12px;
+        padding: 6px 10px;
+    }
+
+    .rts-group {
+        gap: 8px;
+    }
 }
 
 .rts-btn {
@@ -338,42 +432,6 @@
     font-size: 11px;
     padding: 6px;
     margin-bottom: 6px;
-}
-
-.ai-status {
-    margin-bottom: 12px;
-    display: flex;
-    justify-content: space-between;
-    font-size: 13px;
-}
-
-.mcts-row {
-    display: flex;
-    gap: 15px;
-    align-items: center;
-}
-
-.ai-step {
-    flex: 1;
-    height: 54px;
-    background: #1e1b4b;
-    border-color: #4338ca;
-}
-
-.depth-slider-container {
-    flex: 1;
-}
-
-.depth-slider-container label {
-    display: block;
-    font-size: 11px;
-    color: var(--rts-text-dim);
-    margin-bottom: 6px;
-}
-
-input[type=range] {
-    width: 100%;
-    cursor: pointer;
 }
 
 /* Reusable Helpers */

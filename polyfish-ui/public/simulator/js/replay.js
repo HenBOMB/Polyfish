@@ -15,11 +15,10 @@ async function openReplayFile(input) {
     if (!file) return;
     showToast(`Loading ${file.name}...`);
     try {
-        const replay = JSON.parse(await file.text());
         const response = await fetch('/replay/open', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(replay),
+            body: await file.text(),
         });
         const data = await response.json();
         if (!response.ok || data.status === 'error') {
@@ -60,7 +59,12 @@ function enterReplayMode(data, filename) {
     document.getElementById('replay-controls').classList.remove('hidden');
     document.getElementById('replay-title').textContent =
         data.metadata?.gameId || filename || 'Replay';
+    currentLegalMoves = [];
+    renderer.clear();
+    aiTurnIndicator.textContent = 'Replay';
+    aiTurnIndicator.classList.remove('your-turn');
     applyReplayState(data);
+    focusCamera();
 }
 
 function exitReplayMode() {

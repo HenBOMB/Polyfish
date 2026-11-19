@@ -8,7 +8,8 @@ use crate::actions::{
     try_discover_other_tribes, try_remove_effect, update_exploration,
 };
 use crate::functions::{
-    get_adjacent_indices, get_pov_tribe, get_total_production, is_game_over, sync_scores,
+    get_adjacent_indices, get_chebyshev_distance, get_pov_tribe, get_total_production, is_game_over,
+    sync_scores,
 };
 use crate::moves::{Move, generate_legal_moves};
 use crate::settings::has_technology;
@@ -203,15 +204,26 @@ impl Game {
         let mut territory_updates = Vec::new();
         for tribe in self.state.tribes.values() {
             for city in &tribe.cities {
-                // fetch nearby tiles and filter the ones we own
                 let territory = get_adjacent_indices(&self.state, city.idx, 2)
                     .into_iter()
                     .filter(|&idx| {
-                        self.state
-                            .tiles
-                            .get(&idx)
-                            .map(|t| t.owner == city.owner)
-                            .unwrap_or(false)
+                        let Some(tile) = self.state.tiles.get(&idx) else {
+                            return false;
+                        };
+                        if tile.owner != city.owner {
+                            return false;
+                        }
+                        if let Some(ruling_city) = tile.ruling_city_coords {
+                            return ruling_city.idx == city.idx;
+                        }
+                        // Older snapshots may only record the tribe owner.
+                        tribe
+                            .cities
+                            .iter()
+                            .min_by_key(|candidate| {
+                                (get_chebyshev_distance(idx, candidate.idx, map_size), candidate.idx)
+                            })
+                            .is_some_and(|nearest| nearest.idx == city.idx)
                     })
                     .collect::<Vec<i32>>();
                 territory_updates.push((tribe.id, city.idx, territory));
@@ -313,7 +325,14 @@ impl Game {
         let undo = if game_move.move_type() == MoveType::EndTurn {
             let end_undo = self.end_turn();
             let old_recent_moves = std::mem::take(&mut self.state.settings._recent_moves);
+            let record_turn = self.state.settings.research.is_some();
+            if record_turn {
+                self.state._history.push(game_move.serialize());
+            }
             Box::new(move |s: &mut GameState| {
+                if record_turn {
+                    s._history.pop();
+                }
                 end_undo(s);
                 s.settings._recent_moves = old_recent_moves;
             }) as UndoCallback

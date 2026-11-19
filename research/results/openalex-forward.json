@@ -1,0 +1,137 @@
+{
+  "count": 22,
+  "works": [
+    {
+      "id": "https://openalex.org/W4399425967",
+      "doi": "https://doi.org/10.1109/tai.2024.3410935",
+      "title": "Games for Artificial Intelligence Research: A Review and Perspectives",
+      "publication_year": 2024
+    },
+    {
+      "id": "https://openalex.org/W4294437784",
+      "doi": "https://doi.org/10.1145/3555858.3555879",
+      "title": "Generative Personas That Behave and Experience Like Humans",
+      "publication_year": 2022
+    },
+    {
+      "id": "https://openalex.org/W4376877202",
+      "doi": "https://doi.org/10.1145/3596912",
+      "title": "Online Damage Recovery for Physical Robots with Hierarchical Quality-Diversity",
+      "publication_year": 2023
+    },
+    {
+      "id": "https://openalex.org/W4379117282",
+      "doi": "https://doi.org/10.1109/tg.2023.3282351",
+      "title": "Elastic Monte Carlo Tree Search",
+      "publication_year": 2023
+    },
+    {
+      "id": "https://openalex.org/W4223530229",
+      "doi": "https://doi.org/10.1145/3512290.3528751",
+      "title": "Hierarchical quality-diversity for online damage recovery",
+      "publication_year": 2022
+    },
+    {
+      "id": "https://openalex.org/W3152887548",
+      "doi": "https://doi.org/10.1109/cog52621.2021.9619094",
+      "title": "Generating Diverse and Competitive Play-Styles for Strategy Games",
+      "publication_year": 2021
+    },
+    {
+      "id": "https://openalex.org/W4205266426",
+      "doi": "https://doi.org/10.1109/cog52621.2021.9619029",
+      "title": "Game State and Action Abstracting Monte Carlo Tree Search for General Strategy Game-Playing",
+      "publication_year": 2021
+    },
+    {
+      "id": "https://openalex.org/W4410614048",
+      "doi": "https://doi.org/10.1109/access.2025.3572830",
+      "title": "A Survey of Non-Learning-Based Abstractions for Sequential Decision-Making",
+      "publication_year": 2025
+    },
+    {
+      "id": "https://openalex.org/W4416795735",
+      "doi": "https://doi.org/10.1016/j.swevo.2025.102240",
+      "title": "A survey on Quality-Diversity optimization: Approaches, applications, and challenges",
+      "publication_year": 2025
+    },
+    {
+      "id": "https://openalex.org/W4366126549",
+      "doi": "https://doi.org/10.1007/978-3-031-25759-9_9",
+      "title": "State and Action Abstraction for Search and Reinforcement Learning Algorithms",
+      "publication_year": 2023
+    },
+    {
+      "id": "https://openalex.org/W4206902116",
+      "doi": "https://doi.org/10.1109/ssci50451.2021.9659880",
+      "title": "Adapting Procedural Content Generation to Player Personas Through Evolution",
+      "publication_year": 2021
+    },
+    {
+      "id": "https://openalex.org/W4281784970",
+      "doi": "https://doi.org/10.1109/cog51982.2022.9893587",
+      "title": "Elastic Monte Carlo Tree Search with State Abstraction for Strategy Game Playing",
+      "publication_year": 2022
+    },
+    {
+      "id": "https://openalex.org/W3164650905",
+      "doi": null,
+      "title": "STRATEGA: A General Strategy Games Framework.",
+      "publication_year": 2020
+    },
+    {
+      "id": "https://openalex.org/W4289644861",
+      "doi": "https://doi.org/10.48550/arxiv.2208.00204",
+      "title": "Tackling Neural Architecture Search With Quality Diversity Optimization",
+      "publication_year": 2022
+    },
+    {
+      "id": "https://openalex.org/W4318953594",
+      "doi": "https://doi.org/10.1109/tg.2023.3241864",
+      "title": "Beyond Playing to Win: Creating a Team of Agents With Distinct Behaviors for Automated Gameplay",
+      "publication_year": 2023
+    },
+    {
+      "id": "https://openalex.org/W4387005942",
+      "doi": "https://doi.org/10.1109/cec53210.2023.10254093",
+      "title": "Increasing Features in MAP-Elites Using an Age-Layered Population Structure",
+      "publication_year": 2023
+    },
+    {
+      "id": "https://openalex.org/W3165381964",
+      "doi": null,
+      "title": "MCTS Pruning in Turn-Based Strategy Games.",
+      "publication_year": 2020
+    },
+    {
+      "id": "https://openalex.org/W4296835818",
+      "doi": "https://doi.org/10.24834/isbn.9789178773084",
+      "title": "Exploring Game Design through Human-AI Collaboration",
+      "publication_year": 2022
+    },
+    {
+      "id": "https://openalex.org/W4413014923",
+      "doi": "https://doi.org/10.1145/3676642.3736118",
+      "title": "Syno: Structured Synthesis for Neural Operators",
+      "publication_year": 2025
+    },
+    {
+      "id": "https://openalex.org/W4414872377",
+      "doi": "https://doi.org/10.1063/5.0295794",
+      "title": "Utility of deep reinforcement learning techniques across diverse gaming environments",
+      "publication_year": 2025
+    },
+    {
+      "id": "https://openalex.org/W7152090743",
+      "doi": "https://doi.org/10.70675/de823302z821fz41f7zae49z39bd97421378",
+      "title": "L'optimisation multi-tâche et ses applications à la robotique : d'abord résoudre, ensuite généraliser",
+      "publication_year": 2024
+    },
+    {
+      "id": "https://openalex.org/W7221787692",
+      "doi": "https://doi.org/10.1007/978-981-92-5641-9_34",
+      "title": "A Turn-Based Strategy Research Platform for AI Benchmark",
+      "publication_year": 2026
+    }
+  ]
+}

@@ -56,11 +56,6 @@ window.confirmInitialStateSelection = function () {
 async function loadInitialState(id) {
     showToast("⏳ Loading initial state...");
     try {
-        if (recordedMovesList) recordedMovesList.innerHTML = '';
-        recordedMoves = [];
-        REPLAY_HISTORY = [];
-        REPLAY_INDEX = -1;
-
         const res = await fetch('/replay/load_initial', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -96,47 +91,7 @@ var GAME_STATE = {};
 var currentLegalMoves = [];
 let selectedUnitIdx = null; // Currently selected unit's tile index
 var ENABLE_FOW = true; // Fog of War toggle
-var SHOW_PREDICTIONS = false; // AI Predictions overlay toggle
-var TRAIN_MODE_ACTIVE = false; // Train Mode Toggle
-var INTERACTIVE_MODE = false; // AI Assistant Toggle
-var PENDING_AI_MOVE = null;
-const teacherHud = document.getElementById('teacher-hud');
-
-const MOVE_TYPE_ICONS = {
-    'Step': '👟',
-    'Attack': '⚔️',
-    'Research': '🧪',
-    'Summon': '🧚',
-    'Build': '🏗️',
-    'Harvest': '🍎',
-    'Capture': '🚩',
-    'EndTurn': '⌛',
-    'None': '🎓'
-};
-
-const TECH_ICONS = {
-    0: '❓', 1: '🏇', 2: '🍃', 3: '🛡️', 4: '🛤️', 5: '⚖️',
-    6: '🍎', 7: '📜', 8: '🚜', 9: '🏗️', 10: '🎣',
-    12: '⚓', 13: '⛵', 14: '🔭', 15: '🏹', 16: '🌲',
-    17: '📐', 18: '🎯', 19: '✨', 20: '🧗', 21: '🧘',
-    22: '🧠', 23: '⛏️', 24: '🔨'
-};
-
-// Event Listener for AI VIS Toggle
-document.getElementById('btn-predictions').addEventListener('click', () => {
-    SHOW_PREDICTIONS = !SHOW_PREDICTIONS;
-    const btn = document.getElementById('btn-predictions');
-    btn.classList.toggle('active', SHOW_PREDICTIONS);
-
-    if (SHOW_PREDICTIONS) {
-        showToast("🔮 AI Vision: Enabled");
-        // Force refresh of overlays
-        if (GAME_STATE._prediction) renderer.renderFOWPredictions(GAME_STATE._prediction);
-    } else {
-        showToast("🔮 AI Vision: Disabled");
-        renderer.renderFOWPredictions(null); // Clear
-    }
-});
+const SHOW_PREDICTIONS = false;
 
 // UI Elements
 const turnVal = document.getElementById('turn-val');
@@ -145,15 +100,8 @@ const tribeNameLabel = document.getElementById('tribe-name');
 const starsVal = document.getElementById('stars-val');
 const scoreVal = document.getElementById('score-val');
 const incomeVal = document.getElementById('income-val');
-const recordedMovesList = document.getElementById('recorded-moves-list');
-let recordedMoves = [];
-const trainingStatusHUD = document.getElementById('training-status');
 const aiTurnIndicator = document.getElementById('ai-turn-indicator');
-const lastMoveVal = document.getElementById('last-move-val');
-const mctsDepth = document.getElementById('mcts-depth');
-const mctsDepthVal = document.getElementById('mcts-depth-val');
 const toastContainer = document.getElementById('toast-container');
-const selectionInfo = document.getElementById('selection-info');
 const tileActionPopup = document.getElementById('tile-action-popup');
 
 function showToast(message) {
@@ -169,164 +117,10 @@ function showToast(message) {
     }, 3000);
 }
 
-// --- Evaluation Bar ---
-function updateEvalBar(evaluation) {
-    if (!evaluation) return;
-    const fillP1 = document.getElementById('eval-fill-p1');
-    const fillP2 = document.getElementById('eval-fill-p2');
-    const indicator = document.getElementById('eval-indicator');
-    if (!fillP1 || !fillP2 || !indicator) return;
-
-    const adv = evaluation.advantage || 0; // -1 to 1
-    // Map advantage to fill ratio: adv=1 means P1 fills 100%, adv=-1 means P2 fills 100%
-    const p1Pct = ((1 + adv) / 2) * 100; // 0-100
-    const p2Pct = 100 - p1Pct;
-
-    fillP1.style.flex = `${p1Pct} 0 0`;
-    fillP2.style.flex = `${p2Pct} 0 0`;
-
-    // Update indicator text
-    const sign = adv > 0 ? '+' : '';
-    indicator.textContent = `${sign}${adv.toFixed(2)}`;
-
-    // Style the indicator based on who's winning
-    indicator.classList.remove('p1-winning', 'p2-winning', 'even');
-    if (adv > 0.05) {
-        indicator.classList.add('p1-winning');
-    } else if (adv < -0.05) {
-        indicator.classList.add('p2-winning');
-    } else {
-        indicator.classList.add('even');
-    }
-}
-
-// --- MCTS Analysis Panel ---
-let mctsParams = {
-    passive: false,
-};
-
-async function runPassiveAnalysis(force = false) {
-    if (!mctsParams.passive && !force) return;
-    if (pendingMctsMove || PENDING_AI_MOVE) {
-        if (!force) setTimeout(runPassiveAnalysis, 1000);
-        return;
-    }
-
-    try {
-        const res = await fetch('/autostep', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ iterations: Number(mctsDepth.value), dry_run: true })
-        });
-        const data = await res.json();
-
-        // Update ONLY the analysis panel and heatmap to avoid full UI redraw stutter
-        if (data.mctsAnalysis) {
-            updateMctsPanel(data.mctsAnalysis);
-            renderer.renderMCTSHeatmap(data.mctsAnalysis);
-        }
-
-        // Update predictions if AI VIS is on
-        if (SHOW_PREDICTIONS && data.state && data.state._prediction) {
-            renderer.renderFOWPredictions(data.state._prediction);
-        }
-    } catch (e) {
-        console.error("Analysis Error:", e);
-    }
-
-    // Schedule next run if still enabled (and not just a forced one-shot)
-    if (mctsParams.passive && !force) {
-        setTimeout(runPassiveAnalysis, 3000);
-    }
-}
-
-function updateMctsPanel_disabled(analysis) {
-    const panels = document.querySelectorAll('.mcts-panel');
-    const moveList = document.getElementById('mcts-moves-list');
-    const pvContainer = document.getElementById('mcts-pv');
-
-    if (!analysis || analysis.type !== 'heuristic' || !moveList || !pvContainer) {
-        if (moveList) moveList.innerHTML = '';
-        if (pvContainer) pvContainer.innerHTML = '';
-        return;
-    }
-
-    // 1. Top Moves
-    moveList.innerHTML = '';
-    const evals = analysis.evaluations || [];
-    const maxVisits = Math.max(...evals.map(e => e.visits || 0), 1);
-
-    if (evals.length === 0) {
-        moveList.innerHTML = '<div class="mcts-empty">No analysis available</div>';
-    } else {
-        // Show top 15
-        evals.slice(0, 15).forEach((ev, idx) => {
-            const row = document.createElement('div');
-            row.className = 'mcts-move-row' + (idx === 0 ? ' best' : '');
-
-            const isPositive = ev.win_rate > 50;
-            const isNegative = ev.win_rate < -50;
-            const winRateClass = isPositive ? 'positive' : (isNegative ? 'negative' : 'neutral');
-
-            // Normalize visits for bar width
-            const barWidth = Math.max(0, Math.min(100, (ev.visits / maxVisits) * 100));
-
-            row.innerHTML = `
-                <div class="mcts-move-rank">${idx + 1}</div>
-                <div class="mcts-move-desc" title="${ev.description || 'Unknown Move'}">${ev.description || 'Move ' + ev.target}</div>
-                <div class="mcts-move-bar-wrap">
-                    <div class="mcts-move-bar" style="width: ${barWidth}%"></div>
-                </div>
-                <div class="mcts-move-winrate ${winRateClass}">${ev.win_rate > 0 ? '+' : ''}${ev.win_rate.toFixed(0)}</div>
-            `;
-            moveList.appendChild(row);
-        });
-    }
-
-    // 2. Principal Variation
-    pvContainer.innerHTML = '';
-    const pv = analysis.principal_variation || [];
-    if (pv.length === 0) {
-        pvContainer.innerHTML = '<div class="mcts-empty">Line not explored</div>';
-    } else {
-        pv.forEach((moveDesc, i) => {
-            if (i > 0) {
-                const arrow = document.createElement('div');
-                arrow.className = 'pv-arrow';
-                arrow.textContent = '▶';
-                pvContainer.appendChild(arrow);
-            }
-            const chip = document.createElement('div');
-            chip.className = 'pv-chip';
-            chip.textContent = moveDesc;
-            pvContainer.appendChild(chip);
-        });
-    }
-}
-
 // --- Move Interaction ---
 
 const renderer = new MapRenderer(mapContainer);
 const hoverEl = document.getElementById('hovertile');
-
-let pendingMctsMove = null;
-
-async function apiAction(endpoint, body) {
-    try {
-        const res = await fetch(endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        const data = await res.json();
-        updateUI(data);
-        return data;
-    } catch (e) {
-        console.error("API Error:", e);
-    } finally {
-        document.querySelectorAll('.rts-btn').forEach(b => b.disabled = false);
-    }
-}
 
 function updateUI(data) {
     const prevSettings = GAME_STATE.settings || null;
@@ -346,41 +140,10 @@ function updateUI(data) {
         GAME_STATE = data.state;
     }
     if (data.legalMoves) currentLegalMoves = data.legalMoves;
-    if (data.movePlayed) lastMoveVal.textContent = data.movePlayed;
-
-    let lastMctsAnalysis = null;
-
-    // Clear pending AI move if a move was played (manual or AI)
-    if (data.movePlayed) {
-        PENDING_AI_MOVE = null;
-        const hud = document.getElementById('teacher-hud');
-        if (hud) hud.classList.add('hidden');
-        renderer.clearMoveHighlight();
-    }
-
-    // Reset MCTS analysis if not provided in this update (e.g. manual move)
-    if (data.mctsAnalysis) {
-        lastMctsAnalysis = data.mctsAnalysis;
-    } else if (data.movePlayed && data.movePlayed !== 'none') {
-        lastMctsAnalysis = null;
-    }
-
     const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
     const currentTribe = GAME_STATE.tribes[currentTribeId.toString()] || GAME_STATE.tribes[currentTribeId];
 
     if (!currentTribe) return;
-
-    let lastScore = null;
-
-    // Clear predictions if turn changed or if move played (optional, but safer)
-    if (oldTribeId !== null && oldTribeId !== currentTribeId) {
-        document.querySelectorAll('.village-marker').forEach(el => el.remove());
-        document.querySelectorAll('.predicted-terrain').forEach(el => el.remove());
-
-        // Also clear pending MCTS move on turn change
-        resetMctsButton();
-        lastScore = null;
-    }
 
     // Update Stats
     turnVal.textContent = GAME_STATE.settings.turn;
@@ -389,14 +152,6 @@ function updateUI(data) {
     tribeNameLabel.textContent = currentTribeName || 'Unknown';
     starsVal.textContent = currentTribe.stars;
 
-    // Score Toast
-    if (lastScore !== null && currentTribe.score !== lastScore) {
-        const diff = currentTribe.score - lastScore;
-        const sign = diff > 0 ? '+' : '';
-        const emoji = diff > 0 ? '📈' : '📉';
-        showToast(`${emoji} Score ${sign}${diff} (${currentTribe.score})`);
-    }
-    lastScore = currentTribe.score;
     scoreVal.textContent = currentTribe.score;
 
     const income = currentTribe.cities.reduce((acc, cur) => {
@@ -410,39 +165,11 @@ function updateUI(data) {
     renderer.render(GAME_STATE, currentLegalMoves, renderPov);
     updateSelectionInfo();
 
-    // Highlight End Turn if it's the only move left
-    const endTurnBtn = document.getElementById('btn-end-turn');
-    if (endTurnBtn) {
-        if (currentLegalMoves.length === 1) {
-            endTurnBtn.classList.add('primary');
-        } else {
-            endTurnBtn.classList.remove('primary');
-        }
-    }
-
-    // Check for forced rewards
     checkRewardPopup();
-
-    // Render MCTS heatmap if we have analysis data
-    if (lastMctsAnalysis) {
-        renderer.renderMCTSHeatmap(lastMctsAnalysis);
-    }
-
-    // Render FOW predictions (villages, enemy capitals)
-    if (GAME_STATE._prediction) {
-        renderer.renderFOWPredictions(GAME_STATE._prediction);
-    }
-
-    // If turn changed, pan smoothly to next player's capital
     if (oldTribeId !== null && oldTribeId !== currentTribeId) {
-        // In Train Mode, do NOT pan to AI. Only pan if it's the human's turn (ID 1) or if Train Mode is OFF.
-        if (!TRAIN_MODE_ACTIVE || currentTribeId === 1) {
-            setTimeout(() => focusCamera(true), 100);
-        }
+        setTimeout(() => focusCamera(true), 100);
     }
-
-    // Auto-Play for Train Mode
-    checkTrainMode();
+    updateTurnIndicator(currentTribe);
 
     // Show messages as toasts
     if (GAME_STATE._messages && GAME_STATE._messages.length > 0) {
@@ -451,171 +178,6 @@ function updateUI(data) {
         GAME_STATE._messages = [];
     }
 
-    // Update Evaluation Bar
-    if (data.evaluation) {
-        updateEvalBar(data.evaluation);
-    }
-
-    // Update MCTS Analysis Panel
-    if (data.mctsAnalysis) {
-        updateMctsPanel(data.mctsAnalysis);
-    }
-
-    if (data.recordedMoves) {
-        recordedMoves = data.recordedMoves;
-        updateRecordedMovesList(recordedMoves);
-    }
-}
-
-function updateRecordedMovesList(moves) {
-    if (!recordedMovesList) return;
-    recordedMovesList.innerHTML = '';
-
-    if (!moves || moves.length === 0) {
-        recordedMovesList.innerHTML = '<div class="mcts-empty">No moves recorded</div>';
-        return;
-    }
-
-    moves.forEach((m, i) => {
-        const el = document.createElement('div');
-        el.className = 'mcts-move-row';
-
-        const rank = document.createElement('span');
-        rank.className = 'mcts-move-rank';
-        rank.textContent = i + 1;
-
-        const label = document.createElement('span');
-        label.className = 'mcts-move-desc';
-        label.textContent = m.desc || m.type || 'Move';
-
-        const player = document.createElement('span');
-        player.className = 'mcts-move-winrate neutral';
-        player.textContent = `P${m.player}`;
-        player.style.color = m.player === 1 ? 'var(--p1-color)' : 'var(--p2-color)';
-
-        el.appendChild(rank);
-        el.appendChild(label);
-        el.appendChild(player);
-
-        el.onclick = () => {
-            if (m.move) {
-                playMove(m.move);
-            }
-        };
-
-        recordedMovesList.appendChild(el);
-    });
-}
-
-// --- MCTS Analysis Panel ---
-function updateMctsPanel(analysis) {
-    const panels = document.querySelectorAll('.mcts-panel');
-    const moveList = document.getElementById('mcts-moves-list');
-    const pvContainer = document.getElementById('mcts-pv');
-
-    if (!analysis || analysis.type !== 'heuristic' || !moveList || !pvContainer) {
-        if (moveList) moveList.innerHTML = '';
-        if (pvContainer) pvContainer.innerHTML = '';
-        const treeContainer = document.getElementById('mcts-tree');
-        if (treeContainer) treeContainer.innerHTML = '';
-        return;
-    }
-
-    // 1. Top Moves
-    moveList.innerHTML = '';
-    const evals = analysis.evaluations || [];
-    const maxVisits = Math.max(...evals.map(e => e.visits || 0), 1);
-
-    if (evals.length === 0) {
-        moveList.innerHTML = '<div class="mcts-empty">No analysis available</div>';
-    } else {
-        // Show top 15
-        evals.slice(0, 15).forEach((ev, idx) => {
-            const row = document.createElement('div');
-            row.className = 'mcts-move-row' + (idx === 0 ? ' best' : '');
-
-            const isPositive = ev.win_rate > 50;
-            const isNegative = ev.win_rate < -50;
-            const winRateClass = isPositive ? 'positive' : (isNegative ? 'negative' : 'neutral');
-
-            // Normalize visits for bar width
-            const barWidth = Math.max(0, Math.min(100, (ev.visits / maxVisits) * 100));
-
-            row.innerHTML = `
-                <div class="mcts-move-rank">${idx + 1}</div>
-                <div class="mcts-move-desc" title="${ev.description || 'Unknown Move'}">${ev.description || 'Move ' + ev.target}</div>
-                <div class="mcts-move-bar-wrap">
-                    <div class="mcts-move-bar" style="width: ${barWidth}%"></div>
-                </div>
-                <div class="mcts-move-winrate ${winRateClass}">${ev.win_rate > 0 ? '+' : ''}${(ev.win_rate).toFixed(5)}</div>
-            `;
-            moveList.appendChild(row);
-        });
-    }
-
-    // 2. Principal Variation
-    pvContainer.innerHTML = '';
-    const pv = analysis.principal_variation || [];
-    if (pv.length === 0) {
-        pvContainer.innerHTML = '<div class="mcts-empty">Line not explored</div>';
-    } else {
-        pv.forEach((moveDesc, i) => {
-            if (i > 0) {
-                const arrow = document.createElement('div');
-                arrow.className = 'pv-arrow';
-                arrow.textContent = '▶';
-                pvContainer.appendChild(arrow);
-            }
-            const chip = document.createElement('div');
-            chip.className = 'pv-chip';
-            chip.textContent = moveDesc;
-            pvContainer.appendChild(chip);
-        });
-    }
-
-    // 3. Decision Tree
-    const treeContainer = document.getElementById('mcts-tree');
-    if (treeContainer) {
-        treeContainer.innerHTML = '';
-        if (!analysis.tree) {
-            treeContainer.innerHTML = '<div class="mcts-empty">No tree data</div>';
-        } else {
-            function renderNode(node, depth) {
-                const el = document.createElement('div');
-                el.className = 'mcts-tree-node';
-
-                const row = document.createElement('div');
-                row.className = 'mcts-tree-row';
-
-                const label = document.createElement('span');
-                label.className = 'node-label';
-                // Clean up description if slightly repetitive
-                label.textContent = (node.move_description || 'Root').replace('MoveType::', '');
-
-                const stats = document.createElement('span');
-                stats.className = 'node-stats';
-                // Assuming value is sum of scores 0..1
-                const winRate = node.visits > 0 ? ((node.value / node.visits) * 100).toFixed(1) + '%' : '0.0%';
-                stats.textContent = `${node.visits}v ${winRate}`;
-
-                row.appendChild(label);
-                row.appendChild(stats);
-                el.appendChild(row);
-
-                if (node.children && node.children.length > 0) {
-                    const childrenContainer = document.createElement('div');
-                    childrenContainer.className = 'mcts-tree-children';
-                    node.children.forEach(child => {
-                        childrenContainer.appendChild(renderNode(child, depth + 1));
-                    });
-                    el.appendChild(childrenContainer);
-                }
-                return el;
-            }
-
-            treeContainer.appendChild(renderNode(analysis.tree, 0));
-        }
-    }
 }
 
 function renderTechTree(tribe) {
@@ -725,15 +287,6 @@ function renderMovesList(moves) {
     });
 }
 
-function resetMctsButton() {
-    pendingMctsMove = null;
-    const btn = document.getElementById('btn-step');
-    if (btn) {
-        btn.innerHTML = '<span class="icon">🤖</span> MCTS Step';
-        btn.classList.remove('pulsing-btn');
-    }
-}
-
 // Camera and Zoom logic (keeping existing as it works well)
 let scale = 1.4;
 let translateX = 0;
@@ -823,28 +376,7 @@ window.addEventListener('load', () => {
         updateTransform();
     }, { passive: false });
 
-    // Panel Toggle
-    runPassiveAnalysis(true);
-
-    // Passive Analysis Toggle
-    const passiveToggle = document.getElementById('mcts-passive-toggle');
-    if (passiveToggle) {
-        passiveToggle.onchange = (e) => {
-            mctsParams.passive = e.target.checked;
-            if (mctsParams.passive) {
-                runPassiveAnalysis();
-                showToast("Passive Analysis Enabled");
-            } else {
-                showToast("Passive Analysis Disabled");
-            }
-        };
-    }
 });
-
-// Event Listeners for buttons
-// trainingStatusHUD already declared at line 18
-// No more trainingLog element in index.html to avoid UI clutter
-// const trainingLog = document.getElementById('training-log');
 
 function updateSelectionInfo(clickX = null, clickY = null) {
     const idx = renderer.selectedIdx;
@@ -889,18 +421,15 @@ function updateSelectionInfo(clickX = null, clickY = null) {
     } else {
         const city = Object.values(GAME_STATE.tribes).flatMap(t => t.cities || []).find(c => (c.idx) === idx);
         if (city) {
-            const tribeName = TRIBE_ID_2_NAME[city.tribe?.type || GAME_STATE.tribes[city.owner]?.type];
+            const tribeType = city.tribe?.type || GAME_STATE.tribes[city.owner]?.type;
+            const tribeName = TRIBE_ID_2_NAME[tribeType];
             title = city.name || (tile.capitalOf > 0 ? "Capital" : "City");
             subtitle = `${tribeName} Territory`;
-            const climateIndex = CLIMATE_IDS[tribeName];
-            thumbFile = `buildings/${tribeName}/Default/Houses/House_${climateIndex}_5`;
+            thumbFile = getCityFile(cityArtTribe(tile, tribeType), tile.capitalOf > 0 ? 7 : 1);
         } else {
             title = resourceName ? `${terrainName}, ${resourceName}` : terrainName;
             subtitle = resourceName ? "Extract this resource to upgrade your city" : "A sturdy foundation for your empire";
-            thumbFile = `terrain/tiles/ground_${tile.climate === 17 ? 16 : tile.climate}`;
-            if (tile.type === 1) thumbFile = 'terrain/water/water';
-            if (tile.type === 2) thumbFile = 'terrain/water/ocean';
-            if (resourceVisible) thumbFile = getResourceFile(resource.type, tile.climate === 17 ? 16 : tile.climate);
+            thumbFile = resourceVisible ? getResourceFile(resource.type, tile.climate) : getGroundFile(tile.type, tile.climate);
         }
     }
 
@@ -914,129 +443,92 @@ function updateSelectionInfo(clickX = null, clickY = null) {
         </div>
     `;
 
-    // 2. UPDATE FLOATING ACTIONS (Polytopia Style)
-    // Only show city actions if we are NOT in unit selection mode for this tile
-    const harvestMove = !isUnitMode ? currentLegalMoves.find(m => m.moveType === 5 && (m.target === idx || m.target_index === idx)) : null;
-    const buildMovesCheck = !isUnitMode ? currentLegalMoves.filter(m => m.moveType === 6 && (m.target === idx || m.target_index === idx)) : [];
-    const summonMoves = !isUnitMode ? currentLegalMoves.filter(m => m.moveType === 4 && (m.src === idx || m.src_index === idx)) : [];
-    const abilityMoves = currentLegalMoves.filter(m =>
-        m.moveType === 3 && (m.target === idx || m.target_index === idx || m.src === idx || m.src_index === idx)
+    const harvestMove = !isUnitMode && currentLegalMoves.find(move =>
+        move.moveType === 5 && (move.target ?? move.target_index) === idx
     );
+    const buildMoves = isUnitMode ? [] : currentLegalMoves.filter(move =>
+        move.moveType === 6 && (move.target ?? move.target_index) === idx
+    );
+    const summonMoves = currentLegalMoves.filter(move =>
+        move.moveType === 4 && (move.src ?? move.src_index) === idx && Boolean(unit) === isUnitMode
+    );
+    const terrainAbilities = [
+        AbilityType.BurnForest, AbilityType.ClearForest, AbilityType.GrowForest,
+        AbilityType.Destroy, AbilityType.Decompose, AbilityType.BreakIce, AbilityType.EnchantAnimal,
+    ];
+    const abilityMoves = currentLegalMoves.filter(move => {
+        if (move.moveType !== 3) return false;
+        const type = typeof move.type === 'object' ? move.type?.Ok : move.type;
+        const source = move.src ?? move.src_index;
+        if (terrainAbilities.includes(type)) {
+            return !isUnitMode && (move.target ?? move.target_index ?? source) === idx;
+        }
+        return isUnitMode && type !== AbilityType.BreakPeace && source === idx;
+    });
 
-    if ((harvestMove || buildMovesCheck.length > 0 || summonMoves.length > 0 || abilityMoves.length > 0) && floatingPopup && clickX !== null && clickY !== null) {
+    if ((harvestMove || buildMoves.length || summonMoves.length || abilityMoves.length) && floatingPopup && clickX !== null && clickY !== null) {
         floatingPopup.classList.remove('hidden');
         floatingPopup.style.left = `${clickX}px`;
         floatingPopup.style.top = `${clickY - 20}px`; // Slightly above the click point
 
-        let actionsHtml = '';
-
-        const currentStars = GAME_STATE.tribes[GAME_STATE.settings.currentPlayerTurnId].stars;
-
-        // Harvest
-        if (harvestMove) {
-            const cost = 2; // Default harvest cost
-            const resEmoji = ResourceEmojis[resource.type] || "🥝";
-            const resName = ResourceTypes[resource.type] || `ID=${resource.type}`;
-            const isDisabled = currentStars < cost;
-
-            actionsHtml += `
+        const actions = [];
+        const addAction = (move, label, image, cost = 0, iconClass = '') => {
+            const icon = iconClass === 'poly-action-heal'
+                ? '<span class="poly-action-icon poly-action-heal" aria-hidden="true"></span>'
+                : `<img class="poly-action-icon ${iconClass}" src="textures/${image || 'misc/infoSymbol'}.png" alt="">`;
+            const costBadge = cost === 0 ? '' : `
+                <span class="cost-badge ${cost < 0 ? 'reward-badge' : ''}">
+                    <img src="textures/misc/star.png" alt="">
+                    ${cost < 0 ? '+' : ''}${Math.abs(cost)}
+                </span>`;
+            actions.push(`
                 <div class="poly-action-container">
-                    <button class="poly-action-btn ${isDisabled ? 'disabled' : ''}" data-move-id="${currentLegalMoves.indexOf(harvestMove)}">
-                        <span class="icon">${resEmoji}</span>
-                        <div class="cost-badge">⭐ ${cost}</div>
+                    <button type="button" class="poly-action-btn" aria-label="${label}"
+                        data-move-id="${currentLegalMoves.indexOf(move)}" ${povTribe.stars < cost ? 'disabled' : ''}>
+                        ${icon}
+                        ${costBadge}
                     </button>
-                    <div class="poly-action-label">Harvest ${resName}</div>
+                    <div class="poly-action-label">${label}</div>
                 </div>
-            `;
+            `);
+        };
+
+        if (harvestMove && resource) {
+            const name = ResourceTypes[resource.type] || 'Resource';
+            addAction(harvestMove, `Harvest ${name}`, getResourceFile(resource.type, tile.climate, 'misc/infoSymbol'), 2);
         }
 
-        // Build (Metal Mine, Farm, etc.)
-        const buildMoves = currentLegalMoves.filter(m => m.moveType === 6 && (m.target === idx || m.target_index === idx));
+        for (const move of buildMoves) {
+            const name = StructureTypes[move.type] || `ID=${move.type}`;
+            addAction(move, `Build ${name}`, getStructureFile(move.type, tile.climate, 'misc/infoSymbol'), StructureCosts[move.type] ?? 5);
+        }
 
-        buildMoves.forEach(bm => {
-            const structType = bm.type;
-            const emoji = StructureEmojis[structType] || "🏗️";
-            const name = StructureTypes[structType] || `ID=${structType}`;
-            const cost = StructureCosts[structType] || 5;
-            const isDisabled = currentStars < cost;
-
-            actionsHtml += `
-                <div class="poly-action-container">
-                    <button class="poly-action-btn ${isDisabled ? 'disabled' : ''}" data-move-id="${currentLegalMoves.indexOf(bm)}">
-                        <span class="icon">${emoji}</span>
-                        <div class="cost-badge">⭐ ${cost}</div>
-                    </button>
-                    <div class="poly-action-label">Build ${name}</div>
-                </div>
-            `;
-        });
-
-        const UnitCosts = {
-            2: 2, // Warrior
-            3: 3, // Rider
-            4: 8, // Knight
-            5: 3, // Defender
-            8: 8, // Catapult
-            9: 3, // Archer
-            10: 5, // MindBender
-            11: 5, // Swordsman
-            12: 10, // Giant (Super)
-            28: 3, // Hexapod
-            31: 3, // Kiton
-            32: 8, // Exida
+        const unitCosts = {
+            2: 2, 3: 3, 4: 8, 5: 3, 8: 8, 9: 3, 10: 5, 11: 5, 12: 10, 28: 3, 31: 3, 32: 8,
         };
-        // Summons
-        summonMoves.forEach(m => {
-            const unitType = m.type || m.unitType;
-            const emoji = UnitEmojis[unitType] || "🪖";
-            const name = UnitTypes[unitType] || "Unknown";
-            const cost = UnitCosts[unitType] || 3;
-            const isDisabled = currentStars < cost;
+        for (const move of summonMoves) {
+            const unitType = move.type || move.unitType;
+            const name = UnitTypes[unitType] || 'Unit';
+            const label = isUnitMode ? `Upgrade to ${name}` : `Train ${name}`;
+            addAction(move, label, getUnitFile(povTribe.type, unitType), unitCosts[unitType] || 3, 'poly-action-unit');
+        }
 
-            actionsHtml += `
-                <div class="poly-action-container">
-                    <button class="poly-action-btn ${isDisabled ? 'disabled' : ''}" data-move-id="${currentLegalMoves.indexOf(m)}">
-                        <span class="icon">${emoji}</span>
-                        <div class="cost-badge">⭐ ${cost}</div>
-                    </button>
-                    <div class="poly-action-label">Train ${name}</div>
-                </div>
-            `;
+        for (const move of abilityMoves) {
+            const type = typeof move.type === 'object' ? move.type?.Ok : move.type;
+            const name = AbilityNames[type] || `ID=${type}`;
+            const heals = type === AbilityType.Recover || type === AbilityType.HealOthers;
+            addAction(move, name, getAbilityFile(type, tile.climate), AbilityCosts[type] || 0, heals ? 'poly-action-heal' : '');
+        }
+
+        floatingPopup.innerHTML = `<div style="display: flex; gap: 15px; flex-wrap: wrap; justify-content: center;">${actions.join('')}</div>`;
+        floatingPopup.querySelectorAll('img.poly-action-icon').forEach(icon => {
+            icon.addEventListener('error', () => { icon.src = 'textures/misc/infoSymbol.png'; }, { once: true });
         });
-
-        // Abilities (Clear Forest, Grow Forest, Recover, etc.)
-        abilityMoves.forEach(am => {
-            const abilityType = (am.type && typeof am.type === 'object') ? am.type.Ok : am.type;
-            const emoji = AbilityEmojis[abilityType] || "🪄";
-            const name = AbilityNames[abilityType] || `ID=${abilityType}`;
-            const costValue = AbilityCosts[abilityType] || 0;
-            const isDisabled = costValue > 0 && currentStars < costValue;
-
-            let costHtml = `<div class="cost-badge">⭐ ${costValue}</div>`;
-            if (costValue < 0) {
-                costHtml = `<div class="cost-badge reward-badge">⭐ +${Math.abs(costValue)}</div>`;
-            } else if (costValue === 0) {
-                costHtml = ''; // No badge for free actions
-            }
-
-            actionsHtml += `
-                <div class="poly-action-container">
-                    <button class="poly-action-btn ${isDisabled ? 'disabled' : ''}" data-move-id="${currentLegalMoves.indexOf(am)}">
-                        <span class="icon">${emoji}</span>
-                        ${costHtml}
-                    </button>
-                    <div class="poly-action-label">${name}</div>
-                </div>
-            `;
-        });
-
-        floatingPopup.innerHTML = `<div style="display: flex; gap: 15px; flex-wrap: wrap; justify-content: center;">${actionsHtml}</div>`;
 
         // Bind clicks
         floatingPopup.querySelectorAll('.poly-action-btn').forEach(btn => {
             btn.onclick = (e) => {
                 e.stopPropagation();
-                if (btn.classList.contains('disabled')) return;
                 const moveIdx = parseInt(btn.getAttribute('data-move-id'));
                 const move = currentLegalMoves[moveIdx];
                 if (move) {
@@ -1068,42 +560,25 @@ function updateTechModal(tribe, modalBody, overlayEl) {
     const hubIcon = `textures/units/${tribeName}/default/${tribeName}_default_Warrior.png`;
     hub.style.left = `calc(50% - 55px)`;
     hub.style.top = `calc(50% - 55px)`;
-    hub.innerHTML = `<img src="${hubIcon}" onerror="this.src='https://api.dicebear.com/7.x/bottts/svg?seed=${tribeName}'">`;
+    hub.title = tribeName;
+    hub.innerHTML = `<img src="${hubIcon}" alt="">`;
     nodesContainer.appendChild(hub);
 
-    const centerX = 0;
-    const centerY = 0;
+    const cityCount = (tribe.cities || []).length;
+    const hasPhilosophy = unlockedTechs.includes(22);
+    const technologies = TechTree[0].map(techId => ({ techId, parentId: 0, tier: 1 }));
 
-    // Helper to get coordinates
-    const getCoords = (techId) => {
-        const node = TechNodes[techId];
-        return node ? { x: node.x, y: node.y } : { x: 0, y: 0 };
-    };
-
-    // Render Nodes and Edges
-    Object.keys(TechNodes).forEach(id => {
-        const techId = parseInt(id);
-        const meta = TechNodes[techId];
-        const { x, y } = getCoords(techId);
-
-        // Find parent for edge
-        let parentId = 0;
-        for (const [pId, children] of Object.entries(TechTree)) {
-            if (children.includes(techId)) {
-                parentId = parseInt(pId);
-                break;
-            }
+    for (const { techId, parentId, tier } of technologies) {
+        for (const child of TechTree[techId] || []) {
+            technologies.push({ techId: child, parentId: techId, tier: tier + 1 });
         }
+        const meta = TechNodes[techId];
+        const { x, y } = meta;
+        const parent = TechNodes[parentId] || { x: 0, y: 0 };
 
-        const pCoords = parentId === 0 ? { x: 0, y: 0 } : getCoords(parentId);
-
-        // Draw edge
         const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        // We need the coordinates relative to the SVG center.
-        // Our nodes are positioned via transform: translate(x, y) relative to center.
-        // SVG coordinates are absolute. We'll set viewBox to -600 -500 1200 1000
-        line.setAttribute('x1', pCoords.x);
-        line.setAttribute('y1', pCoords.y);
+        line.setAttribute('x1', parent.x);
+        line.setAttribute('y1', parent.y);
         line.setAttribute('x2', x);
         line.setAttribute('y2', y);
         line.setAttribute('class', 'tech-line' + (unlockedTechs.includes(techId) ? ' active' : ''));
@@ -1118,26 +593,16 @@ function updateTechModal(tribe, modalBody, overlayEl) {
         node.style.left = `calc(50% + ${x}px - 45px)`;
         node.style.top = `calc(50% + ${y}px - 45px)`;
 
-        // Accurate Tech Cost Calculation
-        const numCities = (tribe.cities || []).length;
-        // Determine tier via BFS or hardcode?
-        // For visual simplicity, let's assume standard costs for now or fetch from backend if available.
-        // Actually, we can get tier from the tree depth.
-        // Or just generic:
-        const tier = 1; // Simplify for now as we don't have tier data in TechNodes yet, or we can look it up.
-        // Better:
-        let depth = 1;
-        // ... (We can improve tier calc later, or add it to TechNodes)
-
-        const hasPhilosophy = unlockedTechs.includes(22);
-        // Fallback cost logic
-        const baseCost = 4 + (numCities * depth);
-        const cost = hasPhilosophy ? Math.ceil(baseCost * 0.77) : baseCost;
+        const baseCost = 4 + cityCount * tier;
+        const cost = hasPhilosophy ? Math.ceil(baseCost * 0.66) : baseCost;
+        node.title = parentId
+            ? `Tier ${tier} · Requires ${TechnologyNames[parentId]}`
+            : `Tier ${tier}`;
 
         node.innerHTML = `
-            <span class="icon">${meta.icon}</span>
+            <img class="tech-icon" src="textures/${meta.icon}.png" alt="">
             <div class="label">${TechnologyNames[techId]}</div>
-            ${canResearch ? `<div class="cost">⭐ ${cost}</div>` : ''}
+            ${canResearch ? `<div class="cost"><img src="textures/misc/star.png" alt="">${cost}</div>` : ''}
         `;
 
         if (canResearch) {
@@ -1150,7 +615,7 @@ function updateTechModal(tribe, modalBody, overlayEl) {
             };
         }
         nodesContainer.appendChild(node);
-    });
+    }
 
     edgesSvg.setAttribute('viewBox', `-600 -450 1200 900`);
 
@@ -1204,25 +669,11 @@ function checkRewardPopup() {
         const counts = moveTypes.reduce((acc, t) => { acc[t] = (acc[t] || 0) + 1; return acc; }, {});
         if (counts[9]) console.log("🎁 Reward moves detected in legal moves:", counts[9]);
 
-        // Collect all unique reward moves (type 9)
-        const rewardMoves = currentLegalMoves.filter(m => m && m.moveType === 9);
+        const pendingRewards = currentLegalMoves.filter(m => m && m.moveType === 9);
+        const rewardMoves = pendingRewards.filter(move => move.target === pendingRewards[0]?.target);
 
         // Polytopia usually forces selection if there are multiple rewards (e.g. Workshop vs Explorer)
         if (rewardMoves.length >= 1) {
-            // Debugging Teacher Mode Popup Prevention
-            if (INTERACTIVE_MODE) {
-                console.log("Teacher Mode Reward Check:", {
-                    turn: GAME_STATE.settings.currentPlayerTurnId,
-                    isHuman: GAME_STATE.settings.currentPlayerTurnId === 1
-                });
-            }
-
-            // In Teacher Mode, if it's AI's turn, do NOT show the popup. Let the AI propose.
-            if (INTERACTIVE_MODE && GAME_STATE.settings.currentPlayerTurnId !== 1) {
-                console.log("Skipping Reward Popup for AI Teacher Mode");
-                return;
-            }
-
             // Prevent multiple popups if one is already open
             if (document.getElementById('level-up-reward-overlay')) return;
 
@@ -1309,131 +760,98 @@ function getUnitAt(idx) {
     return null;
 }
 
-function getStructureFile(type, climate) {
+function getStructureFile(type, climate, fallback = 'misc/missing') {
+    const tribeName = TRIBE_ID_2_NAME[climate];
+    const textureIndex = terrainTextureIndex(climate);
     const map = {
         1: `buildings/common/Tribe`,
         2: `terrain/misc/ResourceGFX_ruin`,
         3: `misc/Road`,
         5: `buildings/common/Farm`,
-        6: `buildings/common/Windmill`,
+        6: 'buildings/common/Windmill_0',
         8: `buildings/common/Port`,
         12: `buildings/common/Lumber Hut`,
-        13: `buildings/common/Sawmill`,
-        21: `buildings/common/Mine`,
-        22: `buildings/common/Forge`,
-        27: `buildings/${CLIMATE_IDS[climate]}/Default/Monuments/Monument5_${climate - 1}`,
-        28: `buildings/${CLIMATE_IDS[climate]}/Default/Monuments/Monument6_${climate - 1}`,
-        29: `buildings/${CLIMATE_IDS[climate]}/Default/Monuments/Monument7_${climate - 1}`,
+        13: 'buildings/common/Sawmill_1',
+        17: 'buildings/common/Temple_1',
+        18: 'buildings/common/Forest Temple_1',
+        19: 'buildings/common/Water Temple_1',
+        20: 'buildings/common/Mountain Temple_1',
+        21: 'buildings/common/Mine',
+        22: 'buildings/common/Forge_1',
+        23: `buildings/${tribeName}/Default/Monuments/Monument1_${textureIndex}`,
+        24: `buildings/${tribeName}/Default/Monuments/Monument2_${textureIndex}`,
+        25: `buildings/${tribeName}/Default/Monuments/Monument3_${textureIndex}`,
+        26: `buildings/${tribeName}/Default/Monuments/Monument4_${textureIndex}`,
+        27: `buildings/${tribeName}/Default/Monuments/Monument5_${textureIndex}`,
+        28: `buildings/${tribeName}/Default/Monuments/Monument6_${textureIndex}`,
+        29: `buildings/${tribeName}/Default/Monuments/Monument7_${textureIndex}`,
         37: `buildings/Cymanti/Default/Unique/spores_4`,
+        32: 'buildings/∑∫ỹriȱŋ/Default/Unique/sanctuary_1',
+        34: 'buildings/Polaris/Default/Unique/ice_bank_1',
+        35: 'buildings/Polaris/Default/Unique/Ice Temple_1',
+        39: 'buildings/Cymanti/Default/Unique/Mycelium_1',
+        47: 'misc/lighthouse',
+        48: 'buildings/common/bridge',
+        50: 'buildings/common/Market01',
+        71: 'misc/Road',
     };
     !map[type] && console.log(`MISSING STRUCTURE: ${type}`);
 
-    return map[type] || 'misc/missing';
+    return map[type] || fallback;
 }
 
-function getResourceFile(type, climate) {
+function getResourceFile(type, climate, fallback = 'misc/missing') {
+    const textureIndex = terrainTextureIndex(climate);
     const map = {
-        1: `animals/${CLIMATE_TO_ANIMAL[climate]}`,
+        1: `animals/${TEXTURE_INDEX_TO_ANIMAL[textureIndex]}`,
         2: `terrain/misc/ResourceGFX_crop`,
         3: `animals/fish`,
         5: `terrain/misc/ResourceGFX_metal`,
-        6: `fruits/ResourceGFX_fruit_${climate === 17 ? 16 : climate}`,
-        // 7: `buildings/Cymanti/Default/Unique/spores_4`, // requires different texture
-        8: `terrain/misc/ResourceGFX_starfish`
+        6: `fruits/ResourceGFX_fruit_${textureIndex}`,
+        7: 'buildings/Cymanti/Default/Unique/spores_4',
+        8: 'terrain/misc/ResourceGFX_starfish',
+        9: 'terrain/misc/ResourceGFX_aquacrop',
     };
     !map[type] && console.log(`MISSING RESOURCE: ${type}`);
-    return map[type] || 'misc/missing';
+    return map[type] || fallback;
 }
 
-setInterval(pollTrainingStatus, 2000);
+function getAbilityFile(type, climate) {
+    const files = {
+        1: 'misc/FlameGFX',
+        2: 'misc/club',
+        3: `terrain/forests/Forest_${terrainTextureIndex(climate)}`,
+        4: 'misc/explo',
+        5: 'misc/PoisonGFX',
+        6: 'misc/magic',
+        8: 'misc/citizen',
+        11: 'terrain/water/water',
+        13: 'terrain/tiles/ice',
+        14: 'misc/boost_1',
+        15: 'misc/explo',
+        16: 'misc/acheivement',
+        17: 'terrain/tiles/ice',
+        18: 'misc/swords',
+        23: getResourceFile(1, climate),
+    };
+    return files[type];
+}
 
-function checkTrainMode() {
+function updateTurnIndicator(tribe) {
+    document.getElementById('btn-end-turn').disabled =
+        !currentLegalMoves.some(move => move?.moveType === 10);
+    const name = tribe.username || TRIBE_ID_2_NAME[tribe.type];
+    aiTurnIndicator.textContent = name ? `${name}'s turn` : 'Your turn';
+    aiTurnIndicator.classList.remove('hidden');
+    aiTurnIndicator.classList.add('your-turn');
+}
+
+document.getElementById('btn-fow').onclick = event => {
     if (!GAME_STATE.settings) return;
-
-    const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
-
-    // 1. Handle Human Turn (Player 1)
-    if (currentTribeId === 1) {
-        if (INTERACTIVE_MODE) {
-            // Request AI hint if we haven't already
-            if (!PENDING_AI_MOVE && teacherHud.classList.contains('hidden')) {
-                setTimeout(requestAiHint, 200);
-            }
-        }
-
-        if (aiTurnIndicator) {
-            aiTurnIndicator.textContent = `⌛ ${GAME_STATE.tribes[currentTribeId].username || 'Your'}`;
-            aiTurnIndicator.classList.remove('hidden');
-            aiTurnIndicator.classList.add('your-turn');
-        }
-    } else {
-        // 2. Handle AI Turn (Player > 1)
-        if (TRAIN_MODE_ACTIVE) {
-            if (aiTurnIndicator) {
-                aiTurnIndicator.textContent = "🤖 AI Thinking...";
-                aiTurnIndicator.classList.remove('hidden');
-                aiTurnIndicator.classList.remove('your-turn');
-            }
-
-            // Auto-play the AI turn
-            setTimeout(() => {
-                if (!TRAIN_MODE_ACTIVE) return;
-                apiAction('/autostep', { iterations: parseInt(mctsDepth.value), dry_run: false });
-            }, 100);
-        } else {
-            if (aiTurnIndicator) {
-                aiTurnIndicator.textContent = `⌛ ${GAME_STATE.tribes[currentTribeId].username || 'AI'}`;
-                aiTurnIndicator.classList.remove('hidden');
-                aiTurnIndicator.classList.remove('your-turn');
-            }
-        }
-    }
-}
-
-document.getElementById('btn-train-mode').onclick = () => {
-    TRAIN_MODE_ACTIVE = !TRAIN_MODE_ACTIVE;
-    const btn = document.getElementById('btn-train-mode');
-
-    if (TRAIN_MODE_ACTIVE) {
-        btn.classList.add('active');
-        // btn.textContent = "Train Mode: ON";
-        showToast("Train Mode ACTIVE: Auto-playing enemies");
-    } else {
-        btn.classList.remove('active');
-        // btn.textContent = "Train Mode";
-        showToast("Train Mode STOPPED");
-    }
-};
-
-document.getElementById('btn-interactive').onclick = () => {
-    INTERACTIVE_MODE = !INTERACTIVE_MODE;
-    const btn = document.getElementById('btn-interactive');
-    btn.classList.toggle('active', INTERACTIVE_MODE);
-
-    if (INTERACTIVE_MODE) {
-        showToast("🎓 AI Assistant: Enabled");
-        checkTrainMode();
-    } else {
-        showToast("🎓 AI Assistant: Disabled");
-        if (teacherHud) teacherHud.classList.add('hidden');
-        PENDING_AI_MOVE = null;
-        renderer.clearMoveHighlight();
-    }
-};
-
-document.getElementById('btn-reset').onclick = () => apiAction('/reset', {});
-document.getElementById('btn-fow').onclick = () => {
     ENABLE_FOW = !ENABLE_FOW;
-    renderer.render(GAME_STATE, currentLegalMoves, 1);
+    event.currentTarget.setAttribute('aria-pressed', ENABLE_FOW);
+    renderer.render(GAME_STATE, currentLegalMoves, GAME_STATE.settings.currentPlayerTurnId);
 };
-document.getElementById('btn-train').onclick = () => {
-    if (confirm("Start a background training session? This will run 'cargo run --bin self_play' on the server.")) {
-        apiAction('/train', {}).then(data => {
-            if (data && data.message) showToast(data.message);
-        });
-    }
-};
-
 document.getElementById('btn-end-turn').onclick = () => {
     const endTurnMove = currentLegalMoves.find(m => m && m.moveType === 10);
     if (endTurnMove) playMove(endTurnMove);
@@ -1441,6 +859,7 @@ document.getElementById('btn-end-turn').onclick = () => {
 };
 
 document.getElementById('btn-tech').onclick = () => {
+    if (!GAME_STATE.settings) return;
     const techOverlay = document.createElement('div');
     techOverlay.className = 'tech-overlay-modal';
     techOverlay.innerHTML = `
@@ -1461,129 +880,32 @@ document.getElementById('btn-tech').onclick = () => {
     updateTechModal(tribe, modalRoot, techOverlay);
 };
 
-document.getElementById('btn-save').onclick = () => {
-    if (confirm("Save captured human gameplay data to disk?")) {
-        apiAction('/save_training_data', {}).then(data => {
-            if (data && data.message) alert(data.message);
-        });
-    }
-};
-document.getElementById('btn-predictions').onclick = async () => {
-    SHOW_PREDICTIONS = !SHOW_PREDICTIONS;
-    const btn = document.getElementById('btn-predictions');
-    btn.classList.toggle('prediction-active', SHOW_PREDICTIONS);
-
-    if (SHOW_PREDICTIONS) {
-        showToast("AI Visibility Enabled: Requesting Analysis...");
-        runPassiveAnalysis(true); // Trigger immediate analysis for the heatmap/predictions
-    } else {
-        // Clear all prediction overlays if disabled
-        document.querySelectorAll('.mcts-overlay').forEach(el => el.remove());
-        document.querySelectorAll('.village-marker').forEach(el => el.remove());
-        document.querySelectorAll('.analysis-overlay').forEach(el => el.remove());
-        document.querySelectorAll('.predicted-terrain').forEach(el => el.remove());
-    }
-
-    // Re-render move overlays to show/hide combat previews
-    renderer.renderMoveOverlays(currentLegalMoves);
-};
-document.getElementById('btn-rng').onclick = () => apiAction('/rngstep', {});
-document.getElementById('btn-step').onclick = async () => {
-    const btn = document.getElementById('btn-step');
-
-    if (pendingMctsMove) {
-        // Play the pending move
-        playMove(pendingMctsMove);
-    } else {
-        // Run MCTS (Dry Run)
-        const data = await apiAction('/autostep', { iterations: parseInt(mctsDepth.value), dry_run: true });
-
-        if (data && data.bestMove) {
-            pendingMctsMove = data.bestMove;
-            btn.innerHTML = '<span class="icon">▶️</span> Play Best';
-            btn.classList.add('pulsing-btn');
-
-            // Highlight the move
-            renderer.highlightMove(data.bestMove);
-            showToast(`MCTS picked: ${data.movePlayed || 'Move'}`);
-        }
-    }
-};
-mctsDepth.oninput = (e) => mctsDepthVal.textContent = e.target.value;
-
-// Clear the tile action popup if clicking anywhere else
-window.addEventListener('click', () => {
-    if (tileActionPopup) tileActionPopup.classList.add('hidden');
+const gameFiles = document.getElementById('game-files');
+gameFiles.addEventListener('click', event => {
+    if (event.target.closest('button')) gameFiles.open = false;
 });
-
-// AI Assistant / Interactive logic
-
-
-// Assistant functions
-
-// Teacher/Assistant logic
-async function requestAiHint() {
-    if (!INTERACTIVE_MODE || PENDING_AI_MOVE) return;
-
-    const depth = parseInt(mctsDepth.value) || 100;
-
-    // Call backend
-    const res = await fetch('/trainer/hint', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ iterations: depth })
-    });
-    const data = await res.json();
-
-    if (data.proposedMove && INTERACTIVE_MODE) {
-        PENDING_AI_MOVE = data.proposedMove;
-
-        // Determine Icon
-        let icon = MOVE_TYPE_ICONS[data.moveName] || '🎓';
-        if (data.moveName === 'Research' && data.proposedMove.type !== undefined) {
-            icon = TECH_ICONS[data.proposedMove.type] || '🧪';
-        }
-
-        // Show HUD
-        const moveNameEl = document.getElementById('teacher-move-name');
-        const moveIconEl = document.getElementById('teacher-move-icon');
-
-        if (moveNameEl) moveNameEl.textContent = data.moveDescription || data.moveName;
-        if (moveIconEl) moveIconEl.textContent = icon;
-
-        if (teacherHud) teacherHud.classList.remove('hidden');
-
-        // Visualize on map
-        renderer.highlightMove(PENDING_AI_MOVE);
-    }
-}
-
-function acceptAiMove() {
-    if (!PENDING_AI_MOVE) return;
-    playMove(PENDING_AI_MOVE);
-    PENDING_AI_MOVE = null;
-    if (teacherHud) teacherHud.classList.add('hidden');
-}
-
-function enableOverride() {
-    PENDING_AI_MOVE = null;
-    if (teacherHud) teacherHud.classList.add('hidden');
-    renderer.clearMoveHighlight();
-    showToast("👉 Play your move now");
-}
-
-// Keyboard shortcuts for Assistant
-window.addEventListener('keydown', (e) => {
-    if (!INTERACTIVE_MODE || teacherHud.classList.contains('hidden')) return;
-
-    if (e.key.toLowerCase() === 'y') {
-        acceptAiMove();
-    } else if (e.key.toLowerCase() === 'n') {
-        enableOverride();
+window.addEventListener('click', event => {
+    if (!gameFiles.contains(event.target)) gameFiles.open = false;
+    tileActionPopup.classList.add('hidden');
+});
+gameFiles.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+        gameFiles.open = false;
+        gameFiles.querySelector('summary').focus();
     }
 });
 
-document.getElementById('btn-reset').onclick = () => apiAction('/reset', {});
+document.getElementById('btn-reset').onclick = async () => {
+    try {
+        const response = await fetch('/reset', { method: 'POST' });
+        if (!response.ok) throw new Error(await response.text());
+        renderer.clear();
+        updateUI(await response.json());
+        focusCamera();
+    } catch (error) {
+        showToast(error.message);
+    }
+};
 document.getElementById('btn-save-state').onclick = async () => {
     try {
         const res = await fetch('/save', { method: 'POST' });
@@ -1606,25 +928,5 @@ document.getElementById('btn-load-state').onclick = async () => {
         }
     } catch (e) {
         showToast("❌ Load failed");
-    }
-};
-
-document.getElementById('btn-save').onclick = async () => {
-    try {
-        const res = await fetch('/save_training_data', { method: 'POST' });
-        const data = await res.json();
-        showToast("📊 " + (data.message || data.status));
-    } catch (e) {
-        showToast("❌ Dataset save failed");
-    }
-};
-
-document.getElementById('btn-train').onclick = async () => {
-    try {
-        const res = await fetch('/train', { method: 'POST' });
-        const data = await res.json();
-        showToast("🚀 " + (data.message || data.status));
-    } catch (e) {
-        showToast("❌ Training start failed");
     }
 };

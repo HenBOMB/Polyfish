@@ -12,6 +12,8 @@ An `AI NN` + MCTS `Rust` capable of playing the award winning `Polytopia` strate
 
 ## Quick Start
 
+For a model-free match, the [research simulator quickstart](research/README.md) covers browser play, seeded headless matches, and the Tribes-style opponent presets.
+
 1. Install **Rust**, **Node**, and **Python 3**.
 2. Build the frontend once: `cd polyfish-ui && npm install && npm run build` (the server serves `polyfish-ui/dist`).
 3. Run `./run-server.sh` (frees port 3000, then runs the `polyfish` binary from `polyfish-rs/`).

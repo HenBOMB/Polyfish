@@ -40,6 +40,13 @@
     pointer-events: none !important;
 }
 
+.mountain.kickoo-mountain {
+    width: 94px !important;
+    background-size: contain !important;
+    margin-left: 17px;
+    margin-top: -13px;
+}
+
 .structure {
     width: 100px !important;
     margin-left: 15px !important;
@@ -47,11 +54,37 @@
     pointer-events: none !important;
 }
 
-.monument {
-    width: 50px !important;
-    margin-left: 40px !important;
-    margin-top: -50px !important;
-    pointer-events: none !important;
+.structure.improvement {
+    width: 70px !important;
+    margin-left: 29px !important;
+    margin-top: -17px !important;
+}
+
+.structure.lumber-hut {
+    /* The logs extend farther right and forward than the house. */
+    width: 54px !important;
+    margin-left: 47px !important;
+    margin-top: -26px !important;
+}
+
+.structure.lighthouse {
+    width: 62.5px !important;
+    margin-left: 32.75px !important;
+    margin-top: -48px !important;
+}
+
+.structure.monument {
+    --monument-width: 85px;
+    width: var(--monument-width) !important;
+    height: 108.8px;
+    margin-left: calc(64px - var(--monument-width) / 2) !important;
+    /* Anchor the base around the center of the ground diamond. */
+    margin-top: -60.4px !important;
+    background-position: center bottom;
+}
+
+.structure.monument.eye-of-god {
+    --monument-width: 42.5px;
 }
 
 .village {
@@ -62,9 +95,9 @@
 }
 
 .ruins {
-    width: 124px !important;
-    margin-left: 10px !important;
-    margin-top: -35px !important;
+    width: 92px !important;
+    margin-left: 18px !important;
+    margin-top: -23px !important;
     pointer-events: none !important;
 }
 
@@ -75,7 +108,6 @@
     pointer-events: none !important;
 }
 
-/* Legacy city styles removed to prevent conflicts with new nameplate system */
 .village {
     width: 60px !important;
     margin-left: 40px !important;
@@ -83,8 +115,23 @@
     pointer-events: none !important;
 }
 
-.city {
-    margin-top: -70px !important;
+.tile.city {
+    pointer-events: none;
+}
+
+.city-building {
+    position: absolute;
+    width: 42px;
+    height: 46px;
+    transform: translate(-50%, -100%);
+    background-position: center bottom;
+    background-repeat: no-repeat;
+    background-size: contain;
+}
+
+.city-building.city-castle {
+    width: 48px;
+    height: 54px;
 }
 
 /* Refined City Nameplate & Growth Bar - REFINED V7 */
@@ -218,8 +265,9 @@
 }
 
 .animal {
-    width: 45px !important;
-    margin-left: 50px !important;
+    width: 33.75px !important;
+    margin-left: 46.25px !important;
+    margin-top: -35.5px !important;
 }
 
 .fish {
@@ -268,6 +316,32 @@
     margin-top: -35px !important;
     pointer-events: none !important;
     transition: left 0.4s ease-in-out, top 0.4s ease-in-out, transform 0.2s ease;
+}
+
+.tile.unit-hit {
+    width: 50px;
+    height: 56px;
+    margin-left: 44px;
+    margin-top: -4px;
+    clip-path: polygon(26% 0, 74% 0, 100% 52%, 83% 100%, 17% 100%, 0 52%);
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.capture-indicator {
+    pointer-events: none;
+}
+
+.capture-hit {
+    position: absolute;
+    left: 84px;
+    top: 4px;
+    width: 48px;
+    height: 48px;
+    clip-path: circle(36%);
+    pointer-events: auto;
+    cursor: pointer;
+    touch-action: manipulation;
 }
 
 .exausted {
@@ -393,7 +467,7 @@
     border-radius: 4px;
     font-weight: bold;
     font-size: 0.9em;
-    margin-left: 10px;
+    margin: 0;
     display: inline-flex;
     align-items: center;
     white-space: nowrap;
@@ -401,10 +475,9 @@
 }
 
 #ai-turn-indicator.your-turn {
-    border-color: var(--neon-green);
-    color: var(--neon-green);
+    border-color: var(--rts-green);
+    color: var(--rts-green);
     background: rgba(0, 255, 0, 0.1);
-    animation: pulse-green 2s infinite;
 }
 
 .hidden {
@@ -490,11 +563,35 @@
 }
 
 .move-overlay {
-    pointer-events: auto;
-    cursor: pointer;
+    pointer-events: none;
     animation: fadeIn 0.3s ease;
     z-index: 5000;
     clip-path: polygon(50% 0%, 100% 30%, 50% 60%, 0% 30%);
+}
+
+.movement-hit {
+    position: absolute;
+    left: 32px;
+    top: 18px;
+    width: 64px;
+    height: 42px;
+    clip-path: ellipse(50% 50%);
+    pointer-events: auto;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.move-overlay.occupied-target {
+    clip-path: none;
+}
+
+.occupied-target img,
+.occupied-target .movement-hit {
+    position: absolute;
+    left: 38px;
+    top: 52px;
+    width: 52px;
+    height: 32px;
 }
 
 .move-overlay:hover {
