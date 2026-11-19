@@ -1,6 +1,8 @@
 # Configuration
 # Replace this with the actual path to your training script for Windows
-$TrainCmd = ".\run-training.bat" 
+$TrainCmd = Join-Path $PSScriptRoot "run-training.bat"
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location (Join-Path $RepoRoot "polyfish-rs")
 $CheckInterval = 1 # seconds
 
 # Embed a little bit of C# to call the native Windows API (GetLastInputInfo) 
@@ -71,7 +73,7 @@ while ($true) {
         $AgyPrompt = "Perform a rigorous evaluation of the Polyfish/PolyZero training data. Please follow these exact steps:`n1. Parse 'session.log' and 'training_log.csv' in the current directory to extract the latest training metrics.`n2. Compare Policy Loss vs. Value Loss. If Value Loss is near zero (e.g., ~0.03) while Policy Loss remains high, explicitly flag that the 'value head has collapsed' and the model is producing near-random value gradients.`n3. Calculate the timeout rate. Search 'session.log' for 'Decisive: true' vs 'Decisive: false'. If the vast majority of games are timing out instead of ending decisively, flag that the model is failing to learn long-term planning and closing strategies.`n4. Read 'src/bin/self_play.rs' to identify the current curriculum phase (e.g., Tiny maps progressing from 10 to 30 max turns). Account for these phases when analyzing score trends, as map size and turn limit increases artificially inflate scores.`nWrite a comprehensive Markdown report summarizing the health of the training run based on these specific metrics."
 
         # Start agy in the background and redirect output to a file
-        Start-Process -FilePath "agy" -ArgumentList "`"$AgyPrompt`"" -RedirectStandardOutput "agy_report_$CurrentDay.txt" -RedirectStandardError "agy_report_$CurrentDay.txt" -NoNewWindow
+        Start-Process -FilePath "agy" -ArgumentList "`"$AgyPrompt`"" -RedirectStandardOutput (Join-Path $RepoRoot "agy_report_$CurrentDay.txt") -RedirectStandardError (Join-Path $RepoRoot "agy_report_$CurrentDay.txt") -NoNewWindow
         
         $LastReportDay = $CurrentDay
     }
@@ -99,7 +101,7 @@ while ($true) {
                 Write-Host "$(Get-Date): Conditions met (Idle for ${IdleSecs}s). Starting training script..." -ForegroundColor Green
                 
                 # Start the training script asynchronously
-                $TrainProcess = Start-Process -FilePath "cmd.exe" -ArgumentList "/c $TrainCmd" -PassThru -NoNewWindow
+                $TrainProcess = Start-Process -FilePath "cmd.exe" -ArgumentList "/d /c `"`"$TrainCmd`"`"" -PassThru -NoNewWindow
                 
                 Write-Host "Training script started with PID: $($TrainProcess.Id)" -ForegroundColor DarkGray
             }

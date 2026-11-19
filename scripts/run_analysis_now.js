@@ -1,6 +1,8 @@
 const fs = require('fs');
 const { exec } = require('child_process');
-require('dotenv').config({ path: './polyfish-rs/.env' });
+const path = require('node:path');
+const crateDir = path.join(__dirname, '..', 'polyfish-rs');
+require('dotenv').config({ path: path.join(crateDir, '.env') });
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -74,7 +76,7 @@ function parseCsvRow(line, headers) {
 }
 
 async function main() {
-  const csvPath = './polyfish-rs/training_log.csv';
+  const csvPath = path.join(crateDir, 'training_log.csv');
 
   if (!fs.existsSync(csvPath)) {
     console.error("No training_log.csv found at " + csvPath);
