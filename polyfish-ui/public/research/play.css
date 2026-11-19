@@ -79,7 +79,8 @@ main { max-width: 1320px; margin: auto; padding: 1.2rem 1rem; }
 .tile:hover:enabled, .tile:focus-visible, .tile[data-selected] { outline: 2px solid #f4dfa9; outline-offset: -2px; }
 .tile[data-terrain="Forest"] { background: repeating-linear-gradient(136deg, #294946, #294946 5px, #355a51 5px, #355a51 8px); }
 .tile[data-terrain="Mountain"] { background: repeating-linear-gradient(45deg, #5f626b, #5f626b 7px, #6a6e73 7px, #6a6e73 9px); }
-.tile[data-terrain="Water"], .tile[data-terrain="Ocean"] { background: #355c74; }
+.tile[data-terrain="Water"] { background: #3f7892; }
+.tile[data-terrain="Ocean"] { background: #263f61; }
 .tile[data-terrain="Fog"] { background: #252e35; }
 .tile[data-owner="1"] { box-shadow: inset 0 -3px #82d4df; }
 .tile[data-owner="2"] { box-shadow: inset 0 -3px #ebb481; }

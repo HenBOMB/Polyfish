@@ -169,7 +169,9 @@ fn snapshot(game: &Game, has_network: bool, replaying: bool) -> Value {
     let (observed, bot_turn) = board_view(game, replaying);
     let state = &observed.state;
     let pov = observed.current_player_id();
-    let tiles: Vec<_> = state.tiles.values().map(|tile| {
+    let mut tiles: Vec<_> = state.tiles.values().collect();
+    tiles.sort_unstable_by_key(|tile| tile.coords.idx);
+    let tiles: Vec<_> = tiles.into_iter().map(|tile| {
         if !tile.explorers.contains(&pov) && state.settings._fow {
             return json!({"index": tile.coords.idx, "visible": false});
         }

@@ -1,16 +1,21 @@
 use polyfish::Coords;
 use polyfish::actions::city::{add_population, capture_city};
 use polyfish::actions::structure::{create_structure, destroy_structure};
-use polyfish::functions::{get_city_at, get_city_production};
+use polyfish::functions::{get_city_at, get_city_production, get_unit_at};
 use polyfish::game::Game;
-use polyfish::moves::{BuildMove, EndTurnMove, RewardMove};
+use polyfish::moves::{
+    AttackMove, BuildMove, CaptureMove, EndTurnMove, Move, ResearchMove, RewardMove, StepMove,
+    UpgradeMove,
+};
+use polyfish::replay::ReplayCommand;
 use polyfish::research::{
     self, EXPERT_BUDGET, MatchConfig, MatchResult, Opponent, OpponentPreset, observation,
 };
 use polyfish::settings::technology::get_technology_setting;
-use polyfish::states::{CityState, GameState};
+use polyfish::states::{CityState, GameState, StructureState, UnitState};
 use polyfish::types::{
-    CityRewardType, MapSize, ModeType, ResourceType, StructureType, TerrainType, TribeType,
+    CityRewardType, MapSize, MapType, ModeType, ResourceType, StructureType, TechnologyType,
+    TerrainType, TribeType, UnitType,
 };
 
 fn fixture(size: MapSize) -> Game {
@@ -20,6 +25,282 @@ fn fixture(size: MapSize) -> Game {
         42,
         MatchConfig::new(Opponent::Expert, 2),
     )
+}
+
+#[test]
+fn all_research_maps_have_valid_seeded_starts() {
+    for size in research::BOARD_SIZES {
+        for (kind, name, _) in research::MAP_TYPES {
+            let tiles = size.get_size().pow(2);
+            assert_eq!(research::board_size(tiles as u16), Some(size));
+            assert_eq!(research::map_type(name), Some(kind));
+            for seed in [0, 42, i64::MAX] {
+                let start = || {
+                    research::new_match_on(
+                        size,
+                        kind,
+                        [TribeType::Kickoo, TribeType::Hoodrick],
+                        seed,
+                        MatchConfig::new(Opponent::Human, 2),
+                    )
+                };
+                let game = start();
+                let state = &game.state;
+                assert_eq!(state.tiles.len(), tiles as usize);
+                assert_eq!(state.settings.map_type, kind);
+                assert_eq!(state.initial_seed, seed);
+                for (id, tribe) in &state.tribes {
+                    let capital = tribe.starting_tile_coords.idx;
+                    assert_eq!(state.tiles[&capital].capital_of, *id);
+                    assert_eq!(state.tiles[&capital].owner, *id);
+                    assert_eq!(state.tiles[&capital].terrain_type, TerrainType::Field);
+                    assert_eq!(tribe.cities[0].idx, capital);
+                }
+                assert!(
+                    state
+                        .tiles
+                        .values()
+                        .any(|tile| tile.terrain_type == TerrainType::Water)
+                );
+                let other = start();
+                for (idx, tile) in &state.tiles {
+                    assert_eq!(tile.terrain_type, other.state.tiles[idx].terrain_type);
+                    assert_eq!(tile.climate, other.state.tiles[idx].climate);
+                }
+                let reload = Game::from_json(&game.to_json().unwrap()).unwrap();
+                assert_eq!(reload.state.settings.map_type, kind);
+                assert_eq!(reload.state.initial_seed, seed);
+            }
+        }
+    }
+}
+
+#[test]
+fn regular_tribes_use_the_expected_starting_units_and_tech() {
+    use TechnologyType::*;
+    use UnitType::*;
+    let expected = [
+        (TribeType::AiMo, MindBender, Some(Philosophy)),
+        (TribeType::Bardur, Warrior, Some(Hunting)),
+        (TribeType::Hoodrick, Archer, Some(Archery)),
+        (TribeType::Imperius, Warrior, Some(Organization)),
+        (TribeType::Kickoo, Warrior, Some(Fishing)),
+        (TribeType::Luxidoor, Warrior, Option::None),
+        (TribeType::Oumaji, Rider, Some(Riding)),
+        (TribeType::Quetzali, Defender, Some(Strategy)),
+        (TribeType::Vengir, Swordsman, Some(Smithery)),
+        (TribeType::XinXi, Warrior, Some(Climbing)),
+        (TribeType::Yadakk, Warrior, Some(Roads)),
+        (TribeType::Zebasi, Warrior, Some(Farming)),
+    ];
+    for ((tribe, value, label), (expected, unit, tech)) in
+        research::REGULAR_TRIBES.into_iter().zip(expected)
+    {
+        assert_eq!(research::research_tribe(value), Some(expected));
+        assert_eq!(research::research_tribe(label), Some(expected));
+        let game = research::new_match_on(
+            MapSize::Tiny,
+            MapType::Archipelago,
+            [tribe, TribeType::Kickoo],
+            42,
+            MatchConfig::new(Opponent::Human, 2),
+        );
+        let player = &game.state.tribes[&1];
+        assert_eq!(player.tribe_type, expected);
+        assert_eq!(player.units[0].unit_type, unit);
+        if let Some(tech) = tech {
+            assert!(get_technology_setting(tech).tier.is_some());
+            assert!(
+                player
+                    .tech_vanilla
+                    .iter()
+                    .any(|entry| entry.tech_type == tech)
+            );
+        }
+        if tribe == TribeType::Luxidoor {
+            assert_eq!(player.cities[0].level, 3);
+        }
+    }
+    assert!(research::research_tribe("Aquarion").is_none());
+}
+
+const WEST_CAPITAL: i32 = 57;
+const WEST_PORT: i32 = 58;
+const EAST_CAPITAL: i32 = 63;
+
+fn strait() -> Game {
+    let mut game = research::new_match_on(
+        MapSize::Tiny,
+        MapType::Archipelago,
+        [TribeType::Kickoo, TribeType::Imperius],
+        42,
+        MatchConfig::new(Opponent::Human, 2),
+    );
+    game.state.resources.clear();
+    game.state.structures.clear();
+    for capital in [WEST_CAPITAL, EAST_CAPITAL] {
+        game.state.structures.insert(
+            capital,
+            Some(StructureState {
+                structure_type: StructureType::Village,
+                ..StructureState::default()
+            }),
+        );
+    }
+    for (&idx, tile) in &mut game.state.tiles {
+        let x = idx % 11;
+        tile.terrain_type = match x {
+            3 | 7 => TerrainType::Water,
+            4..=6 => TerrainType::Ocean,
+            _ => TerrainType::Field,
+        };
+        tile.capital_of = if idx == WEST_CAPITAL {
+            1
+        } else if idx == EAST_CAPITAL {
+            2
+        } else {
+            0
+        };
+        tile.owner = if idx == WEST_CAPITAL || idx == WEST_PORT {
+            1
+        } else {
+            tile.capital_of
+        };
+        tile.ruling_city_coords = match tile.owner {
+            1 => Some(Coords::from_index(WEST_CAPITAL, 11)),
+            2 => Some(Coords::from_index(EAST_CAPITAL, 11)),
+            _ => None,
+        };
+        tile._unit_owner_id = None;
+        tile.explorers.extend([1, 2]);
+    }
+    for (id, capital) in [(1, WEST_CAPITAL), (2, EAST_CAPITAL)] {
+        let tribe = game.state.tribes.get_mut(&id).unwrap();
+        tribe.starting_tile_coords = Coords::from_index(capital, 11);
+        tribe.cities[0].idx = capital;
+        tribe.stars = 30;
+        tribe.units[0].coords = tribe.starting_tile_coords;
+        tribe.units[0].prev_coords = tribe.starting_tile_coords;
+        tribe.units[0].home_coords = Some(tribe.starting_tile_coords);
+    }
+    game.state.tribes.get_mut(&2).unwrap().units.clear();
+    game.post_load();
+    game
+}
+
+fn is_legal(game: &Game, move_: &dyn Move) -> bool {
+    game.legal_moves()
+        .iter()
+        .any(|candidate| candidate.serialize() == move_.serialize())
+}
+
+fn play_legal(game: &mut Game, move_: &dyn Move) {
+    assert!(is_legal(game, move_), "{}", move_.describe(&game.state));
+    let _ = game.play_move(move_).unwrap();
+}
+
+fn next_round(game: &mut Game) {
+    play_legal(game, &EndTurnMove);
+    play_legal(game, &EndTurnMove);
+}
+
+#[test]
+fn naval_crossing_upgrades_fights_lands_and_wins_might() {
+    let mut game = strait();
+    play_legal(&mut game, &BuildMove::new(WEST_PORT, StructureType::Port));
+    play_legal(&mut game, &StepMove::new(WEST_CAPITAL, WEST_PORT));
+    let raft = get_unit_at(&game.state, WEST_PORT).unwrap();
+    assert_eq!(raft.unit_type, UnitType::Raft);
+    assert_eq!(raft.passenger_type, Some(UnitType::Warrior));
+    next_round(&mut game);
+    let ocean = WEST_PORT + 2;
+    assert!(!is_legal(&game, &StepMove::new(WEST_PORT, ocean)));
+
+    let enemy = UnitState {
+        coords: Coords::from_index(ocean, 11),
+        owner: 2,
+        unit_type: UnitType::Raft,
+        health: 1.0,
+        ..UnitState::default()
+    };
+    game.state.tribes.get_mut(&2).unwrap().units.push(enemy);
+    game.post_load();
+    assert!(!is_legal(&game, &AttackMove::new(WEST_PORT, ocean)));
+    play_legal(&mut game, &ResearchMove::new(TechnologyType::Sailing));
+    let upgrade = UpgradeMove::new(WEST_PORT, UnitType::Scoutship);
+    assert!(matches!(
+        ReplayCommand::from_move(&upgrade).unwrap(),
+        ReplayCommand::Upgrade { .. }
+    ));
+    play_legal(&mut game, &upgrade);
+    play_legal(&mut game, &AttackMove::new(WEST_PORT, ocean));
+    assert!(get_unit_at(&game.state, ocean).is_none());
+
+    next_round(&mut game);
+    play_legal(&mut game, &StepMove::new(WEST_PORT, ocean));
+    next_round(&mut game);
+    play_legal(&mut game, &StepMove::new(ocean, EAST_CAPITAL));
+    let passenger = get_unit_at(&game.state, EAST_CAPITAL).unwrap();
+    assert_eq!(passenger.unit_type, UnitType::Warrior);
+    assert!(passenger.moved && passenger.attacked);
+    assert!(!is_legal(&game, &CaptureMove::new(EAST_CAPITAL)));
+    next_round(&mut game);
+    play_legal(&mut game, &CaptureMove::new(EAST_CAPITAL));
+    assert_eq!(research::result(&game), MatchResult::Won { winner: 1 });
+}
+
+#[test]
+fn giant_returns_to_land_as_a_giant() {
+    let mut game = strait();
+    let giant = &mut game.state.tribes[&1].units[0];
+    giant.unit_type = UnitType::Giant;
+    giant.health = 40.0;
+    play_legal(&mut game, &BuildMove::new(WEST_PORT, StructureType::Port));
+    play_legal(&mut game, &StepMove::new(WEST_CAPITAL, WEST_PORT));
+    assert_eq!(
+        get_unit_at(&game.state, WEST_PORT).unwrap().unit_type,
+        UnitType::Juggernaut
+    );
+    next_round(&mut game);
+    play_legal(&mut game, &StepMove::new(WEST_PORT, WEST_CAPITAL));
+    assert_eq!(
+        get_unit_at(&game.state, WEST_CAPITAL).unwrap().unit_type,
+        UnitType::Giant
+    );
+}
+
+#[test]
+fn all_presets_can_take_a_capital_across_a_strait() {
+    for preset in [
+        OpponentPreset::Easy,
+        OpponentPreset::Normal,
+        OpponentPreset::Expert,
+    ] {
+        let mut game = strait();
+        game.state.settings.max_turns = 20;
+        let mut navigated_ocean = false;
+        for _ in 0..160 {
+            if research::result(&game) != MatchResult::InProgress {
+                break;
+            }
+            if game.current_player_id() == 2 {
+                play_legal(&mut game, &EndTurnMove);
+                continue;
+            }
+            let action = research::choose_move(&game, preset).unwrap();
+            play_legal(&mut game, action.as_ref());
+            navigated_ocean |= game.state.tribes[&1].units.iter().any(|unit| {
+                unit.unit_type.is_naval()
+                    && game.state.tiles[&unit.coords.idx].terrain_type == TerrainType::Ocean
+            });
+        }
+        assert!(navigated_ocean, "{preset:?} never entered the ocean");
+        assert_eq!(
+            research::result(&game),
+            MatchResult::Won { winner: 1 },
+            "{preset:?}"
+        );
+    }
 }
 
 #[test]
@@ -432,7 +713,8 @@ fn loading_a_save_preserves_market_income_across_a_city_border() {
     }
     let _ = create_structure(&mut game.state, market, StructureType::Market, 1);
     let _ = create_structure(&mut game.state, sawmill, StructureType::Sawmill, 1);
-    let income = |state: &GameState, idx| get_city_production(state, get_city_at(state, idx).unwrap());
+    let income =
+        |state: &GameState, idx| get_city_production(state, get_city_at(state, idx).unwrap());
     let home_income = income(&game.state, home);
     assert_eq!(home_income, 3); // Base, capital bonus, and one adjacent Sawmill.
     assert_eq!(income(&game.state, neighbor), 1);

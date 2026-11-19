@@ -2,9 +2,10 @@
 //!
 //! Upgrade a unit (e.g. Boat -> Ship).
 
+use crate::functions::{get_unit_at, is_at_peace};
 use crate::moves::{Move, MoveResult};
 use crate::settings::get_unit_setting;
-use crate::states::GameState;
+use crate::states::{GameState, PlayerId};
 use crate::types::{MoveType, UnitType};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -32,9 +33,21 @@ impl Move for UpgradeMove {
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let pov_id = state.settings.current_player_turn_id;
 
-        // Check validation
+        let unit = get_unit_at(state, self.src_index).ok_or("No unit to upgrade")?;
         let settings = get_unit_setting(self.target_type);
+        if unit.owner != pov_id
+            || settings.upgrade_from != Some(unit.unit_type)
+            || !can_upgrade_at(state, self.src_index, pov_id)
+        {
+            return Err("Unit cannot upgrade here".into());
+        }
         if let Some(tribe) = state.tribes.get(&pov_id) {
+            if !tribe.tech_vanilla.iter().any(|tech| {
+                crate::settings::technology::get_unlocked_units(tech.tech_type, tribe.tribe_type)
+                    .contains(&self.target_type)
+            }) {
+                return Err("Upgrade requires an unlocked unit".into());
+            }
             if tribe.stars < settings.cost {
                 return Err(format!(
                     "Insufficient stars for upgrade: need {}, have {}",
@@ -66,6 +79,7 @@ impl Move for UpgradeMove {
             "moveType": self.move_type(),
             "src": self.src_index,
             "type": self.target_type,
+            "upgrade": true,
         })
     }
 
@@ -78,6 +92,12 @@ impl Move for UpgradeMove {
     fn unit_type(&self) -> Result<UnitType, String> {
         Ok(self.target_type)
     }
+}
+
+fn can_upgrade_at(state: &GameState, idx: i32, owner: PlayerId) -> bool {
+    state.tiles.get(&idx).is_some_and(|tile| {
+        tile.owner == owner || (tile.owner > 0 && is_at_peace(state, owner, tile.owner))
+    })
 }
 
 /// Generate upgrade moves
@@ -108,10 +128,7 @@ pub fn generate_upgrade_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>)
     }
 
     for unit in &tribe.units {
-        // Polytopia/TS Rule: Only Raft can be upgraded (usually Boat/Ship/etc. handled via Navy)
-        // and tile must not be "occupied" (TS weirdness)
-
-        if unit.unit_type != UnitType::Raft {
+        if unit.unit_type != UnitType::Raft || !can_upgrade_at(state, unit.coords.idx, pov_id) {
             continue;
         }
 

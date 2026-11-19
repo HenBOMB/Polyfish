@@ -210,7 +210,7 @@ const TechNodes = {
 const StructureCosts = {
     5: 5, // Farm
     6: 5, // Windmill
-    8: 10, // Port
+    8: 7, // Port
     12: 3, // Lumber Hut
     13: 5, // Sawmill
     17: 20, // Temple

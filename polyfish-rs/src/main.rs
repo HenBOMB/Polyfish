@@ -1532,10 +1532,11 @@ fn replay_error_json(error: impl std::fmt::Display) -> Json<Value> {
 
 fn replay_playback_json(playback: &ReplayPlayback, filename: Option<&str>) -> Value {
     let game = playback.game();
-                let mut tiles: Vec<_> = game.state.tiles.values().collect();
+    let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|tile| tile.coords.idx);
     serde_json::json!({
-                    "status": "success",
+        "mapLabel": polyfish::research::map_type_label(game.state.settings.map_type),
+        "status": "success",
         "filename": filename,
         "cursor": playback.cursor(),
         "totalCommands": playback.total_commands(),
@@ -1543,15 +1544,15 @@ fn replay_playback_json(playback: &ReplayPlayback, filename: Option<&str>) -> Va
         "currentCommand": playback.current_command(),
         "metadata": playback.replay().metadata,
         "result": playback.replay().result,
-                    "state": {
-                        "settings": game.state.settings,
-                        "tiles": tiles,
-                        "structures": game.state.structures,
-                        "resources": game.state.resources,
-                        "tribes": tribes_json_with_max_health(&game.state),
-                        "_prediction": game.state._prediction,
-                        "_messages": game.state._messages,
-                    },
+        "state": {
+            "settings": game.state.settings,
+            "tiles": tiles,
+            "structures": game.state.structures,
+            "resources": game.state.resources,
+            "tribes": tribes_json_with_max_health(&game.state),
+            "_prediction": game.state._prediction,
+            "_messages": game.state._messages,
+        },
         "evaluation": build_evaluation_json(&game.state),
     })
 }

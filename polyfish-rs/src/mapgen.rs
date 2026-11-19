@@ -1062,7 +1062,21 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             if candidates.is_empty() {
                 break;
             }
-            let idx = candidates.remove(rng.next_index(candidates.len()));
+            let pick = if target_terrain == TerrainType::Water
+                && settings.map_type != MapType::Drylands
+            {
+                let coastal: Vec<_> = candidates.iter().enumerate().filter_map(|(slot, &idx)| {
+                    (map[idx as usize].terrain_type == TerrainType::Water).then_some(slot)
+                }).collect();
+                if coastal.is_empty() {
+                    rng.next_index(candidates.len())
+                } else {
+                    coastal[rng.next_index(coastal.len())]
+                }
+            } else {
+                rng.next_index(candidates.len())
+            };
+            let idx = candidates.remove(pick);
             map[idx as usize].terrain_type = target_terrain;
             map[idx as usize].above = Some(resource.to_string());
         }

@@ -221,7 +221,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             attack: 0.0,
             movement: 2,
             defense: 1.0,
-            range: 2,
+            range: 0,
             health: 10.0,
             skills: skills![S::Carry, S::Float, S::Static, S::Stiff],
             ..Default::default()

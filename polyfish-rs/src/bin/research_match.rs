@@ -65,7 +65,8 @@ fn record(game: &Game, args: &Args) -> ReplayRecorder {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let size = research::board_size(args.map_size).context("Choose 121, 196, 256, 324, 400, or 900 tiles")?;
+    let size = research::board_size(args.map_size)
+        .context("Choose 121, 196, 256, 324, 400, or 900 tiles")?;
     let kind = research::map_type(&args.map_type).context("Unsupported map type")?;
     let tribes = [
         research::research_tribe(&args.tribe1).context("Unsupported player-one tribe")?,

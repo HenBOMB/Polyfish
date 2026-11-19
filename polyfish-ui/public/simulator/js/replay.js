@@ -64,7 +64,7 @@ function enterReplayMode(data, filename) {
     aiTurnIndicator.textContent = 'Replay';
     aiTurnIndicator.classList.remove('your-turn');
     applyReplayState(data);
-    focusCamera();
+    fitGraphicalBoard();
 }
 
 function exitReplayMode() {
@@ -105,6 +105,8 @@ function applyReplayState(data) {
     const nextSize = data.state.settings?.size;
     if (previousSize && nextSize !== previousSize) renderer.clear();
     GAME_STATE = data.state;
+    matchMapType.hidden = !data.mapLabel;
+    matchMapType.textContent = data.mapLabel || '';
 
     const playerId = GAME_STATE.settings.currentPlayerTurnId;
     const tribe = GAME_STATE.tribes[String(playerId)] || GAME_STATE.tribes[playerId];

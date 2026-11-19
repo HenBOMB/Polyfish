@@ -14,13 +14,20 @@ use crate::types::{
     TribeType,
 };
 
+mod naval;
+
 pub const PRESET_VERSION: u16 = 1;
 pub const RULES_VERSION: i32 = 115;
 pub const DEFAULT_MAX_TURNS: i32 = 50;
 pub const EXPERT_BUDGET: usize = 256;
 pub const RHEA_HORIZON: usize = 20;
 pub const BOARD_SIZES: [MapSize; 6] = [
-    MapSize::Tiny, MapSize::Small, MapSize::Normal, MapSize::Large, MapSize::Huge, MapSize::Massive,
+    MapSize::Tiny,
+    MapSize::Small,
+    MapSize::Normal,
+    MapSize::Large,
+    MapSize::Huge,
+    MapSize::Massive,
 ];
 pub const MAP_TYPES: [(MapType, &str, &str); 6] = [
     (MapType::Drylands, "drylands", "Drylands"),
@@ -105,7 +112,9 @@ impl MatchConfig {
 }
 
 pub fn board_size(tiles: u16) -> Option<MapSize> {
-    BOARD_SIZES.into_iter().find(|size| size.get_size().pow(2) == i32::from(tiles))
+    BOARD_SIZES
+        .into_iter()
+        .find(|size| size.get_size().pow(2) == i32::from(tiles))
 }
 
 pub fn research_tribe(name: &str) -> Option<TribeType> {
@@ -115,7 +124,9 @@ pub fn research_tribe(name: &str) -> Option<TribeType> {
         "yădakk" => "yadakk",
         _ => name,
     };
-    REGULAR_TRIBES.iter().find_map(|&(tribe, key, _)| alias.eq_ignore_ascii_case(key).then_some(tribe))
+    REGULAR_TRIBES
+        .iter()
+        .find_map(|&(tribe, key, _)| alias.eq_ignore_ascii_case(key).then_some(tribe))
 }
 
 pub fn map_type(name: &str) -> Option<MapType> {
@@ -123,15 +134,21 @@ pub fn map_type(name: &str) -> Option<MapType> {
         "waterworld" | "water world" => "water-world",
         _ => name,
     };
-    MAP_TYPES.iter().find_map(|&(kind, key, _)| alias.eq_ignore_ascii_case(key).then_some(kind))
+    MAP_TYPES
+        .iter()
+        .find_map(|&(kind, key, _)| alias.eq_ignore_ascii_case(key).then_some(kind))
 }
 
 pub fn map_type_name(kind: MapType) -> Option<&'static str> {
-    MAP_TYPES.iter().find_map(|&(candidate, key, _)| (candidate == kind).then_some(key))
+    MAP_TYPES
+        .iter()
+        .find_map(|&(candidate, key, _)| (candidate == kind).then_some(key))
 }
 
 pub fn map_type_label(kind: MapType) -> Option<&'static str> {
-    MAP_TYPES.iter().find_map(|&(candidate, _, label)| (candidate == kind).then_some(label))
+    MAP_TYPES
+        .iter()
+        .find_map(|&(candidate, _, label)| (candidate == kind).then_some(label))
 }
 
 pub fn new_match(size: MapSize, tribes: [TribeType; 2], seed: i64, config: MatchConfig) -> Game {
@@ -317,7 +334,22 @@ pub fn choose_with_budget(
     if actions.len() <= 1 {
         return (actions.pop(), 0);
     }
+    let naval = (observed.state.settings.map_type != MapType::Drylands)
+        .then(|| naval::NavalPolicy::new(&observed.state));
+    if let Some(policy) = &naval {
+        actions.retain(|action| !policy.save_for_port(action.as_ref()));
+    }
     if preset == OpponentPreset::Expert && budget > 0 {
+        if let Some(policy) = &naval {
+            // Search starts with the available naval opportunities when one is immediate.
+            let best = actions
+                .iter()
+                .filter_map(|action| policy.priority(action.as_ref()))
+                .max();
+            if let Some(score) = best.filter(|&score| score >= naval::NAVAL_PRIORITY) {
+                actions.retain(|action| policy.priority(action.as_ref()) == Some(score));
+            }
+        }
         observed.state.settings._verbose = false;
         observed.state.settings.seed = seed as i64;
         // Both simulated players see the known board. Unknown tiles remain blank.
@@ -333,16 +365,21 @@ pub fn choose_with_budget(
         return (Some(actions.swap_remove(index)), advances);
     }
 
-    actions.sort_by_cached_key(|action| {
-        std::cmp::Reverse(rule_score(&observed.state, action.as_ref()))
-    });
+    let goals = visible_goals(&observed.state);
+    let score = |action: &dyn Move| {
+        naval
+            .as_ref()
+            .and_then(|policy| policy.priority(action))
+            .unwrap_or_else(|| rule_score(&observed.state, &goals, action))
+    };
+    actions.sort_by_cached_key(|action| std::cmp::Reverse(score(action.as_ref())));
     let choices = if preset == OpponentPreset::Easy {
         actions.len().min(3)
     } else {
-        let best = rule_score(&observed.state, actions[0].as_ref());
+        let best = score(actions[0].as_ref());
         actions
             .iter()
-            .take_while(|action| rule_score(&observed.state, action.as_ref()) == best)
+            .take_while(|action| score(action.as_ref()) == best)
             .count()
     };
     let index = rng.random_range(0..choices);
@@ -377,7 +414,25 @@ fn order_candidates(actions: Vec<Box<dyn Move>>) -> Vec<Box<dyn Move>> {
     actions
 }
 
-fn rule_score(state: &GameState, action: &dyn Move) -> u8 {
+fn visible_goals(state: &GameState) -> Vec<i32> {
+    let pov = state.settings.current_player_turn_id;
+    state
+        .tiles
+        .values()
+        .filter(|tile| {
+            tile.explorers.contains(&pov)
+                && tile.owner != pov
+                && (crate::functions::get_city_at(state, tile.coords.idx).is_some()
+                    || matches!(
+                        get_structure_type_at(state, tile.coords.idx),
+                        Some(StructureType::Village | StructureType::Ruin)
+                    ))
+        })
+        .map(|tile| tile.coords.idx)
+        .collect()
+}
+
+fn rule_score(state: &GameState, goals: &[i32], action: &dyn Move) -> u8 {
     let pov = state.settings.current_player_turn_id;
     let source = action.source_idx().ok().map(|idx| idx as i32);
     let target = action.target_idx().ok().map(|idx| idx as i32);
@@ -411,19 +466,9 @@ fn rule_score(state: &GameState, action: &dyn Move) -> u8 {
                 return 1;
             };
             let distance = |index| {
-                state
-                    .tiles
-                    .values()
-                    .filter(|tile| {
-                        tile.explorers.contains(&pov)
-                            && tile.owner != pov
-                            && (crate::functions::get_city_at(state, tile.coords.idx).is_some()
-                                || matches!(
-                                    get_structure_type_at(state, tile.coords.idx),
-                                    Some(StructureType::Village | StructureType::Ruin)
-                                ))
-                    })
-                    .map(|tile| get_chebyshev_distance(index, tile.coords.idx, state.settings.size))
+                goals
+                    .iter()
+                    .map(|&goal| get_chebyshev_distance(index, goal, state.settings.size))
                     .min()
             };
             if distance(to) < distance(from) {
