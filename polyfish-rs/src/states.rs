@@ -6,7 +6,9 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+mod board_tiles;
 mod tile_sets;
+pub use board_tiles::BoardTiles;
 pub use tile_sets::{TileEffects, TileExplorers};
 
 /// Helper module for deserializing booleans that may come as integers (0/1)
@@ -598,7 +600,7 @@ pub enum EndOfTurnAction {
 pub struct GameState {
     pub settings: GameSettings,
     #[serde(default)]
-    pub tiles: IndexMap<i32, TileState>,
+    pub tiles: BoardTiles,
     #[serde(default)]
     pub structures: IndexMap<i32, Option<StructureState>>,
     #[serde(default)]
@@ -620,7 +622,7 @@ impl Default for GameState {
     fn default() -> Self {
         Self {
             settings: GameSettings::default(),
-            tiles: IndexMap::new(),
+            tiles: BoardTiles::default(),
             structures: IndexMap::new(),
             resources: IndexMap::new(),
             tribes: IndexMap::new(),
