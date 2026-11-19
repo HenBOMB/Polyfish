@@ -315,6 +315,18 @@ async fn load(State(app): State<Arc<AppState>>, Json(state): Json<GameState>) ->
     {
         return Err(bad_request("This save is incompatible with the simulator"));
     }
+    let settings = &game.state.settings;
+    if settings._max_tribe_count != 2
+        || ![1, 2].into_iter().all(|id| {
+            game.state.tribes.get(&id).is_some_and(|tribe| tribe.id == id)
+        })
+        || !matches!(settings.current_player_turn_id, 1 | 2)
+        || (cfg.opponent != Opponent::Human && !matches!(cfg.bot_seat, 1 | 2))
+        || settings.turn < 0
+        || settings.max_turns < 1
+    {
+        return Err(bad_request("This save has invalid turn settings"));
+    }
     game.post_load();
     let mut live = app.game.lock().unwrap();
     *live = game;

@@ -1,6 +1,6 @@
 use polyfish::Coords;
 use polyfish::actions::city::{add_population, capture_city};
-use polyfish::actions::structure::destroy_structure;
+use polyfish::actions::structure::{create_structure, destroy_structure};
 use polyfish::functions::{get_city_at, get_city_production};
 use polyfish::game::Game;
 use polyfish::moves::{BuildMove, EndTurnMove, RewardMove};
@@ -406,4 +406,41 @@ fn a_stale_territory_list_does_not_duplicate_build_actions() {
         })
         .count();
     assert_eq!(builds, 1);
+}
+
+#[test]
+fn loading_a_save_preserves_market_income_across_a_city_border() {
+    let mut game = fixture(MapSize::Tiny);
+    let size = game.map_size();
+    let home = game.state.tribes[&1].cities[0].idx;
+    let step = if home % size < size / 2 { 1 } else { -1 };
+    let (market, sawmill, neighbor) = (home + step, home + 2 * step, home + 3 * step);
+
+    let tribe = game.state.tribes.get_mut(&1).unwrap();
+    tribe.cities[0]._territory = vec![market];
+    tribe.cities.push(CityState {
+        idx: neighbor,
+        owner: 1,
+        production: 1,
+        _territory: vec![sawmill],
+        ..CityState::default()
+    });
+    for (idx, city) in [(market, home), (sawmill, neighbor), (neighbor, neighbor)] {
+        let tile = game.state.tiles.get_mut(&idx).unwrap();
+        tile.owner = 1;
+        tile.ruling_city_coords = Some(Coords::from_index(city, size));
+    }
+    let _ = create_structure(&mut game.state, market, StructureType::Market, 1);
+    let _ = create_structure(&mut game.state, sawmill, StructureType::Sawmill, 1);
+    let income = |state: &GameState, idx| get_city_production(state, get_city_at(state, idx).unwrap());
+    let home_income = income(&game.state, home);
+    assert_eq!(home_income, 3); // Base, capital bonus, and one adjacent Sawmill.
+    assert_eq!(income(&game.state, neighbor), 1);
+
+    for ruling_city in [Some(Coords::from_index(home, size)), None] {
+        game.state.tiles[&market].ruling_city_coords = ruling_city;
+        let reloaded = Game::from_json(&game.to_json().unwrap()).unwrap();
+        assert_eq!(income(&reloaded.state, home), home_income);
+        assert_eq!(income(&reloaded.state, neighbor), 1);
+    }
 }

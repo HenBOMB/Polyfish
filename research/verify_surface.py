@@ -1,6 +1,8 @@
 """Check full matches, a common browser/headless turn, and replay playback."""
 
 import argparse
+from copy import deepcopy
+from functools import partial
 import itertools
 import json
 from pathlib import Path
@@ -26,15 +28,47 @@ def browser_key(command):
     return key
 
 
-def verify(base_url, binary, size, preset, output, full_api):
-    def request(path, data=None):
-        body = None if data is None else json.dumps(data).encode()
+def request_json(base_url, path, data=None):
+    body = None if data is None else json.dumps(data).encode()
+    try:
+        with urlopen(Request(base_url + path, body, {"Content-Type": "application/json"})) as response:
+            return json.load(response)
+    except HTTPError as error:
+        error.add_note(error.read().decode())
+        raise
+
+
+def verify_save_rejects_invalid_turn_order(base_url):
+    request = partial(request_json, base_url)
+    before = request("/reset", {"mapSize": 121, "seed": 42, "opponentPreset": "normal"})
+    saved = request("/research/save")
+    invalid_saves = []
+    for key, value in [("_maxTribeCount", 1), ("currentPlayerTurnId", 3)]:
+        invalid = deepcopy(saved)
+        invalid["settings"][key] = value
+        invalid_saves.append(invalid)
+    invalid = deepcopy(saved)
+    invalid["tribes"]["3"] = invalid["tribes"].pop("2")
+    invalid["tribes"]["3"]["id"] = 3
+    invalid_saves.append(invalid)
+    invalid = deepcopy(saved)
+    invalid["settings"]["research"]["botSeat"] = 3
+    invalid_saves.append(invalid)
+
+    for invalid in invalid_saves:
         try:
-            with urlopen(Request(base_url + path, body, {"Content-Type": "application/json"})) as response:
-                return json.load(response)
+            request("/research/load", invalid)
         except HTTPError as error:
-            error.add_note(error.read().decode())
-            raise
+            assert error.code == 400, error
+        else:
+            raise AssertionError("Save with invalid turn settings was accepted")
+        assert request("/research/current") == before
+    after = request("/research/move", {"revision": before["revision"], "action": {"moveType": 10}})
+    assert after["active"] == 2 and after["revision"] == before["revision"] + 1
+
+
+def verify(base_url, binary, size, preset, output, full_api):
+    request = partial(request_json, base_url)
 
     def play_human(game, command):
         action = browser_key(command)
@@ -109,6 +143,7 @@ def main():
     p.add_argument("--server", default="http://127.0.0.1:3000")
     p.add_argument("--full-api", action="store_true", help="Replay all decisions through the live browser API")
     args = p.parse_args()
+    verify_save_rejects_invalid_turn_order(args.server)
     with tempfile.TemporaryDirectory(prefix="polyfish-smoke-") as tmp:
         for size, preset in itertools.product((121, 196, 256), ("easy", "normal", "expert")):
             verify(args.server, args.binary.resolve(), size, preset, Path(tmp) / "match.json", args.full_api)

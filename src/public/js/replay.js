@@ -15,11 +15,10 @@ async function openReplayFile(input) {
     if (!file) return;
     showToast(`Loading ${file.name}...`);
     try {
-        const replay = JSON.parse(await file.text());
         const response = await fetch('/replay/open', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(replay),
+            body: await file.text(),
         });
         const data = await response.json();
         if (!response.ok || data.status === 'error') {

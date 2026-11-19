@@ -22,6 +22,7 @@ INCLUDE = (
     "polyfish-rs/examples/research_bench.rs",
     "polyfish-rs/src",
     "polyfish-rs/tests/research_simulator.rs",
+    "polyfish-rs/tests/unit_push.rs",
     "polyfish-ui/LICENSE",
     "research",
     "polyfish-ui/public/research",
