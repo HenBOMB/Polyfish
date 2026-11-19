@@ -80,13 +80,29 @@
     box-shadow: 0 12px 25px rgba(56, 189, 248, 0.3);
 }
 
-.tech-node .icon {
-    font-size: 40px;
+.tech-node .tech-icon {
+    width: 52px;
+    height: 52px;
+    object-fit: contain;
+    pointer-events: none;
     filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
+}
+
+.tech-node .tech-icon[src^="textures/units/"] {
+    width: 80px;
+    height: 80px;
+}
+
+.tech-node .tech-icon[src^="textures/animals/"] {
+    width: 68px;
+    height: 68px;
 }
 
 .tech-node .cost {
     position: absolute;
+    display: flex;
+    align-items: center;
+    gap: 2px;
     top: -10px;
     right: -10px;
     background: #000;
@@ -97,6 +113,12 @@
     font-weight: 800;
     border: 2px solid white;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+}
+
+.tech-node .cost img {
+    width: 13px;
+    height: 13px;
+    object-fit: contain;
 }
 
 .tech-node .label {

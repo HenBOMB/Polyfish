@@ -425,8 +425,7 @@ function updateSelectionInfo(clickX = null, clickY = null) {
             const tribeName = TRIBE_ID_2_NAME[tribeType];
             title = city.name || (tile.capitalOf > 0 ? "Capital" : "City");
             subtitle = `${tribeName} Territory`;
-            const climateIndex = terrainTextureIndex(tribeType);
-            thumbFile = `buildings/${tribeName}/Default/Houses/House_${climateIndex}_5`;
+            thumbFile = getCityFile(tribeType, tile.capitalOf > 0);
         } else {
             title = resourceName ? `${terrainName}, ${resourceName}` : terrainName;
             subtitle = resourceName ? "Extract this resource to upgrade your city" : "A sturdy foundation for your empire";
@@ -598,7 +597,8 @@ function updateTechModal(tribe, modalBody, overlayEl) {
     const hubIcon = `textures/units/${tribeName}/default/${tribeName}_default_Warrior.png`;
     hub.style.left = `calc(50% - 55px)`;
     hub.style.top = `calc(50% - 55px)`;
-    hub.innerHTML = `<img src="${hubIcon}" onerror="this.src='https://api.dicebear.com/7.x/bottts/svg?seed=${tribeName}'">`;
+    hub.title = tribeName;
+    hub.innerHTML = `<img src="${hubIcon}" alt="">`;
     nodesContainer.appendChild(hub);
 
     const centerX = 0;
@@ -665,9 +665,9 @@ function updateTechModal(tribe, modalBody, overlayEl) {
         const cost = hasPhilosophy ? Math.ceil(baseCost * 0.77) : baseCost;
 
         node.innerHTML = `
-            <span class="icon">${meta.icon}</span>
+            <img class="tech-icon" src="textures/${meta.icon}.png" alt="">
             <div class="label">${TechnologyNames[techId]}</div>
-            ${canResearch ? `<div class="cost">⭐ ${cost}</div>` : ''}
+            ${canResearch ? `<div class="cost"><img src="textures/misc/star.png" alt="">${cost}</div>` : ''}
         `;
 
         if (canResearch) {

@@ -136,3 +136,10 @@ function getGroundFile(terrain, climate) {
     };
     return fixed[terrain] || `terrain/tiles/ground_${terrainTextureIndex(climate)}`;
 }
+
+function getCityFile(tribeType, isCapital) {
+    const tribeName = TRIBE_ID_2_NAME[tribeType];
+    const textureIndex = TRIBE_TEXTURE_INDEX[tribeType];
+    if (!textureIndex) return 'buildings/common/Tribe';
+    return `buildings/${tribeName}/Default/Houses/House_${textureIndex}_${isCapital ? 7 : 5}`;
+}

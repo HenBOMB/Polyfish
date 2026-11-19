@@ -54,6 +54,18 @@
     pointer-events: none !important;
 }
 
+.structure.improvement {
+    width: 70px !important;
+    margin-left: 29px !important;
+    margin-top: -17px !important;
+}
+
+.structure.lighthouse {
+    width: 50px !important;
+    margin-left: 39px !important;
+    margin-top: -8px !important;
+}
+
 .monument {
     width: 50px !important;
     margin-left: 40px !important;
@@ -82,7 +94,6 @@
     pointer-events: none !important;
 }
 
-/* Legacy city styles removed to prevent conflicts with new nameplate system */
 .village {
     width: 60px !important;
     margin-left: 40px !important;
@@ -90,8 +101,11 @@
     pointer-events: none !important;
 }
 
-.city {
-    margin-top: -70px !important;
+.tile.city {
+    width: 116px;
+    margin-left: 6px;
+    margin-top: -67px;
+    pointer-events: none;
 }
 
 /* Refined City Nameplate & Growth Bar - REFINED V7 */

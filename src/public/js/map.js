@@ -262,6 +262,11 @@ class MapRenderer {
                 if (struct.type === 1) classes.push('village');
                 if (struct.type === 2) classes.push('ruins');
                 if (struct.type === 29) classes.push('monument');
+                if (struct.type === 47) {
+                    classes.push('lighthouse');
+                } else if ([5, 6, 8, 12, 13, 21, 22].includes(struct.type)) {
+                    classes.push('improvement');
+                }
                 this.updateLayer(idx, 'structure', structFile, pos, 2000, classes);
             }
         } else {
@@ -274,8 +279,9 @@ class MapRenderer {
             const tribeName = TRIBE_ID_2_NAME[city.tribe.type];
             const tribeColor = TRIBE_COLORS[city.tribe.type] || 'rgba(0,0,0,0.5)';
 
+            const isCapital = tile.capitalOf > 0;
+            this.updateLayer(idx, 'city', getCityFile(city.tribe.type, isCapital), pos, 4000, ['city']);
             const statsEl = this.updateLayer(idx, 'city-stats', '', pos, 4100, ['city-stats-layer']);
-            statsEl.style.backgroundImage = 'none'; // No background for stats container
 
             // Calculate segments (Polytopia style: dots for units, fill for population)
             const totalSegments = city.level + 1;
@@ -289,8 +295,6 @@ class MapRenderer {
             }
 
             const income = getCityProduction(state, city);
-            const isCapital = tile.capitalOf > 0;
-            const isConnected = city.connectedToCapital;
 
             statsEl.innerHTML = `
                 <div class="city-container">
@@ -344,7 +348,7 @@ class MapRenderer {
             data.layers[layerName] = el;
         }
 
-        el.style.backgroundImage = `url('textures/${filename}.png')`;
+        el.style.backgroundImage = filename ? `url('textures/${filename}.png')` : 'none';
         el.style.left = `${pos.x}px`;
         el.style.top = `${pos.y}px`;
         el.style.zIndex = Math.floor(pos.y + zIndex);

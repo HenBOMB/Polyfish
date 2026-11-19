@@ -170,42 +170,41 @@ const TechTree = {
 // Visual Nodes Configuration (Radial Layout - 72deg separation)
 // Branch Angles: Org(0), Climbing(72), Fishing(144), Hunting(216/-144), Riding(288/-72)
 const TechNodes = {
-    0: { x: 0, y: 0, icon: "🏛️" }, // Start
 
     // Organization Branch (0 deg - East)
-    6: { x: 160, y: 0, icon: "🤲" }, // Organization
-    8: { x: 260, y: 30, icon: "🌾" }, // Farming
-    9: { x: 360, y: 60, icon: "🏗️" }, // Construction
-    7: { x: 260, y: -30, icon: "🛡️" }, // Strategy
-    38: { x: 360, y: -60, icon: "🤝" }, // Diplomacy
+    6: { x: 160, y: 0, icon: "fruits/ResourceGFX_fruit_2" }, // Organization
+    8: { x: 260, y: 62, icon: "buildings/common/Farm" }, // Farming
+    9: { x: 360, y: 92, icon: "buildings/common/Windmill_0" }, // Construction
+    7: { x: 260, y: -62, icon: "units/Imperius/default/Imperius_default_Defender" }, // Strategy
+    38: { x: 360, y: -92, icon: "buildings/Imperius/Default/Houses/House_2_5" }, // Diplomacy
 
     // Climbing Branch (72 deg - South East)
-    20: { x: 60, y: 160, icon: "🧗" }, // Climbing
-    23: { x: 100, y: 240, icon: "⛏️" }, // Mining
-    24: { x: 140, y: 320, icon: "⚔️" }, // Smithery
-    21: { x: 0, y: 240, icon: "🧘" }, // Meditation
-    22: { x: -20, y: 340, icon: "🦉" }, // Philosophy
+    20: { x: 60, y: 160, icon: "terrain/mountains/mountain_2" }, // Climbing
+    23: { x: 100, y: 240, icon: "buildings/common/Mine" }, // Mining
+    24: { x: 140, y: 320, icon: "units/Imperius/default/Imperius_default_Swordsman" }, // Smithery
+    21: { x: 0, y: 240, icon: "buildings/common/Mountain Temple_1" }, // Meditation
+    22: { x: -20, y: 340, icon: "misc/literacy" }, // Philosophy
 
     // Fishing Branch (144 deg - South West)
-    10: { x: -130, y: 100, icon: "🎣" }, // Fishing
-    13: { x: -240, y: 120, icon: "⛵" }, // Sailing
-    14: { x: -340, y: 140, icon: "🧭" }, // Navigation
-    12: { x: -200, y: 200, icon: "🐢" }, // Aquatism
-    39: { x: -280, y: 280, icon: "🐏" }, // Ramming
+    10: { x: -130, y: 100, icon: "animals/fish" }, // Fishing
+    13: { x: -240, y: 120, icon: "units/Imperius/default/Imperius_default_Scoutship" }, // Sailing
+    14: { x: -340, y: 140, icon: "units/Imperius/default/Imperius_default_Bombership" }, // Navigation
+    12: { x: -200, y: 200, icon: "terrain/water/ocean" }, // Aquatism
+    39: { x: -280, y: 280, icon: "units/Imperius/default/Imperius_default_Rammership" }, // Ramming
 
     // Hunting Branch (-144 deg - North West)
-    15: { x: -130, y: -100, icon: "🏹" }, // Hunting
-    18: { x: -240, y: -120, icon: "🎯" }, // Archery
-    19: { x: -340, y: -140, icon: "👻" }, // Spiritualism
-    16: { x: -200, y: -200, icon: "🌲" }, // Forestry
-    17: { x: -280, y: -280, icon: "📐" }, // Mathematics
+    15: { x: -130, y: -100, icon: "animals/horse0003" }, // Hunting
+    18: { x: -240, y: -120, icon: "units/Imperius/default/Imperius_default_Archer" }, // Archery
+    19: { x: -340, y: -140, icon: "buildings/common/Forest Temple_1" }, // Spiritualism
+    16: { x: -200, y: -200, icon: "buildings/common/Lumber Hut" }, // Forestry
+    17: { x: -280, y: -280, icon: "units/Imperius/default/Imperius_default_Catapult" }, // Mathematics
 
     // Riding Branch (-72 deg - North East)
-    1: { x: 60, y: -160, icon: "🏇" }, // Riding
-    4: { x: 140, y: -250, icon: "🛣️" }, // Roads
-    5: { x: 200, y: -340, icon: "💰" }, // Trade (Far out)
-    2: { x: 0, y: -240, icon: "🕊️" }, // Free Spirit
-    3: { x: -40, y: -320, icon: "⚔️" }, // Chivalry
+    1: { x: 60, y: -160, icon: "units/Imperius/default/Imperius_default_Rider" }, // Riding
+    4: { x: 140, y: -250, icon: "misc/Road" }, // Roads
+    5: { x: 200, y: -340, icon: "buildings/common/Market01" }, // Trade (Far out)
+    2: { x: 0, y: -240, icon: "misc/citizen" }, // Free Spirit
+    3: { x: -40, y: -320, icon: "units/Imperius/default/Imperius_default_Knight" }, // Chivalry
 };
 
 const StructureCosts = {
