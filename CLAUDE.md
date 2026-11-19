@@ -13,16 +13,16 @@ Polyfish is an AlphaZero-style AI (MCTS + neural network) that plays *The Battle
 - `polyfish-ui/` — newer Vite/TypeScript UI. Note it contains a **forked copy** of the static UI under `polyfish-ui/public/simulator/`; the Rust server serves `src/public`, not either copy here. Check which one you're editing.
 - `polyfish-mod/` — C# mod (BepInEx/PolyMod) that runs inside the real Steam game to auto-play replays and POST captured game states to the local server.
 - `polyfish-scraper/` — TypeScript utilities for gathering game data/assets.
-- `polyfish-reader` — the C++ process-memory ripper. **Not checked into this repo**; `scan.sh` compiles and invokes it against a running `Polytopia.exe`.
-- `*.py`, `*.sh`, `*.js` at root and in `polyfish-rs/` — training, analysis, and reporting scripts.
+- `polyfish-reader` — the C++ process-memory ripper. **Not checked into this repo**; `scripts/scan.sh` invokes it against a running `Polytopia.exe`.
+- `scripts/` — launch and reporting tools. Crate-specific training and diagnostic tools live under `polyfish-rs/`.
 
 ## Commands
 
-All `cargo` commands run from `polyfish-rs/`. The root `run-server.sh` and `polyfish-rs/run_training_loop.sh` `cd` there for you.
+All `cargo` commands run from `polyfish-rs/`. The `scripts/run-server.sh` launcher and `polyfish-rs/run_training_loop.sh` `cd` there for you.
 
 **Run the web server / simulator** (port 3000, serves `src/public`):
 ```bash
-./run-server.sh                      # from repo root; kills :3000, then `cargo run --bin polyfish`
+./scripts/run-server.sh                      # from repo root; kills :3000, then `cargo run --bin polyfish`
 ```
 On startup `main.rs` tries to load game state from `live_game.json`, `saved_state.json`, then the newest `replays/mod_replay_*.json`, before falling back to a generated map.
 
@@ -142,7 +142,7 @@ If you change layer shapes, channel counts, or head sizes in one, you must mirro
 - Diagnostics: `benchmark.rs`, `actor_ceiling.rs`, `compare_evaluators.rs`, `repro_loop.rs`, `validate_csv.rs`, `stats.rs`, `debug_*.rs`, `verify_*.rs`.
 - Replay management: `import_replays.rs`, `upload_replays.rs`, `download_replay.rs`, `delete_all_replays.rs`, `extract_versions.rs`.
 
-Any binary invoked by a shell script forms a **CLI contract with that script**, and so does any python CLI beside it (`ladder.py`, `training_log.py`). `scripts/check_cli_contract.py` checks both in CI now (it builds the binaries and diffs every long flag the shell scripts pass against that target's `--help` — per subcommand for the python ones — and fails closed on anything it cannot resolve), but still grep `run_training_loop.sh` and `auto_train.sh` when you rename or remove an argument — three such breaks once stopped the pipeline running at all.
+Any binary invoked by a shell script forms a **CLI contract with that script**, and so does any python CLI beside it (`ladder.py`, `training_log.py`). `scripts/check_cli_contract.py` checks both in CI now (it builds the binaries and diffs every long flag the shell scripts pass against that target's `--help` — per subcommand for the python ones — and fails closed on anything it cannot resolve), but still grep `run_training_loop.sh` and `scripts/auto_train.sh` when you rename or remove an argument — three such breaks once stopped the pipeline running at all.
 
 ### Strength measurement
 Separate from the training metrics, and the instrument every experiment depends on:
@@ -155,7 +155,7 @@ Separate from the training metrics, and the instrument every experiment depends 
 - Both `self_play` and `arena` default `--symmetric` to true, and `run_gauge_match` passes it explicitly (`GAUGE_SYMMETRIC`), so the ladder reads the same map family training generates. **Known gap:** a ~64-game reading still only resolves to about ±12pp — `ladder.json` stores the interval, so use it rather than the point estimate.
 
 ### Data flow
-Steam game → `polyfish-mod` (C#) / the C++ reader → JSON game states (`live_game.json`, `replays/`) → loaded by `polyfish` server or the replay subsystem. Separately, `self_play` → `games_*.safetensors` → `train.py` → `model.safetensors` → `checkpoints/`. Training metrics go to `training_log.csv` (canonical store, keyed by `run_id` per training campaign) plus a `moves_by_turn.json` sidecar; `run_training_loop.sh` uses `training_log.py` to parse METRICS and append rows. `training_log.csv` and `ladder.json` are **tracked in git** (they are the experiment record); `checkpoints/` is not — `scripts/backup_experiment_record.sh` snapshots all of it to another disk or a remote. Live dashboard: `http://localhost:3000/training.html` (Chart.js, reads `/api/runs`, `/api/training-metrics`, `/api/moves-by-turn`, `/api/value-distribution`, `/api/elo-ladder` from the Rust server). `/api/training-metrics` is served by a header-driven CSV reader in `main.rs` / `bin/dashboard.rs`, so a column added to the CSV reaches the dashboard without a Rust change. `training_metrics_schema.sql` + root `telegram_agent.js`/`run_analysis_now.js` push progress to Supabase/Telegram. `session.log` is a raw debug transcript only.
+Steam game → `polyfish-mod` (C#) / the C++ reader → JSON game states (`live_game.json`, `replays/`) → loaded by `polyfish` server or the replay subsystem. Separately, `self_play` → `games_*.safetensors` → `train.py` → `model.safetensors` → `checkpoints/`. Training metrics go to `training_log.csv` (canonical store, keyed by `run_id` per training campaign) plus a `moves_by_turn.json` sidecar; `run_training_loop.sh` uses `training_log.py` to parse METRICS and append rows. `training_log.csv` and `ladder.json` are **tracked in git** (they are the experiment record); `checkpoints/` is not — `scripts/backup_experiment_record.sh` snapshots all of it to another disk or a remote. Live dashboard: `http://localhost:3000/training.html` (Chart.js, reads `/api/runs`, `/api/training-metrics`, `/api/moves-by-turn`, `/api/value-distribution`, `/api/elo-ladder` from the Rust server). `/api/training-metrics` is served by a header-driven CSV reader in `main.rs` / `bin/dashboard.rs`, so a column added to the CSV reaches the dashboard without a Rust change. `scripts/training_metrics_schema.sql` + `scripts/telegram_agent.js`/`scripts/run_analysis_now.js` push progress to Supabase/Telegram. `session.log` is a raw debug transcript only.
 
 ## Comments
 
@@ -174,8 +174,8 @@ Length limits:
 Do not add comments for every variable, branch, or trivial operation. Do not restate the code in prose.
 
 ## Notes
-- `notes.md` and `notes-heuristics.md` document design rationale and the branching-factor analysis (Polytopia has a narrow but very deep per-turn search tree — ~8 plies to complete one game turn — which drives the MCTS depth/iteration choices). Read them before changing search or evaluation behavior. `notes-memory.md` covers the observation-memory channels.
-- `hypothesis_driven_improvements.md` is a pre-registered experiment log (EXP 1–11, EXP_ELO_*) with COMMITTED/REJECTED verdicts. Read it before proposing a change — several obvious ideas have already been tried and measured. `expert_review.md` and `expert_boost_throughput.md` hold a prior architecture review and a measured throughput investigation (including a "What NOT to do" section).
-- **`expert_pipeline_audit.md` (Aug 2026) is the open-work list — read it first.** Its "Status — Aug 18, 2026" block is the index: the three shell↔binary contract breaks and the gauge repairs have landed, and each item carries a status plus a re-verify command. **No gauge reading has been taken on the repaired instrument yet**, so every gauge-derived conclusion in the experiment log — the plateau verdict, EXP_ELO_002's "success bar not met" — is provisional pending a re-baseline, and several landed behaviour changes are registered-but-unmeasured.
+- `docs/notes/notes.md` and `docs/notes/notes-heuristics.md` document design rationale and the branching-factor analysis (Polytopia has a narrow but very deep per-turn search tree — ~8 plies to complete one game turn — which drives the MCTS depth/iteration choices). Read them before changing search or evaluation behavior. `docs/notes/notes-memory.md` covers the observation-memory channels.
+- `docs/experiments/hypothesis_driven_improvements.md` is a pre-registered experiment log (EXP 1–11, EXP_ELO_*) with COMMITTED/REJECTED verdicts. Read it before proposing a change — several obvious ideas have already been tried and measured. `docs/experiments/expert_review.md` and `docs/experiments/expert_boost_throughput.md` hold a prior architecture review and a measured throughput investigation (including a "What NOT to do" section).
+- **`docs/experiments/expert_pipeline_audit.md` (Aug 2026) is the open-work list — read it first.** Its "Status — Aug 18, 2026" block is the index: the three shell↔binary contract breaks and the gauge repairs have landed, and each item carries a status plus a re-verify command. **No gauge reading has been taken on the repaired instrument yet**, so every gauge-derived conclusion in the experiment log — the plateau verdict, EXP_ELO_002's "success bar not met" — is provisional pending a re-baseline, and several landed behaviour changes are registered-but-unmeasured.
 - A verdict recorded in those docs means the experiment ran, not that the code still reflects it. Confirm in the source before relying on it. The reverse also happens: a measured rationale can be lost when a comment is rewritten (see the `AUGMENT_D4` case in the audit) — check `git log -S` on a constant before assuming its current comment is the whole story.
 - `main` is the default branch and PRs target it.

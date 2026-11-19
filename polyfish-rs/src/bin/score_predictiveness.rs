@@ -98,7 +98,7 @@ fn play_game(seed: i64, max_turns: i32, gamemode: u8, max_moves: usize) -> GameO
         let Some(mv) = agent.select_move(&mut game) else {
             break;
         };
-        game.play_move(mv.as_ref());
+        let _ = game.play(&polyfish::Action::from_move(mv.as_ref()).expect("move identity"));
         if game.state.settings.turn != last_turn {
             last_turn = game.state.settings.turn;
             snapshots.push(snapshot(&game));

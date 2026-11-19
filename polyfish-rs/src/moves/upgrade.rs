@@ -4,7 +4,7 @@
 
 use crate::functions::{get_unit_at, is_at_peace};
 use crate::moves::{Move, MoveResult};
-use crate::settings::unit_setting;
+use crate::settings::get_unit_setting;
 use crate::states::{GameState, PlayerId};
 use crate::types::{MoveType, UnitType};
 
@@ -30,11 +30,19 @@ impl Move for UpgradeMove {
         MoveType::Summon // Reusing Summon type per TS implementation
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn is_upgrade(&self) -> bool {
+        true
+    }
+
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let pov_id = state.settings.current_player_turn_id;
 
         let unit = get_unit_at(state, self.src_index).ok_or("No unit to upgrade")?;
-        let settings = unit_setting(self.target_type);
+        let settings = get_unit_setting(self.target_type);
         if unit.owner != pov_id
             || settings.upgrade_from != Some(unit.unit_type)
             || !can_upgrade_at(state, self.src_index, pov_id)
@@ -115,7 +123,7 @@ pub fn generate_upgrade_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>)
         for u_type in
             crate::settings::technology::get_unlocked_units(tech_state.tech_type, tribe.tribe_type)
         {
-            let settings = unit_setting(u_type);
+            let settings = get_unit_setting(u_type);
             if settings.cost >= 1 && tribe.stars >= settings.cost && settings.upgrade_from.is_some()
             {
                 upgradables.push(u_type);

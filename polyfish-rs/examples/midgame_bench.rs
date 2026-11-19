@@ -4,19 +4,19 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use polyfish::{
+    CityRewardType, CityState, ModeType, MoveType, ResourceState, ResourceType, StructureState,
+    StructureType, TechnologyState, TechnologyType, TerrainType, TileState, TribeState, TribeType,
+    TurnRotation, UnitState, UnitType,
     ai::mcts::MctsAgent,
     coords::Coords,
     functions::{get_chebyshev_distance, get_city_production},
-    game::{set_adversarial_search, Game},
+    game::{Game, set_adversarial_search},
     moves::Move,
-    CityRewardType, CityState, ModeType, MoveType, ResourceState, ResourceType, StructureState,
-    StructureType, TechnologyState, TechnologyType, TerrainType, TileState, TribeState, TribeType,
-    UnitState, UnitType,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Deserialize)]
 struct Scenario {
@@ -289,22 +289,28 @@ fn expansion(parent: &Game, wanted: Action, times: &mut [u128; 4], timed: bool) 
         times[0] += start.elapsed().as_nanos();
     }
     let start = timed.then(Instant::now);
-    let legal = child.legal_moves();
+    let decision = child.decision();
     if let Some(start) = start {
         times[1] += start.elapsed().as_nanos();
     }
     let start = timed.then(Instant::now);
-    let found = legal
+    let index = decision
+        .moves()
         .iter()
-        .find(|action| descriptor(action.as_ref()) == Some(wanted))
-        .with_context(|| format!("Missing action {wanted:?} on turn {}", child.turn()))?;
+        .position(|action| descriptor(action.as_ref()) == Some(wanted))
+        .with_context(|| {
+            format!(
+                "Missing action {wanted:?} on turn {}",
+                decision.game().turn()
+            )
+        })?;
     if let Some(start) = start {
         times[2] += start.elapsed().as_nanos();
     }
     let start = timed.then(Instant::now);
     drop(
-        child
-            .simulate_move(found.as_ref())
+        decision
+            .simulate_index(index, TurnRotation::NextPlayer)
             .with_context(|| format!("Could not apply {wanted:?}"))?,
     );
     if let Some(start) = start {
@@ -321,13 +327,13 @@ fn oracle(root: Game) -> Result<()> {
         let node = command["node"].as_u64().context("Missing node")? as usize;
         let response = match command["op"].as_str() {
             Some("inspect") => {
-                let game = &states[node];
-                let legal = game.legal_moves();
+                let decision = states[node].decision();
+                let legal = decision.moves();
                 let actions: Vec<_> = legal
                     .iter()
                     .filter_map(|action| descriptor(action.as_ref()))
                     .collect();
-                json!({"projection": projection(game), "legal": legal.len(), "actions": actions})
+                json!({"projection": projection(decision.game()), "legal": legal.len(), "actions": actions})
             }
             Some("expand") => {
                 let wanted: Action = serde_json::from_value(command["action"].clone())?;

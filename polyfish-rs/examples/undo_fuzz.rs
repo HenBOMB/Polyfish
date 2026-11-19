@@ -116,7 +116,17 @@ fn main() {
                     }
                     let m = &legal[rng.gen_range(0..legal.len())];
                     let desc = m.describe(&game.state);
-                    match game.simulate_move(m.as_ref()) {
+                    match game
+                        .simulate(
+                            &polyfish::Action::from_move(m.as_ref()).expect("move identity"),
+                            if polyfish::game::adversarial_search() {
+                                polyfish::TurnRotation::NextPlayer
+                            } else {
+                                polyfish::TurnRotation::SamePlayer
+                            },
+                        )
+                        .ok()
+                    {
                         Some(u) => {
                             seq.push(desc);
                             undos.push(u);
@@ -167,7 +177,10 @@ fn main() {
                 break 'game;
             }
             let m = &legal[rng.gen_range(0..legal.len())];
-            if game.play_move(m.as_ref()).is_none() {
+            if game
+                .play(&polyfish::Action::from_move(m.as_ref()).expect("move identity"))
+                .is_err()
+            {
                 println!(
                     "REAL MOVE FAILED: seed {} move {}",
                     seed,

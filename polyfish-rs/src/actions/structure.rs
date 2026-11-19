@@ -6,7 +6,7 @@ use crate::actions::{UndoCallback, chain_undos, gain_stars};
 use crate::functions::{
     get_adjacent_indices, get_best_capital, get_city_owning_tile, get_structure_at,
 };
-use crate::settings::structures::structure_setting;
+use crate::settings::structures::get_structure_setting;
 use crate::states::{GameState, StructureState};
 use crate::types::{
     CityRewardType, RuinsRewardType, StructureType, TechnologyType, TerrainType, TribeType,
@@ -207,10 +207,10 @@ pub fn build_structure(
     structure_type: StructureType,
 ) -> UndoCallback {
     use crate::actions::spend_stars;
-    use crate::settings::structures::structure_setting;
+    use crate::settings::structures::get_structure_setting;
 
     let mut undos = Vec::new();
-    let settings = structure_setting(structure_type);
+    let settings = get_structure_setting(structure_type);
 
     // 1. Spend stars
     if let Some(cost) = settings.cost {
@@ -236,7 +236,7 @@ fn adjust_structure_population(
         return;
     };
     let (owner, city_idx) = (city.owner, city.idx);
-    let settings = structure_setting(structure_type);
+    let settings = get_structure_setting(structure_type);
     let mut reward_pop = if settings.adjacent_types.is_empty() {
         settings.reward_pop
     } else {
@@ -255,7 +255,7 @@ fn adjust_structure_population(
         }
 
         // A new input building can also feed an existing improvement across a city border.
-        let nearby_settings = structure_setting(nearby.structure_type);
+        let nearby_settings = get_structure_setting(nearby.structure_type);
         if nearby_settings.reward_pop > 0 && nearby_settings.adjacent_types.contains(&structure_type) {
             if let Some(nearby_city) = get_city_owning_tile(state, nearby_idx) {
                 undos.push(add_population(

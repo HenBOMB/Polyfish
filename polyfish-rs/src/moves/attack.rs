@@ -24,7 +24,11 @@ impl Move for AttackMove {
         MoveType::Attack
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         // Find attacker
         let (attacker_owner, attacker_idx) = {
             let tile = state
@@ -61,7 +65,7 @@ impl Move for AttackMove {
                 // Attacker must have Infiltrate
                 if let Some(att_tribe) = state.tribes.get(&attacker_owner) {
                     if let Some(att_unit) = att_tribe.units.get(attacker_idx) {
-                        let settings = crate::settings::units::unit_setting(att_unit.unit_type);
+                        let settings = crate::settings::units::get_unit_setting(att_unit.unit_type);
                         if settings
                             .skills
                             .contains(&crate::types::SkillType::Infiltrate)

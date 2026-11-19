@@ -23,7 +23,11 @@ impl Move for HarvestMove {
         MoveType::Harvest
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         use crate::settings::resources::get_resource_setting;
 
         let pov = state.settings.current_player_turn_id;

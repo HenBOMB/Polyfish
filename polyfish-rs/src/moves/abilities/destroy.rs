@@ -19,7 +19,11 @@ impl Move for DestroyMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let undo = crate::actions::structure::destroy_structure(state, self.target_index);
         Ok(MoveResult {
             undo,

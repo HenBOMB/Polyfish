@@ -36,8 +36,8 @@ CONTRACTS = {
     "polyfish-rs/bisect_arm.sh": {"self_play"},
     "polyfish-rs/bench_actor_ceiling.sh": {"actor_ceiling"},
     "polyfish-rs/bench_eval_sweep.sh": {"self_play"},
-    "run-server.sh": {"polyfish"},
-    "auto_train.sh": set(),
+    "scripts/run-server.sh": {"polyfish"},
+    "scripts/auto_train.sh": set(),
 }
 
 # Shell words allowed to precede a binary inside one command segment.
@@ -276,7 +276,8 @@ def collect_assignments(lines, bins):
 
 def cargo_run_target(tokens, bins):
     """Resolve `cargo run ... --bin NAME [-- flags]` to (binary, flag tokens)."""
-    if not tokens or token_core(tokens[0]) != "cargo" or "run" not in tokens:
+    command = 1 if tokens and token_core(tokens[0]) == "exec" else 0
+    if len(tokens) <= command or token_core(tokens[command]) != "cargo" or "run" not in tokens:
         return None, None
     try:
         name = tokens[tokens.index("--bin") + 1]

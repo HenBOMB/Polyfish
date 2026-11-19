@@ -2,9 +2,11 @@ use polyfish::Coords;
 use polyfish::actions::units::{push_unit, spawn_unit};
 use polyfish::functions::{calculate_pushable_position, get_adjacent_indices, get_true_unit_at};
 use polyfish::game::Game;
-use polyfish::moves::{AttackMove, EndTurnMove, RewardMove, StepMove, SummonMove};
-use polyfish::states::{CityState, GameState, TileState, TribeState};
-use polyfish::types::{CityRewardType, TerrainType, TribeType, UnitEffect, UnitType};
+use polyfish::moves::{AttackMove, RewardMove, StepMove, SummonMove};
+use polyfish::states::{CityState, GameState, TechnologyState, TileState, TribeState};
+use polyfish::types::{
+    CityRewardType, TechnologyType, TerrainType, TribeType, UnitEffect, UnitType,
+};
 
 fn flat_board(size: i32, capital: (i32, i32)) -> Game {
     let mut game = Game::new();
@@ -39,7 +41,7 @@ fn flat_board(size: i32, capital: (i32, i32)) -> Game {
                 cities: vec![CityState {
                     idx,
                     owner: id,
-                    level: 5,
+                    level: 4,
                     production: 5,
                     rewards: vec![
                         CityRewardType::Workshop,
@@ -56,6 +58,20 @@ fn flat_board(size: i32, capital: (i32, i32)) -> Game {
     game
 }
 
+fn place_ready_unit(game: &mut Game, owner: i32, unit_type: UnitType, idx: i32) {
+    let _undo = spawn_unit(&mut game.state, owner, unit_type, idx, false);
+    let unit = game
+        .state
+        .tribes
+        .get_mut(&owner)
+        .unwrap()
+        .units
+        .last_mut()
+        .unwrap();
+    unit.moved = false;
+    unit.attacked = false;
+}
+
 fn destination(state: &GameState, start: i32) -> Option<i32> {
     calculate_pushable_position(state, get_true_unit_at(state, start).unwrap())
 }
@@ -66,15 +82,34 @@ fn freshly_trained_catapult_heads_toward_center_even_after_another_unit_leaves()
     let capital = 70; // (4, 6)
     let center = 60; // (5, 5), screen east of the capital
     let north = 82; // (5, 7)
-    let _ = spawn_unit(&mut game.state, 1, UnitType::Warrior, capital, false);
-    let _ = game.play_move(&StepMove::new(capital, north)).unwrap();
+    place_ready_unit(&mut game, 1, UnitType::Warrior, capital);
+    game.state
+        .tribes
+        .get_mut(&1)
+        .unwrap()
+        .tech_vanilla
+        .push(TechnologyState {
+            tech_type: TechnologyType::Mathematics,
+            discovered: true,
+            discovered_turn: 0,
+        });
     let _ = game
-        .play_move(&SummonMove::new(capital, UnitType::Catapult))
+        .play(&polyfish::Action::from_move(&StepMove::new(capital, north)).expect("move identity"))
         .unwrap();
+    let _ = game
+        .play(
+            &polyfish::Action::from_move(&SummonMove::new(capital, UnitType::Catapult))
+                .expect("move identity"),
+        )
+        .unwrap();
+    game.state.tribes.get_mut(&1).unwrap().cities[0].level = 5;
     let saved = game.to_json().unwrap();
     let mut loaded = Game::from_json(&saved).unwrap();
     let undo = loaded
-        .play_move(&RewardMove::new(capital, CityRewardType::SuperUnit))
+        .play(
+            &polyfish::Action::from_move(&RewardMove::new(capital, CityRewardType::SuperUnit))
+                .expect("move identity"),
+        )
         .unwrap();
     assert_eq!(
         get_true_unit_at(&loaded.state, center).unwrap().unit_type,
@@ -111,8 +146,10 @@ fn friends_follow_their_last_movement_and_enemy_siegers_reverse_it() {
     for (owner, expected) in [(1, 72), (2, 48)] {
         let mut game = flat_board(11, (5, 5));
         game.state.settings.current_player_turn_id = owner;
-        let _ = spawn_unit(&mut game.state, owner, UnitType::Warrior, 48, false);
-        let _ = game.play_move(&StepMove::new(48, 60)).unwrap();
+        place_ready_unit(&mut game, owner, UnitType::Warrior, 48);
+        let _ = game
+            .play(&polyfish::Action::from_move(&StepMove::new(48, 60)).expect("move identity"))
+            .unwrap();
         game.state.settings.current_player_turn_id = 1;
         assert_eq!(destination(&game.state, 60), Some(expected));
     }
@@ -121,14 +158,18 @@ fn friends_follow_their_last_movement_and_enemy_siegers_reverse_it() {
 #[test]
 fn ranged_facing_survives_turns_and_is_replaced_by_a_later_move() {
     let mut game = flat_board(11, (4, 4));
-    let _ = spawn_unit(&mut game.state, 1, UnitType::Catapult, 48, false);
+    place_ready_unit(&mut game, 1, UnitType::Catapult, 48);
     let _ = spawn_unit(&mut game.state, 2, UnitType::Defender, 28, false);
-    let _ = game.play_move(&AttackMove::new(48, 28)).unwrap();
+    let _ = game
+        .play(&polyfish::Action::from_move(&AttackMove::new(48, 28)).expect("move identity"))
+        .unwrap();
     assert_eq!(destination(&game.state, 48), Some(38)); // (4,4) facing (6,2)
-    let _ = game.play_move(&EndTurnMove).unwrap();
-    let _ = game.play_move(&EndTurnMove).unwrap();
+    let _ = game.play(&polyfish::Action::EndTurn).unwrap();
+    let _ = game.play(&polyfish::Action::EndTurn).unwrap();
     assert_eq!(destination(&game.state, 48), Some(38));
-    let undo = game.play_move(&StepMove::new(48, 60)).unwrap();
+    let undo = game
+        .play(&polyfish::Action::from_move(&StepMove::new(48, 60)).expect("move identity"))
+        .unwrap();
     assert_eq!(destination(&game.state, 60), Some(72));
     undo(&mut game.state);
     assert_eq!(destination(&game.state, 48), Some(38));
@@ -137,8 +178,10 @@ fn ranged_facing_survives_turns_and_is_replaced_by_a_later_move() {
 #[test]
 fn blocked_pushes_alternate_left_then_right_and_can_remove_a_unit() {
     let mut game = flat_board(11, (5, 5));
-    let _ = spawn_unit(&mut game.state, 1, UnitType::Warrior, 48, false);
-    let _ = game.play_move(&StepMove::new(48, 60)).unwrap();
+    place_ready_unit(&mut game, 1, UnitType::Warrior, 48);
+    let _ = game
+        .play(&polyfish::Action::from_move(&StepMove::new(48, 60)).expect("move identity"))
+        .unwrap();
     let _ = spawn_unit(&mut game.state, 2, UnitType::Cloak, 72, false);
     game.state.tribes.get_mut(&2).unwrap().units[0]
         .effects
@@ -157,8 +200,12 @@ fn blocked_pushes_alternate_left_then_right_and_can_remove_a_unit() {
         game.state.tiles.get_mut(&idx).unwrap().terrain_type = TerrainType::Mountain;
     }
     assert_eq!(destination(&game.state, 60), None);
+    game.state.tribes.get_mut(&1).unwrap().cities[0].level = 5;
     let undo = game
-        .play_move(&RewardMove::new(60, CityRewardType::SuperUnit))
+        .play(
+            &polyfish::Action::from_move(&RewardMove::new(60, CityRewardType::SuperUnit))
+                .expect("move identity"),
+        )
         .unwrap();
     assert_eq!(game.state.tribes[&1].units.len(), 1);
     assert_eq!(

@@ -82,7 +82,8 @@ fn benchmark_simulator() {
             let idx = i % moves.len();
             let chosen_move = &moves[idx];
 
-            sim_game.play_move(chosen_move.as_ref());
+            let _ = sim_game
+                .play(&polyfish::Action::from_move(chosen_move.as_ref()).expect("move identity"));
             moves_played += 1;
         }
         total_turns += moves_played;
@@ -113,7 +114,10 @@ fn benchmark_simulator() {
         let start = Instant::now();
 
         for _ in 0..undo_iters {
-            if let Some(undo) = undo_game.play_move(chosen_move.as_ref()) {
+            if let Some(undo) = undo_game
+                .play(&polyfish::Action::from_move(chosen_move.as_ref()).expect("move identity"))
+                .ok()
+            {
                 undo(&mut undo_game.state);
             } else {
                 break; // Should not happen

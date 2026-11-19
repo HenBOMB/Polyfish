@@ -937,7 +937,7 @@ pub fn process_end_turn_effects(state: &mut GameState, _player_id: PlayerId) -> 
                 owner_id,
             } => {
                 if let Some(structure) = crate::functions::get_structure_at(state, tile_index) {
-                    let settings = crate::settings::structures::structure_setting(
+                    let settings = crate::settings::structures::get_structure_setting(
                         structure.structure_type,
                     );
                     let cost = settings.cost.unwrap_or(0);

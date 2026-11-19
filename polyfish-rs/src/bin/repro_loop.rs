@@ -47,7 +47,10 @@ fn main() {
             let m = &moves[move_idx];
 
             // Execute
-            if let Some(_) = game.play_move(m.as_ref()) {
+            if let Some(_) = game
+                .play(&polyfish::Action::from_move(m.as_ref()).expect("move identity"))
+                .ok()
+            {
                 move_count += 1;
             } else {
                 break;

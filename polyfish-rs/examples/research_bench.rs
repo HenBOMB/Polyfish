@@ -3,7 +3,6 @@ use std::{hint::black_box, time::Instant};
 use anyhow::{Context, Result};
 use polyfish::coords::Coords;
 use polyfish::game::Game;
-use polyfish::moves::{EndTurnMove, StepMove};
 use polyfish::research::{self, MatchConfig, Opponent};
 use polyfish::states::StructureState;
 use polyfish::types::{MoveType, StructureType, TerrainType, TribeType};
@@ -63,7 +62,7 @@ fn flat_board(tiles: u16) -> Result<Game> {
 
 fn run(game: &Game, iterations: usize) -> [u128; 5] {
     let mut times = [0; 5];
-    let step = StepMove::new(game.map_size() + 1, 2 * (game.map_size() + 1));
+    let target = 2 * (game.map_size() + 1);
     for _ in 0..iterations {
         let start = Instant::now();
         let copy = black_box(game.clone());
@@ -75,24 +74,34 @@ fn run(game: &Game, iterations: usize) -> [u128; 5] {
         drop(view);
         let mut next = game.clone();
         let start = Instant::now();
-        let legal = black_box(next.legal_moves());
+        let decision = black_box(next.decision());
         times[2] += start.elapsed().as_nanos();
-        drop(legal);
+        let end_turn = decision
+            .moves()
+            .iter()
+            .position(|m| m.move_type() == MoveType::EndTurn)
+            .expect("legal EndTurn");
         let start = Instant::now();
-        let undo = black_box(next.play_move(&EndTurnMove).expect("EndTurn"));
+        let undo = black_box(decision.play_index(end_turn).expect("EndTurn"));
         times[3] += start.elapsed().as_nanos();
         drop(undo);
         assert_eq!(next.current_player_id(), 2);
 
         let mut moving = game.clone();
+        let decision = moving.decision();
+        let step = decision
+            .moves()
+            .iter()
+            .position(|action| {
+                action.move_type() == MoveType::Step
+                    && action.target_idx().ok() == Some(target as usize)
+            })
+            .expect("legal Step");
         let start = Instant::now();
-        let undo = black_box(moving.play_move(&step).expect("Step"));
+        let undo = black_box(decision.play_index(step).expect("Step"));
         times[4] += start.elapsed().as_nanos();
         drop(undo);
-        assert_eq!(
-            moving.state.tribes[&1].units[0].coords.idx,
-            step.target_index
-        );
+        assert_eq!(moving.state.tribes[&1].units[0].coords.idx, target);
     }
     times
 }
@@ -111,25 +120,27 @@ fn run_traces(game: &Game, iterations: usize) {
                 } else {
                     capitals[seat]
                 };
-                let step = state
-                    .legal_moves()
-                    .into_iter()
-                    .find(|action| {
+                let decision = state.decision();
+                let step = decision
+                    .moves()
+                    .iter()
+                    .position(|action| {
                         action.move_type() == MoveType::Step
                             && action.target_idx().ok() == Some(target as usize)
                     })
                     .expect("Scripted step");
-                let _ = state.play_move(step.as_ref()).expect("Apply step");
+                let _ = decision.play_index(step).expect("Apply step");
                 assert_eq!(
                     state.state.tribes[&(seat as i32 + 1)].units[0].coords.idx,
                     target
                 );
-                let end_turn = state
-                    .legal_moves()
-                    .into_iter()
-                    .find(|action| action.move_type() == MoveType::EndTurn)
+                let decision = state.decision();
+                let end_turn = decision
+                    .moves()
+                    .iter()
+                    .position(|action| action.move_type() == MoveType::EndTurn)
                     .expect("Scripted end turn");
-                let _ = state.play_move(end_turn.as_ref()).expect("Apply end turn");
+                let _ = decision.play_index(end_turn).expect("Apply end turn");
             }
         }
         assert_eq!(state.current_player_id(), 1);
@@ -154,7 +165,7 @@ fn main() -> Result<()> {
             run(&game, warmup);
             let [clone, view, legal, end_turn, step] = run(&game, iterations);
             json!({
-                "iterations": iterations, "legal": game.legal_moves().len(),
+                "iterations": iterations, "legal": game.clone().decision().moves().len(),
                 "cloneNs": clone, "viewNs": view, "legalNs": legal, "endTurnNs": end_turn, "stepNs": step,
             })
         }

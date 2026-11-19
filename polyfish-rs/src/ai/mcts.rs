@@ -200,7 +200,7 @@ impl MctsAgent {
             let minimize = game.state.settings.current_player_turn_id != pov;
             let child = node.uct_select_child(self.exploration_constant, minimize);
             if let Some(m) = &child.move_to_here {
-                if let Some(undo) = game.simulate_move(m.as_ref()) {
+                if let Some(undo) = game.simulate_generated(m.as_ref()) {
                     let val = self.search_iteration(game, child, pov);
                     undo(&mut game.state);
                     node.visits += 1.0;
@@ -214,7 +214,7 @@ impl MctsAgent {
         if let Some(untried) = &mut node.untried_moves {
             if !untried.is_empty() {
                 let m = untried.pop().unwrap();
-                if let Some(undo) = game.simulate_move(m.as_ref()) {
+                if let Some(undo) = game.simulate_generated(m.as_ref()) {
                     let mut child = Node::new(Some(m), game);
                     let val = self.simulate(game, pov);
                     undo(&mut game.state);
@@ -251,7 +251,7 @@ impl MctsAgent {
             }
 
             let m = moves.choose(&mut rng).unwrap();
-            if let Some(undo) = game.simulate_move(m.as_ref()) {
+            if let Some(undo) = game.simulate_generated(m.as_ref()) {
                 undos.push(undo);
                 moves_played += 1;
             } else {

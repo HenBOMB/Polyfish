@@ -2,12 +2,12 @@
 
 #[cfg(test)]
 mod tests {
-    use polyfish::Coords;
-    use polyfish::moves::Move;
-    use polyfish::moves::abilities::forest::GrowForestMove;
-    use polyfish::moves::step::StepMove;
-    use polyfish::states::*;
-    use polyfish::types::*;
+    use crate::Coords;
+    use crate::moves::Move;
+    use crate::moves::abilities::forest::GrowForestMove;
+    use crate::moves::step::StepMove;
+    use crate::states::*;
+    use crate::types::*;
 
     fn setup_state(stars: i32) -> GameState {
         let mut state = GameState::default();
@@ -35,7 +35,7 @@ mod tests {
     fn step_with_no_unit_at_source_errs() {
         let mut state = setup_state(10);
 
-        let result = StepMove::new(12, 13).execute(&mut state);
+        let result = StepMove::new(12, 13).execute(&mut state, crate::moves::MoveExecution::INTERNAL);
 
         assert!(
             result.is_err(),
@@ -48,7 +48,7 @@ mod tests {
     fn grow_forest_without_stars_errs_and_leaves_terrain_alone() {
         let mut state = setup_state(2);
 
-        let result = GrowForestMove::new(12).execute(&mut state);
+        let result = GrowForestMove::new(12).execute(&mut state, crate::moves::MoveExecution::INTERNAL);
 
         assert!(result.is_err(), "unaffordable GrowForest must Err");
         assert_eq!(
@@ -63,7 +63,7 @@ mod tests {
     fn grow_forest_with_stars_succeeds() {
         let mut state = setup_state(5);
 
-        let result = GrowForestMove::new(12).execute(&mut state);
+        let result = GrowForestMove::new(12).execute(&mut state, crate::moves::MoveExecution::INTERNAL);
 
         assert!(result.is_ok());
         assert_eq!(state.tiles[&12].terrain_type, TerrainType::Forest);

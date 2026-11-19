@@ -67,11 +67,18 @@ fn descent_check(game: &mut Game, rng: &mut StdRng, depth: u32) {
     let turn = game.state.settings.turn;
 
     let before = snap(game);
-    let Some(undo) = game.simulate_move(m.as_ref()) else {
-        panic!(
-            "LEGAL MOVE REFUSED in simulation: {} (turn {})",
-            desc, turn
-        );
+    let Some(undo) = game
+        .simulate(
+            &polyfish::Action::from_move(m.as_ref()).expect("move identity"),
+            if polyfish::game::adversarial_search() {
+                polyfish::TurnRotation::NextPlayer
+            } else {
+                polyfish::TurnRotation::SamePlayer
+            },
+        )
+        .ok()
+    else {
+        panic!("LEGAL MOVE REFUSED in simulation: {} (turn {})", desc, turn);
     };
     let after_first = snap(game);
 
@@ -85,7 +92,17 @@ fn descent_check(game: &mut Game, rng: &mut StdRng, depth: u32) {
     );
 
     // Replay determinism: same state + same move must give the same result.
-    let Some(undo2) = game.simulate_move(m.as_ref()) else {
+    let Some(undo2) = game
+        .simulate(
+            &polyfish::Action::from_move(m.as_ref()).expect("move identity"),
+            if polyfish::game::adversarial_search() {
+                polyfish::TurnRotation::NextPlayer
+            } else {
+                polyfish::TurnRotation::SamePlayer
+            },
+        )
+        .ok()
+    else {
         panic!(
             "REPLAY REFUSED: {} executed once but not twice (turn {})",
             desc, turn
@@ -135,7 +152,10 @@ fn test_simulate_undo_integrity() {
                 break;
             }
             let m = &moves[rng.random_range(0..moves.len())];
-            if game.play_move(m.as_ref()).is_none() {
+            if game
+                .play(&polyfish::Action::from_move(m.as_ref()).expect("move identity"))
+                .is_err()
+            {
                 break;
             }
         }

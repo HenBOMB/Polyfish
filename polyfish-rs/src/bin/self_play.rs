@@ -584,7 +584,7 @@ fn opening_rng_for(seed: i64, game_idx: usize) -> rand::rngs::SmallRng {
 /// distribution or a draw that is not legal in the un-obscured state (the
 /// search ran on a fog-obscured clone), leaving the caller on the argmax.
 fn sample_opening_move(
-    state: &GameState,
+    legal_moves: &[Box<dyn polyfish::moves::Move>],
     move_visits: &[polyfish::ai::mcts_types::MoveVisit],
     rng: &mut impl rand::Rng,
 ) -> Option<Box<dyn polyfish::moves::Move>> {
@@ -593,9 +593,10 @@ fn sample_opening_move(
     let weights: Vec<f32> = move_visits.iter().map(|mv| mv.visits.max(0.0)).collect();
     let dist = WeightedIndex::new(&weights).ok()?;
     let pick = &move_visits[dist.sample(rng)];
-    polyfish::moves::generate_legal_moves(state)
-        .into_iter()
+    legal_moves
+        .iter()
         .find(|m| move_matches(m.as_ref(), pick))
+        .map(|m| dyn_clone::clone_box(m.as_ref()))
 }
 
 fn play_single_game(
@@ -760,8 +761,12 @@ fn play_single_game(
 
         let pov = game.state.settings.current_player_turn_id;
 
-        let (best_move, sample) = if let Some((preset, _)) = preset_opponent.filter(|(_, seat)| *seat == pov) {
-            let action = polyfish::research::choose_move(&game, preset);
+        let decision = game.decision();
+        let before = decision.game();
+        let (best_move, sample) = if let Some((preset, _)) =
+            preset_opponent.filter(|(_, seat)| *seat == pov)
+        {
+            let action = polyfish::research::choose_from_decision(&decision, preset);
             if action.is_none() {
                 eprintln!("[Game {game_idx}] Preset opponent did not select a legal move");
                 aborted_games.fetch_add(1, Ordering::Relaxed);
@@ -772,7 +777,7 @@ fn play_single_game(
             // Get state tensor
             let current_network = if pov == 1 { network1 } else { network2 };
             let device = current_network.device();
-            let state_t = state_to_tensor(&game.state, pov, &device)
+            let state_t = state_to_tensor(&before.state, pov, &device)
                 .expect("BUG: Failed to create state tensor - game state is invalid");
 
             // MCTS Search - use the correct agent
@@ -782,7 +787,7 @@ fn play_single_game(
                 && !traced_in_this_game
                 && trace_counter.load(Ordering::Relaxed) < trace_max
             {
-                find_village_trigger(&game.state, pov, &open_villages, trace_trigger)
+                find_village_trigger(&before.state, pov, &open_villages, trace_trigger)
             } else {
                 None
             };
@@ -790,7 +795,8 @@ fn play_single_game(
                 current_agent.request_trace();
             }
 
-            let (best_move, move_visits) = current_agent.think_decomposed(&mut game, move_count);
+            let (best_move, move_visits) =
+                current_agent.think_decomposed_from_decision(&decision, move_count);
             // The search that just ran was for the CURRENT (pre-move) state, so
             // this is that state's own root value — the TD bootstrap target for
             // whichever earlier step's label lands here as its "next decision".
@@ -807,7 +813,7 @@ fn play_single_game(
                             &trace,
                             iteration,
                             game_idx,
-                            game.state.settings.turn,
+                            before.state.settings.turn,
                             move_count,
                             pov,
                             trigger_unit_idx,
@@ -818,7 +824,7 @@ fn play_single_game(
                 }
             }
 
-            let map_size = game.state.settings.size as usize;
+            let map_size = before.state.settings.size as usize;
 
             // Initialize probability distributions
             let fixed_map_width = features::MAP_SIZE;
@@ -891,7 +897,7 @@ fn play_single_game(
             // the first `opening_temp_moves` plies. The policy target stays pi'
             // either way, which is what AlphaZero/Gumbel train on.
             let best_move = if move_count < opening_temp_moves && move_visits.len() > 1 {
-                sample_opening_move(&game.state, &move_visits, &mut opening_rng).or(best_move)
+                sample_opening_move(decision.moves(), &move_visits, &mut opening_rng).or(best_move)
             } else {
                 best_move
             };
@@ -902,7 +908,7 @@ fn play_single_game(
             let m_type = m.move_type();
             *action_counts.entry(m_type).or_insert(0) += 1;
             *moves_by_turn
-                .entry(game.state.settings.turn)
+                .entry(before.state.settings.turn)
                 .or_default()
                 .entry(m_type)
                 .or_insert(0) += 1;
@@ -911,13 +917,13 @@ fn play_single_game(
                 if let Ok(src) = m.source_idx() {
                     let idx = src as i32;
 
-                    let struct_opt = game.state.structures.get(&idx).and_then(|s| s.as_ref());
+                    let struct_opt = before.state.structures.get(&idx).and_then(|s| s.as_ref());
                     let is_ruin = struct_opt.map(|s| s.structure_type)
                         == Some(polyfish::types::StructureType::Ruin);
                     let is_village = struct_opt.map(|s| s.structure_type)
                         == Some(polyfish::types::StructureType::Village);
-                    let owner = game.state.tiles.get(&idx).map(|t| t.owner).unwrap_or(0);
-                    let is_capital = game
+                    let owner = before.state.tiles.get(&idx).map(|t| t.owner).unwrap_or(0);
+                    let is_capital = before
                         .state
                         .tiles
                         .get(&idx)
@@ -939,21 +945,21 @@ fn play_single_game(
                     }
 
                     if open_villages.remove(&idx) {
-                        village_capture_turns.push(game.state.settings.turn);
+                        village_capture_turns.push(before.state.settings.turn);
                     } else if open_ruins.remove(&idx) {
-                        ruin_capture_turns.push(game.state.settings.turn);
+                        ruin_capture_turns.push(before.state.settings.turn);
                     }
                 }
             }
 
-            let turn_now = game.state.settings.turn;
+            let turn_now = before.state.settings.turn;
             let replay_command = match ReplayCommand::from_move(m.as_ref()) {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!(
                         "[Game {}] BUG: move '{}' at turn {} failed to serialise ({}) — discarding this game",
                         game_idx,
-                        m.describe(&game.state),
+                        m.describe(&before.state),
                         turn_now,
                         e,
                     );
@@ -962,15 +968,15 @@ fn play_single_game(
                 }
             };
             // Snapshot scores/SPT at this moment (pre-move) for the TD label.
-            let (my_score_now, opp_score_now) = reward::score_snapshot(&game.state, pov);
-            let (my_spt_now, opp_spt_now) = reward::spt_snapshot(&game.state, pov);
+            let (my_score_now, opp_score_now) = reward::score_snapshot(&before.state, pov);
+            let (my_spt_now, opp_spt_now) = reward::spt_snapshot(&before.state, pov);
             if progress == ProgressMode::Full && move_count > 0 && move_count % 10 == 0 {
                 eprintln!(
                     "[Game {}]: Turn: {} Player: {} Move: {}",
                     game_idx,
                     turn_now,
                     pov,
-                    m.describe(&game.state),
+                    m.describe(&before.state),
                 );
             }
 
@@ -978,13 +984,10 @@ fn play_single_game(
             // failing on a legal move is an engine bug, and a sample or a
             // replay entry for a transition that never happened is training
             // data for a state the game cannot reach.
-            if game.play_move(m.as_ref()).is_none() {
+            if let Err(error) = decision.play(&replay_command) {
                 eprintln!(
-                    "[Game {}] BUG: play_move rejected legal move '{}' (player {}, turn {}) — discarding this game",
-                    game_idx,
-                    m.describe(&game.state),
-                    pov,
-                    turn_now,
+                    "[Game {}] BUG: engine rejected {replay_command:?} (player {}, turn {}): {error} — discarding this game",
+                    game_idx, pov, turn_now,
                 );
                 aborted_games.fetch_add(1, Ordering::Relaxed);
                 return None;
@@ -2947,18 +2950,17 @@ mod opening_sampler_tests {
         n: usize,
     ) -> Vec<String> {
         let mut rng = opening_rng_for(seed, game_idx);
+        let legal = game.legal_moves();
         (0..n)
-            .map(
-                |_| match sample_opening_move(&game.state, visits, &mut rng) {
-                    Some(m) => format!(
-                        "{:?}:{:?}:{:?}",
-                        m.move_type(),
-                        m.source_idx().ok(),
-                        m.target_idx().ok()
-                    ),
-                    None => "none".to_string(),
-                },
-            )
+            .map(|_| match sample_opening_move(&legal, visits, &mut rng) {
+                Some(m) => format!(
+                    "{:?}:{:?}:{:?}",
+                    m.move_type(),
+                    m.source_idx().ok(),
+                    m.target_idx().ok()
+                ),
+                None => "none".to_string(),
+            })
             .collect()
     }
 

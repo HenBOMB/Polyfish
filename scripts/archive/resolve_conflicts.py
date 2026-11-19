@@ -1,6 +1,9 @@
 import re
+from pathlib import Path
 
-with open("polyfish-rs/src/bin/self_play.rs", "r") as f:
+SELF_PLAY = Path(__file__).resolve().parents[2] / "polyfish-rs/src/bin/self_play.rs"
+
+with SELF_PLAY.open("r") as f:
     content = f.read()
 
 # 1. First conflict (~199): dump_failed_game + curriculum
@@ -15,7 +18,7 @@ def repl2(m):
     return m.group(1) + "    recap: Replay,\n"
 content = re.sub(p2, repl2, content, flags=re.DOTALL)
 
-# 3. Third conflict (~1066 & GameResult creation): 
+# 3. Third conflict (~1066 & GameResult creation):
 # HEAD added the recap definition, main moved it into GameResult.
 p3 = r"<<<<<<< HEAD\n(.*?)\n=======\n>>>>>>> main\n(.*?)        anchor_seat: match \((.*?)\},\n        recap: ModReplay \{\n            game_state: initial_state,\n            turns: group_recap\(flat_recap\),\n        \},(.*?)    \}\)\n\}"
 def repl3(m):
@@ -28,5 +31,5 @@ def repl4(m):
     return m.group(1) + "fn group_recap(flat: Vec<(i32, i32, ReplayCommand)>) -> Vec<ReplayTurn> {"
 content = re.sub(p4, repl4, content, flags=re.DOTALL)
 
-with open("polyfish-rs/src/bin/self_play.rs", "w") as f:
+with SELF_PLAY.open("w") as f:
     f.write(content)

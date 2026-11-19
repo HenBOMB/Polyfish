@@ -1,11 +1,14 @@
 import os
 import time, subprocess, json
+from pathlib import Path
 from typing import Optional
 from typing_extensions import Literal
 from collections.abc import Mapping, Sequence, Set
 from math import isnan
 from typing import Any
 from util import make_driver, ydo, save_and_merge
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 DIR_DATA = "src/scraper/data"
 DIR_ROOT = f"{DIR_DATA}/training-data/"
@@ -48,7 +51,7 @@ class DaemonScanner:
         
         try:
             self._process = subprocess.Popen(
-                ["sudo", "polyfish-reader/polyfish-reader", str(self._pid), "-y", "-d"],
+                ["sudo", str(REPO_ROOT / "polyfish-reader" / "polyfish-reader"), str(self._pid), "-y", "-d"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -120,7 +123,8 @@ def scan() -> Optional[str]:
     if _scanner.alive:
         return _scanner.scan()
     # Fallback to old method
-    process = subprocess.Popen(["./scan.sh", "-y"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    launcher = REPO_ROOT / "scripts" / "scan.sh"
+    process = subprocess.Popen([str(launcher), "-y"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, error = process.communicate()
     if error:
         return None

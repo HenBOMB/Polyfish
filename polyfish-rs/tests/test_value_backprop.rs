@@ -136,7 +136,17 @@ fn test_player_sequence_tracking() {
             let player_before = game.state.settings.current_player_turn_id;
             let move_type = mv.move_type();
 
-            if let Some(undo) = game.simulate_move(mv.as_ref()) {
+            if let Some(undo) = game
+                .simulate(
+                    &polyfish::Action::from_move(mv.as_ref()).expect("move identity"),
+                    if polyfish::game::adversarial_search() {
+                        polyfish::TurnRotation::NextPlayer
+                    } else {
+                        polyfish::TurnRotation::SamePlayer
+                    },
+                )
+                .ok()
+            {
                 let player_after = game.state.settings.current_player_turn_id;
 
                 println!(

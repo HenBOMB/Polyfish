@@ -1,10 +1,11 @@
 //! Unit settings and stats
 
 use crate::types::{SkillType, TribeType, UnitType};
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::LazyLock};
+use strum::IntoEnumIterator;
 
 /// Unit stat configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UnitSetting {
     pub cost: i32,
     pub attack: f32,
@@ -47,21 +48,19 @@ macro_rules! skills {
 }
 
 /// Get unit settings by type
-pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
-    unit_setting(unit_type).clone()
+pub fn get_unit_setting(unit_type: UnitType) -> &'static UnitSetting {
+    static TABLE: LazyLock<Vec<Option<UnitSetting>>> = LazyLock::new(|| {
+        let max = UnitType::iter().map(|kind| kind as usize).max().unwrap();
+        let mut settings = vec![None; max + 1];
+        for kind in UnitType::iter() {
+            settings[kind as usize] = Some(build_unit_setting(kind));
+        }
+        settings
+    });
+    TABLE[unit_type as usize].as_ref().unwrap()
 }
 
-/// Borrow the immutable rule data used by move generation and application.
-#[inline]
-pub(crate) fn unit_setting(unit_type: UnitType) -> &'static UnitSetting {
-    static SETTINGS: std::sync::LazyLock<[Option<UnitSetting>; 256]> =
-        std::sync::LazyLock::new(|| {
-            std::array::from_fn(|id| UnitType::from_repr(id as i8).map(make_unit_setting))
-        });
-    SETTINGS[unit_type as u8 as usize].as_ref().expect("known unit type")
-}
-
-fn make_unit_setting(unit_type: UnitType) -> UnitSetting {
+fn build_unit_setting(unit_type: UnitType) -> UnitSetting {
     use SkillType as S;
     use UnitType as U;
 
@@ -633,7 +632,7 @@ fn make_unit_setting(unit_type: UnitType) -> UnitSetting {
 
 /// Check if a unit type has a specific skill
 pub fn has_skill(unit_type: UnitType, skill: SkillType) -> bool {
-    unit_setting(unit_type).skills.contains(&skill)
+    get_unit_setting(unit_type).skills.contains(&skill)
 }
 
 /// Get super unit type for a tribe
@@ -644,5 +643,18 @@ pub fn get_super_unit(tribe_type: TribeType) -> UnitType {
         TribeType::Elyrion => UnitType::DragonEgg,
         TribeType::Cymanti => UnitType::Centipede,
         _ => UnitType::Giant,
+    }
+}
+
+
+#[cfg(test)]
+mod cached_settings_tests {
+    use super::*;
+
+    #[test]
+    fn cached_settings_match_release_definitions() {
+        for kind in UnitType::iter() {
+            assert_eq!(get_unit_setting(kind), &build_unit_setting(kind), "{kind:?}");
+        }
     }
 }

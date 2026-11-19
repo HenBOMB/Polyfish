@@ -2,7 +2,9 @@
 
 # Configuration
 # Replace this with the actual path to your training script
-TRAIN_CMD="./run-server.sh" # Modify this to match your exact training command
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)" || exit 1
+cd -- "$script_dir/../polyfish-rs" || exit 1
+TRAIN_CMD="$script_dir/run-server.sh" # Modify this to match your exact training command
 CHECK_INTERVAL=1 # seconds
 
 # Check for required tools
@@ -51,7 +53,7 @@ while true; do
 2. Compare Policy Loss vs. Value Loss. If Value Loss is near zero (e.g., ~0.03) while Policy Loss remains high, explicitly flag that the 'value head has collapsed' and the model is producing near-random value gradients.
 3. Calculate the timeout rate. Search 'session.log' for 'Decisive: true' vs 'Decisive: false'. If the vast majority of games are timing out instead of ending decisively, flag that the model is failing to learn long-term planning and closing strategies.
 4. Read 'src/bin/self_play.rs' to identify the current curriculum phase (e.g., Tiny maps progressing from 10 to 30 max turns). Account for these phases when analyzing score trends, as map size and turn limit increases artificially inflate scores.
-Write a comprehensive Markdown report summarizing the health of the training run based on these specific metrics." < /dev/null > "agy_report_$CURRENT_DAY.txt" 2>&1 &
+Write a comprehensive Markdown report summarizing the health of the training run based on these specific metrics." < /dev/null > "../agy_report_$CURRENT_DAY.txt" 2>&1 &
         LAST_REPORT_DAY="$CURRENT_DAY"
     fi
 
@@ -83,7 +85,7 @@ Write a comprehensive Markdown report summarizing the health of the training run
                 echo "$(date): Conditions met (Idle for ${IDLE_SECS}s). Starting training script..."
                 
                 # Start the training script in the background
-                $TRAIN_CMD &
+                "$TRAIN_CMD" &
                 TRAIN_PID=$!
                 
                 echo "Training script started with PID: $TRAIN_PID"
@@ -91,7 +93,7 @@ Write a comprehensive Markdown report summarizing the health of the training run
                 # Check if the process is still running (maybe it crashed or finished)
                 if ! kill -0 "$TRAIN_PID" 2>/dev/null; then
                     echo "$(date): Training script exited unexpectedly. Restarting..."
-                    $TRAIN_CMD &
+                    "$TRAIN_CMD" &
                     TRAIN_PID=$!
                     echo "Training script restarted with PID: $TRAIN_PID"
                 fi

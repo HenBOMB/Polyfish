@@ -1,5 +1,7 @@
 const { createClient } = require('@supabase/supabase-js');
-require('dotenv').config({ path: './polyfish-rs/.env' });
+const path = require('node:path');
+const crateDir = path.join(__dirname, '..', 'polyfish-rs');
+require('dotenv').config({ path: path.join(crateDir, '.env') });
 const { exec } = require('child_process');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;

@@ -32,7 +32,15 @@ fn test_mcts_tech_unlock_logic() {
     // Metal requires Climbing (Imperius doesn't start with Climbing)
     let research_climbing = ResearchMove::new(TechnologyType::Climbing);
     let _undo = game
-        .simulate_move(&research_climbing)
+        .simulate(
+            &polyfish::Action::from_move(&research_climbing).expect("move identity"),
+            if polyfish::game::adversarial_search() {
+                polyfish::TurnRotation::NextPlayer
+            } else {
+                polyfish::TurnRotation::SamePlayer
+            },
+        )
+        .ok()
         .expect("Simulation should succeed");
 
     let metal_visible = polyfish::functions::is_resource_visible_to_tribe(
@@ -66,7 +74,15 @@ fn test_mcts_tech_unlock_logic() {
     // 6. Verify we can summon Defender (unlocked by Strategy) after simulated research
     let research_strat = ResearchMove::new(TechnologyType::Strategy);
     let _undo = game
-        .simulate_move(&research_strat)
+        .simulate(
+            &polyfish::Action::from_move(&research_strat).expect("move identity"),
+            if polyfish::game::adversarial_search() {
+                polyfish::TurnRotation::NextPlayer
+            } else {
+                polyfish::TurnRotation::SamePlayer
+            },
+        )
+        .ok()
         .expect("Simulation should succeed");
 
     let tribe = game.state.tribes.get(&player_id).unwrap();
@@ -94,7 +110,7 @@ fn test_mcts_tech_unlock_logic() {
     // Research Fishing first (real move)
     let research_fishing = ResearchMove::new(TechnologyType::Fishing);
     let _undo = game
-        .play_move(&research_fishing)
+        .play(&polyfish::Action::from_move(&research_fishing).expect("move identity"))
         .expect("Fishing should succeed");
 
     // Add a Raft unit manually
@@ -115,7 +131,15 @@ fn test_mcts_tech_unlock_logic() {
     // Research Sailing via simulate_move
     let research_sailing = ResearchMove::new(TechnologyType::Sailing);
     let _undo = game
-        .simulate_move(&research_sailing)
+        .simulate(
+            &polyfish::Action::from_move(&research_sailing).expect("move identity"),
+            if polyfish::game::adversarial_search() {
+                polyfish::TurnRotation::NextPlayer
+            } else {
+                polyfish::TurnRotation::SamePlayer
+            },
+        )
+        .ok()
         .expect("Simulation should succeed");
 
     let moves = game.legal_moves();

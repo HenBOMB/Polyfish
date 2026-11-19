@@ -1,9 +1,6 @@
-use polyfish::game::Game;
-use polyfish::moves::ResignMove;
-use polyfish::states::{GameState, TribeState, CityState, UnitState};
-use polyfish::types::{TribeType, UnitType, ModeType};
-use polyfish::coords::Coords;
-use indexmap::IndexMap;
+use polyfish::{Action, Coords, Game};
+use polyfish::states::{CityState, GameState, TribeState, UnitState};
+use polyfish::types::{ModeType, TribeType, UnitType};
 
 #[test]
 fn test_resignation_removes_units() {
@@ -69,9 +66,9 @@ fn test_resignation_removes_units() {
     assert_eq!(game.state.tribes[&1].units.len(), 1);
     
     // Resign
-    let resign_move = ResignMove;
-    game.play_move(&resign_move);
-    
+    assert!(game.legal_actions().contains(&Action::Resign));
+    let _undo = game.play(&Action::Resign).unwrap();
+
     // Verify units are gone for tribe 1
     assert_eq!(game.state.tribes[&1].units.len(), 0);
     assert_eq!(game.state.tribes[&1].resigned_turn, 1);

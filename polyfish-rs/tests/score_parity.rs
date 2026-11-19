@@ -65,7 +65,10 @@ fn probe_playout(
         };
         let m = &moves[pick];
         let desc = m.describe(&game.state);
-        if game.play_move(m.as_ref()).is_none() {
+        if game
+            .play(&polyfish::Action::from_move(m.as_ref()).expect("move identity"))
+            .is_err()
+        {
             break;
         }
         let now: HashMap<i32, i32> = score_drift(&game.state).into_iter().collect();

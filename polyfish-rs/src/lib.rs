@@ -26,6 +26,6 @@ pub mod types;
 pub mod version_sync;
 
 pub use coords::Coords;
-pub use game::Game;
+pub use game::{Action, ActionError, Decision, Game, TurnRotation};
 pub use states::*;
 pub use types::*;

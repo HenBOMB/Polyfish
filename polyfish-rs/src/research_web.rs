@@ -6,11 +6,11 @@ use axum::{
     http::StatusCode,
     routing::{get, post},
 };
-use polyfish::game::Game;
 use polyfish::replay::{Replay, ReplayPlayback};
 use polyfish::research::{self, MatchConfig, MatchResult, Opponent};
 use polyfish::states::GameState;
 use polyfish::types::{MapType, MoveType, StructureType, TribeType};
+use polyfish::{Action, Game};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -256,21 +256,39 @@ async fn play(State(app): State<Arc<AppState>>, Json(req): Json<ActionRequest>) 
         ));
     }
     let view = research::observation(&game, game.current_player_id());
-    let action = research::legal_actions(&game, &view)
-        .into_iter()
-        .find(|candidate| candidate.serialize() == req.action)
-        .ok_or_else(|| bad_request("That action is no longer available"))?;
-    let excavating = action.move_type() == MoveType::Capture
-        && action.source_idx().ok().is_some_and(|idx| {
-            polyfish::functions::get_structure_type_at(&game.state, idx as i32)
-                == Some(StructureType::Ruin)
-        });
-    game.state._messages.clear();
+    if !view
+        .legal_moves()
+        .iter()
+        .any(|candidate| candidate.serialize() == req.action)
+    {
+        return Err(bad_request("That action is no longer available"));
+    }
+    let excavating = req.action["moveType"].as_i64() == Some(MoveType::Capture as i64)
+        && req.action["src"]
+            .as_i64()
+            .and_then(|idx| i32::try_from(idx).ok())
+            .is_some_and(|idx| {
+                polyfish::functions::get_structure_type_at(&game.state, idx)
+                    == Some(StructureType::Ruin)
+            });
     let verbose = std::mem::replace(&mut game.state.settings._verbose, excavating);
-    let applied = game.play_move(action.as_ref());
+    let previous_messages = game.state._messages.len();
+    let decision = game.decision();
+    let index = decision
+        .moves()
+        .iter()
+        .position(|candidate| candidate.serialize() == req.action);
+    let applied = match index {
+        Some(index) => decision.play_index(index).map_err(bad_request),
+        None => {
+            drop(decision);
+            Err(bad_request("That action is no longer available"))
+        }
+    };
     game.state.settings._verbose = verbose;
-    let messages = std::mem::take(&mut game.state._messages);
-    let _undo = applied.ok_or_else(|| bad_request("Could not apply the action"))?;
+    let _undo = applied?;
+    let messages = game.state._messages.split_off(previous_messages);
+    game.state._messages.clear();
     let mut response = snapshot(&game, app.network.is_some(), false);
     if !messages.is_empty() {
         response["messages"] = json!(messages);
@@ -286,8 +304,10 @@ async fn bot(State(app): State<Arc<AppState>>) -> WebResult {
             && cfg.opponent != Opponent::Human
             && cfg.bot_seat == game.current_player_id()
         {
+            let decision = game.decision();
+            let game = decision.game();
             let action = if let Some(preset) = cfg.opponent.preset() {
-                research::choose_move(&game, preset)
+                research::choose_from_decision(&decision, preset)
             } else if cfg.opponent == Opponent::Learned {
                 use polyfish::ai::{
                     brain::{Brain, SearchBackend},
@@ -303,15 +323,14 @@ async fn bot(State(app): State<Arc<AppState>>) -> WebResult {
                 let evaluator = Evaluator::Inline(InlineEvalHandle::new(net.clone()));
                 let mut agent =
                     Brain::with_backend(&evaluator, 128, SearchBackend::Gumbel { k: 16 });
-                agent.think_with_stats(&mut game).0
+                agent.think_with_stats_from_decision(&decision).0
             } else {
-                research::choose_move(&game, research::OpponentPreset::Normal)
+                research::choose_from_decision(&decision, research::OpponentPreset::Normal)
             };
             let action =
                 action.ok_or_else(|| bad_request("The bot could not find a legal action"))?;
-            let _undo = game
-                .play_move(action.as_ref())
-                .ok_or_else(|| bad_request("The bot action could not be applied"))?;
+            let action = Action::from_move(action.as_ref()).map_err(bad_request)?;
+            let _undo = decision.play(&action).map_err(bad_request)?;
         }
         Ok(Json(snapshot(&game, app.network.is_some(), false)))
     })

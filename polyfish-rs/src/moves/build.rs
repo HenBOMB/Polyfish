@@ -32,11 +32,15 @@ impl Move for BuildMove {
         MoveType::Build
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
-        use crate::settings::structures::structure_setting;
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
+        use crate::settings::structures::get_structure_setting;
 
         let pov_id = state.settings.current_player_turn_id;
-        let settings = structure_setting(self.structure_type);
+        let settings = get_structure_setting(self.structure_type);
 
         // 0. Validation
         if let Some(reason) = crate::settings::structures::unimplemented_reason(self.structure_type)
@@ -128,7 +132,7 @@ pub(super) fn generate_build_moves_with_occupancy(
 ) {
     let pov_id = state.settings.current_player_turn_id;
     if let Some(tribe) = state.tribes.get(&pov_id) {
-        use crate::settings::structures::structure_setting;
+        use crate::settings::structures::get_structure_setting;
         use crate::settings::tasks::{check_task, get_task_setting};
         use strum::IntoEnumIterator;
 
@@ -136,7 +140,7 @@ pub(super) fn generate_build_moves_with_occupancy(
 
         let mut unlocked_structures = Vec::new();
         for struct_type in crate::types::StructureType::iter() {
-            let settings = structure_setting(struct_type);
+            let settings = get_structure_setting(struct_type);
 
             if settings.cost.is_none() || settings.resource_type.is_some() {
                 continue;
@@ -202,7 +206,7 @@ pub(super) fn generate_build_moves_with_occupancy(
             }
 
             if check_task(state, task) {
-                let struct_settings = structure_setting(setting.structure_type);
+                let struct_settings = get_structure_setting(setting.structure_type);
                 if tribe.stars >= struct_settings.cost.unwrap_or(0) {
                     pending_monument_structures.push((setting.structure_type, struct_settings));
                 }
@@ -232,7 +236,7 @@ pub(super) fn generate_build_moves_with_occupancy(
                     if let Some(res_type) = get_resource_at(state, idx) {
                         let res_settings = get_resource_setting(res_type);
                         if let Some(struct_type) = res_settings.struct_required {
-                            let struct_settings = structure_setting(struct_type);
+                            let struct_settings = get_structure_setting(struct_type);
                             let cost = struct_settings.cost.unwrap_or(0);
 
                             if tribe.stars >= cost {
@@ -374,12 +378,12 @@ pub(super) fn generate_build_moves_with_occupancy(
 }
 
 fn is_structure_unlocked(tribe: &crate::states::TribeState, struct_type: StructureType) -> bool {
-    use crate::settings::structures::structure_setting;
+    use crate::settings::structures::get_structure_setting;
     use crate::settings::technology::technology_setting;
     use crate::types::TribeType;
 
     // Check if the structure itself is tribe-restricted
-    let struct_setting = structure_setting(struct_type);
+    let struct_setting = get_structure_setting(struct_type);
     if let Some(required_tribe) = struct_setting.tribe_type {
         if required_tribe != tribe.tribe_type {
             return false;

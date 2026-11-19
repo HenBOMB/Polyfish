@@ -1,5 +1,7 @@
 # Polyfish research release candidate 1
 
+[Polyfish Rust Simulator API](simulator-api.md)
+
 ## Play locally
 
 From `polyfish-rs/`, start the Rust server and visit [the simulator](http://127.0.0.1:3000/simulator/). A full checkout serves the graphical board from `src/public/`. The research archive uses the compact board from `polyfish-ui/public/research/`. That board is also available at [/simulator/plain/](http://127.0.0.1:3000/simulator/plain/) in a full checkout.

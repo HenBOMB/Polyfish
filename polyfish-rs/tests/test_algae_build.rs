@@ -4,7 +4,6 @@ mod tests {
     use polyfish::types::*;
     use polyfish::Coords;
     use polyfish::moves::Move;
-    use polyfish::moves::build::BuildMove;
     use polyfish::functions::*;
 
     fn setup_cymanti_state() -> GameState {
@@ -82,22 +81,55 @@ mod tests {
         assert!(algae_at_13, "Should be able to build Algae on Ocean at 13");
 
         // 5. Execute BuildMove at 7
-        let build_move = BuildMove::new(7, StructureType::Algae);
+        let build = polyfish::Action::Build {
+            target: 7,
+            structure: StructureType::Algae,
+        };
         let initial_stars = state.tribes[&1].stars;
         let initial_pop = state.tribes[&1].cities[0].population;
 
-        let res = build_move.execute(&mut state).expect("Build Algae should succeed");
-        
-        assert_eq!(state.tribes[&1].stars, initial_stars - 5, "Should cost 5 stars");
-        assert_eq!(state.tribes[&1].cities[0].population, initial_pop + 1, "Should reward 1 population");
-        assert!(state.tiles[&7].effects.contains(&TileEffect::Algae), "Tile should have Algae effect");
-        assert_eq!(get_structure_type_at(&state, 7), Some(StructureType::Algae), "Tile should have Algae structure");
+        let mut game = polyfish::Game { state };
+        let undo = game.play(&build).expect("Build Algae should succeed");
+        let mut state = game.state;
+
+        assert_eq!(
+            state.tribes[&1].stars,
+            initial_stars - 5,
+            "Should cost 5 stars"
+        );
+        assert_eq!(
+            state.tribes[&1].cities[0].population,
+            initial_pop + 1,
+            "Should reward 1 population"
+        );
+        assert!(
+            state.tiles[&7].effects.contains(&TileEffect::Algae),
+            "Tile should have Algae effect"
+        );
+        assert_eq!(
+            get_structure_type_at(&state, 7),
+            Some(StructureType::Algae),
+            "Tile should have Algae structure"
+        );
 
         // 6. Undo
-        (res.undo)(&mut state);
-        assert_eq!(state.tribes[&1].stars, initial_stars, "Stars should be restored on undo");
-        assert_eq!(state.tribes[&1].cities[0].population, initial_pop, "Population should be restored on undo");
-        assert!(!state.tiles[&7].effects.contains(&TileEffect::Algae), "Algae effect should be removed on undo");
-        assert_eq!(get_structure_type_at(&state, 7), None, "Algae structure should be removed on undo");
+        undo(&mut state);
+        assert_eq!(
+            state.tribes[&1].stars, initial_stars,
+            "Stars should be restored on undo"
+        );
+        assert_eq!(
+            state.tribes[&1].cities[0].population, initial_pop,
+            "Population should be restored on undo"
+        );
+        assert!(
+            !state.tiles[&7].effects.contains(&TileEffect::Algae),
+            "Algae effect should be removed on undo"
+        );
+        assert_eq!(
+            get_structure_type_at(&state, 7),
+            None,
+            "Algae structure should be removed on undo"
+        );
     }
 }

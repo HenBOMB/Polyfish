@@ -21,7 +21,7 @@ pub fn is_in_own_territory(state: &GameState, idx: i32, owner: i32) -> bool {
 }
 
 use crate::coords::Coords;
-use crate::settings::unit_setting;
+use crate::settings::get_unit_setting;
 use crate::settings::has_technology;
 use crate::states::*;
 use crate::types::*;
@@ -218,7 +218,7 @@ pub fn get_unit_at<'a>(state: &'a GameState, idx: i32) -> Option<&'a UnitState> 
         for unit in &tribe.units {
             if unit.coords.idx == idx {
                 // // Skip ships - return the passenger conceptually
-                // let setting = unit_setting(unit.unit_type);
+                // let setting = get_unit_setting(unit.unit_type);
                 // if setting.skills.contains(&SkillType::Carry) {
                 //     if let Some(passenger) = unit.passenger_type {
                 //         if passenger != UnitType::None {
@@ -331,7 +331,7 @@ pub fn is_amphibious(unit: &UnitState) -> bool {
 pub fn get_unit_max_health(unit: &UnitState) -> f32 {
     // Health is determined by the passenger (inner unit) if available
     let u_type = unit.passenger_type.unwrap_or(unit.unit_type);
-    let mut health = crate::settings::units::unit_setting(u_type).health;
+    let mut health = crate::settings::units::get_unit_setting(u_type).health;
     if health < 0.0 {
         health = 10.0;
     }
@@ -343,12 +343,12 @@ pub fn get_unit_max_health(unit: &UnitState) -> f32 {
 
 /// Get unit attack strength (accounting for Boost)
 pub fn get_unit_attack(state: &GameState, unit: &UnitState) -> f32 {
-    let mut atk = crate::settings::units::unit_setting(unit.unit_type).attack;
+    let mut atk = crate::settings::units::get_unit_setting(unit.unit_type).attack;
 
     // If the unit type itself has no attack (like Transportship), inherit from passenger
     if atk < 0.0 {
         if let Some(passenger) = unit.passenger_type {
-            atk = crate::settings::units::unit_setting(passenger).attack;
+            atk = crate::settings::units::get_unit_setting(passenger).attack;
         }
     }
 
@@ -360,7 +360,7 @@ pub fn get_unit_attack(state: &GameState, unit: &UnitState) -> f32 {
 
 /// Get unit defense strength (accounting for Poison)
 pub fn get_unit_defense(unit: &UnitState) -> f32 {
-    let mut def = crate::settings::units::unit_setting(unit.unit_type).defense;
+    let mut def = crate::settings::units::get_unit_setting(unit.unit_type).defense;
     if has_effect(unit, UnitEffect::Poison) {
         def *= 0.7; // 30% defense reduction
     }
@@ -369,7 +369,7 @@ pub fn get_unit_defense(unit: &UnitState) -> f32 {
 
 /// Get unit movement (accounting for Boost, Poison, and Skate)
 pub fn get_unit_movement(state: &GameState, unit: &UnitState) -> i32 {
-    let mut movement = crate::settings::units::unit_setting(unit.unit_type).movement;
+    let mut movement = crate::settings::units::get_unit_setting(unit.unit_type).movement;
 
     // Boost bonus
     if has_effect(unit, UnitEffect::Boosted) {
@@ -490,7 +490,7 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
     for &idx in &city._territory {
         if let Some(structure) = crate::functions::get_structure_at(state, idx) {
             let setting =
-                crate::settings::structures::structure_setting(structure.structure_type);
+                crate::settings::structures::get_structure_setting(structure.structure_type);
 
             // Adjacency Bonuses
             match structure.structure_type {
@@ -727,7 +727,7 @@ pub fn calculate_pushable_position(state: &GameState, unit: &UnitState) -> Optio
     let Coords { x, y, .. } = unit.coords;
     let facing = unit
         .last_attack_coords
-        .filter(|_| unit_setting(unit.unit_type).range > 1)
+        .filter(|_| get_unit_setting(unit.unit_type).range > 1)
         .map(|target| ((target.x - x).signum(), (target.y - y).signum()))
         .or_else(|| {
             unit.prev_coords.is_valid().then(|| {
@@ -771,7 +771,7 @@ pub fn is_steppable_for_push(state: &GameState, unit: &UnitState, idx: i32) -> b
     }
 
     // Terrain validity
-    let settings = crate::settings::units::unit_setting(unit.unit_type);
+    let settings = crate::settings::units::get_unit_setting(unit.unit_type);
     let tile = match state.tiles.get(&idx) {
         Some(t) => t,
         None => return false,
@@ -1086,7 +1086,7 @@ pub fn analyze_expansion(state: &GameState, player_id: PlayerId) -> ExpansionAna
 
                 // Approximate Threat: Distance <= Move + Range (Chebyshev for grid movement)
                 let dist = unit.coords.chebyshev_distance_to(&enemy.coords);
-                let enemy_settings = unit_setting(enemy.unit_type);
+                let enemy_settings = get_unit_setting(enemy.unit_type);
                 let threat_range = enemy_settings.movement + enemy_settings.range;
 
                 if dist <= threat_range {

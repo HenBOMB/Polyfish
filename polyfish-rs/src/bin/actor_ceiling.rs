@@ -91,7 +91,9 @@ fn play_game(
         let (best_move, _visits) = current_agent.think_decomposed(&game, move_count);
 
         let Some(m) = best_move else { break };
-        let _ = game.play_move(m.as_ref());
+        let _ = game
+            .play(&polyfish::Action::from_move(m.as_ref()).expect("move identity"))
+            .ok();
         move_count += 1;
     }
 

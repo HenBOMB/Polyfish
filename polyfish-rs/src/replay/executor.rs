@@ -94,7 +94,11 @@ impl ReplayExecutor {
             });
         }
 
-        let legal_moves = game.legal_moves();
+        let legal_moves = if matches!(command, ReplayCommand::Resign) {
+            game.decision_moves()
+        } else {
+            game.legal_moves()
+        };
         let matches = matching_move_indices(command, &legal_moves);
         if matches.is_empty() {
             return Err(ReplayError::IllegalCommand {
@@ -137,7 +141,7 @@ impl ReplayExecutor {
                 hinted.reward = *reward;
                 hinted.revealed_tiles = revealed_tiles.clone();
                 hinted.tech_hint = *technology;
-                game.play_move(&hinted)
+                game.play_generated(&hinted)
             }
             ReplayCommand::Reward {
                 target,
@@ -146,9 +150,9 @@ impl ReplayExecutor {
             } => {
                 let mut hinted = RewardMove::new(*target, *reward);
                 hinted.revealed_tiles = revealed_tiles.clone();
-                game.play_move(&hinted)
+                game.play_generated(&hinted)
             }
-            _ => game.play_move(selected),
+            _ => game.play_generated(selected),
         };
         if played.is_none() {
             return Err(ReplayError::Execution {

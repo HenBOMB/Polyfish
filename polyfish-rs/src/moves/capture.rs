@@ -43,7 +43,11 @@ impl Move for CaptureMove {
         MoveType::Capture
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let _pov_id = state.settings.current_player_turn_id;
         let capturer_idx = if let Some(unit) = get_unit_at(state, self.src_index) {
             state

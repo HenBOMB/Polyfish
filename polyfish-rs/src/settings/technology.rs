@@ -1,7 +1,7 @@
 //! Technology settings and tech tree
 
 use crate::{
-    settings::units::unit_setting,
+    settings::units::get_unit_setting,
     types::{
         AbilityType, StructureType, TaskType, TechnologyType, TerrainType, TribeType, UnitType,
     },
@@ -463,7 +463,7 @@ pub fn get_unlocked_units(tech_type: TechnologyType, tribe: TribeType) -> Vec<Un
 
     // 3. Add any special units that belong to this tribe
     for &u in &settings.unlocks_special_units {
-        if unit_setting(u).tribe_type == tribe {
+        if get_unit_setting(u).tribe_type == tribe {
             units.push(u);
         }
     }

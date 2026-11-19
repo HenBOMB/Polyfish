@@ -65,7 +65,17 @@ fn sim_end_turn_hands_over_when_adversarial() {
     let turn = game.state.settings.turn;
 
     let m = end_turn_move(&game);
-    let undo = game.simulate_move(m.as_ref()).expect("EndTurn simulated");
+    let undo = game
+        .simulate(
+            &polyfish::Action::from_move(m.as_ref()).expect("move identity"),
+            if polyfish::game::adversarial_search() {
+                polyfish::TurnRotation::NextPlayer
+            } else {
+                polyfish::TurnRotation::SamePlayer
+            },
+        )
+        .ok()
+        .expect("EndTurn simulated");
 
     assert_ne!(
         game.state.settings.current_player_turn_id, mover,
@@ -88,7 +98,17 @@ fn sim_end_turn_skips_opponent_when_not_adversarial() {
     let mover = game.state.settings.current_player_turn_id;
 
     let m = end_turn_move(&game);
-    let undo = game.simulate_move(m.as_ref()).expect("EndTurn simulated");
+    let undo = game
+        .simulate(
+            &polyfish::Action::from_move(m.as_ref()).expect("move identity"),
+            if polyfish::game::adversarial_search() {
+                polyfish::TurnRotation::NextPlayer
+            } else {
+                polyfish::TurnRotation::SamePlayer
+            },
+        )
+        .ok()
+        .expect("EndTurn simulated");
 
     assert_eq!(
         game.state.settings.current_player_turn_id, mover,
@@ -122,7 +142,17 @@ fn descent_players(game: &mut Game, plies: usize) -> (HashSet<i32>, usize) {
         if m.move_type() == MoveType::EndTurn {
             end_turns += 1;
         }
-        match game.simulate_move(m.as_ref()) {
+        match game
+            .simulate(
+                &polyfish::Action::from_move(m.as_ref()).expect("move identity"),
+                if polyfish::game::adversarial_search() {
+                    polyfish::TurnRotation::NextPlayer
+                } else {
+                    polyfish::TurnRotation::SamePlayer
+                },
+            )
+            .ok()
+        {
             Some(u) => undos.push(u),
             None => break,
         }
@@ -285,7 +315,17 @@ fn in_tree_opponent_can_threaten_an_undefended_city() {
     );
 
     let m = end_turn_move(&view);
-    let _undo = view.simulate_move(m.as_ref()).expect("EndTurn simulated");
+    let _undo = view
+        .simulate(
+            &polyfish::Action::from_move(m.as_ref()).expect("move identity"),
+            if polyfish::game::adversarial_search() {
+                polyfish::TurnRotation::NextPlayer
+            } else {
+                polyfish::TurnRotation::SamePlayer
+            },
+        )
+        .ok()
+        .expect("EndTurn simulated");
     assert_eq!(view.state.settings.current_player_turn_id, 2);
 
     let threats: Vec<(MoveType, String)> = view

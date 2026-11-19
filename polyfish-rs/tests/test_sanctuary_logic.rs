@@ -84,7 +84,7 @@ fn test_sanctuary_placement_and_limit() {
 
     // 2. Build one Sanctuary
     let build_move = BuildMove::new(1, StructureType::Sanctuary);
-    game.play_move(&build_move);
+    let _ = game.play(&polyfish::Action::from_move(&build_move).expect("move identity"));
 
     assert_eq!(
         polyfish::functions::get_structure_type_at(&game.state, 1),

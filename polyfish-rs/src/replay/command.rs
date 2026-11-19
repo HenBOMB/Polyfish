@@ -112,11 +112,7 @@ impl ReplayCommand {
                         message,
                     })?;
                 let source = component(m.source_idx(), "source")?;
-                if m.serialize()
-                    .get("upgrade")
-                    .and_then(|value| value.as_bool())
-                    == Some(true)
-                {
+                if m.is_upgrade() {
                     Self::Upgrade { source, unit }
                 } else {
                     Self::Summon {
@@ -196,10 +192,7 @@ impl ReplayCommand {
                 m.move_type() == MoveType::Summon
                     && source() == Some(*s)
                     && m.unit_type().ok() == Some(*unit)
-                    && m.serialize()
-                        .get("upgrade")
-                        .and_then(|value| value.as_bool())
-                        == Some(true)
+                    && m.is_upgrade()
             }
             Self::Ability {
                 source: s,
@@ -223,6 +216,23 @@ impl ReplayCommand {
             }
             Self::EndTurn => m.move_type() == MoveType::EndTurn,
             Self::Resign => m.move_type() == MoveType::Resign,
+        }
+    }
+
+    pub(crate) fn matches_live_move(&self, m: &dyn Move) -> bool {
+        match self {
+            Self::Capture {
+                reward,
+                revealed_tiles,
+                technology,
+                ..
+            } if reward.is_some() || revealed_tiles.is_some() || technology.is_some() => false,
+            Self::Reward {
+                revealed_tiles: Some(_),
+                ..
+            } => false,
+            Self::Summon { .. } if m.is_upgrade() => false,
+            _ => self.matches_move(m),
         }
     }
 

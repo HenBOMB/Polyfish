@@ -23,7 +23,11 @@ impl Move for ResearchMove {
         MoveType::Research
     }
 
-    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+    fn execute(
+        &self,
+        state: &mut GameState,
+        _: crate::moves::MoveExecution,
+    ) -> Result<MoveResult, String> {
         let pov_id = state.settings.current_player_turn_id;
 
         // Validation

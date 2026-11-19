@@ -67,7 +67,6 @@ fn test_gumbel_mcts_sequential_halving() {
 /// rewrite must emit one MoveVisit per legal move at the root.
 #[test]
 fn test_gumbel_policy_target_covers_full_legal_set() {
-    use polyfish::moves::EndTurnMove;
 
     let network = make_network();
     let evaluator = make_evaluator(&network);
@@ -79,7 +78,7 @@ fn test_gumbel_policy_target_covers_full_legal_set() {
         if polyfish::functions::is_game_over(&game.state) {
             break;
         }
-        let _ = game.play_move(&EndTurnMove);
+        let _ = game.play(&polyfish::Action::EndTurn).ok();
     }
     assert!(
         polyfish::ai::book::Book::recommend(&game).is_empty(),
@@ -138,7 +137,6 @@ fn test_gumbel_policy_target_covers_full_legal_set() {
 /// can't.
 #[test]
 fn test_gumbel_multi_step_game_loop_no_panic() {
-    use polyfish::moves::EndTurnMove;
 
     let network = make_network();
     let evaluator = make_evaluator(&network);
@@ -149,7 +147,7 @@ fn test_gumbel_multi_step_game_loop_no_panic() {
         if polyfish::functions::is_game_over(&game.state) {
             break;
         }
-        let _ = game.play_move(&EndTurnMove);
+        let _ = game.play(&polyfish::Action::EndTurn).ok();
     }
 
     let mut agent = GumbelMctsAgent::new(&evaluator, 16, 4);
@@ -172,7 +170,9 @@ fn test_gumbel_multi_step_game_loop_no_panic() {
             game.state.settings.turn
         );
         let m = best_move.unwrap();
-        let _ = game.play_move(m.as_ref());
+        let _ = game
+            .play(&polyfish::Action::from_move(m.as_ref()).expect("move identity"))
+            .ok();
     }
 }
 
@@ -185,7 +185,6 @@ fn test_gumbel_multi_step_game_loop_no_panic() {
 /// π' target's semantics.
 #[test]
 fn test_gumbel_tree_reuse_on_consecutive_same_player_search() {
-    use polyfish::moves::EndTurnMove;
 
     let network = make_network();
     let evaluator = make_evaluator(&network);
@@ -196,7 +195,7 @@ fn test_gumbel_tree_reuse_on_consecutive_same_player_search() {
         if polyfish::functions::is_game_over(&game.state) {
             break;
         }
-        let _ = game.play_move(&EndTurnMove);
+        let _ = game.play(&polyfish::Action::EndTurn).ok();
     }
 
     // 128 iterations (not 32): the agent's Gumbel noise draws from an
@@ -223,7 +222,9 @@ fn test_gumbel_tree_reuse_on_consecutive_same_player_search() {
     // don't end the turn). This is the root-shift case.
     let m1 = m1.unwrap();
     let ended_turn = m1.move_type() == polyfish::types::MoveType::EndTurn;
-    let _ = game.play_move(m1.as_ref());
+    let _ = game
+        .play(&polyfish::Action::from_move(m1.as_ref()).expect("move identity"))
+        .ok();
 
     if ended_turn || game.state.settings.current_player_turn_id != pov {
         // The chosen move ended the turn (opponent to move next). Tree reuse
@@ -253,7 +254,6 @@ fn test_gumbel_tree_reuse_on_consecutive_same_player_search() {
 /// root, so the agent must fall back to a fresh build.
 #[test]
 fn test_gumbel_tree_reuse_skipped_after_opponent_move() {
-    use polyfish::moves::EndTurnMove;
 
     let network = make_network();
     let evaluator = make_evaluator(&network);
@@ -263,7 +263,7 @@ fn test_gumbel_tree_reuse_skipped_after_opponent_move() {
         if polyfish::functions::is_game_over(&game.state) {
             break;
         }
-        let _ = game.play_move(&EndTurnMove);
+        let _ = game.play(&polyfish::Action::EndTurn).ok();
     }
 
     let mut agent = GumbelMctsAgent::new(&evaluator, 32, 8);
@@ -275,8 +275,8 @@ fn test_gumbel_tree_reuse_skipped_after_opponent_move() {
     // Force a full turn cycle: end the current player's turn, then end the
     // opponent's turn, so the same player is to move again but the position
     // has changed by both players' EndTurns.
-    let _ = game.play_move(&EndTurnMove);
-    let _ = game.play_move(&EndTurnMove);
+    let _ = game.play(&polyfish::Action::EndTurn).ok();
+    let _ = game.play(&polyfish::Action::EndTurn).ok();
 
     // The cached tree's next_root_hash was for the state after the chosen
     // move, not after two EndTurns, so the hash must mismatch → fresh build.

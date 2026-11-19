@@ -1,5 +1,8 @@
 #!/bin/bash
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)" || exit 1
+cd -- "$script_dir/.." || exit 1
+
 if ! command -v g++ &>/dev/null; then
     echo "Error: g++ is not installed!" 1>&2
     exit 1
