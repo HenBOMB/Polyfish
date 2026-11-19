@@ -1,8 +1,10 @@
 """Build the asset-cleared research source archive from a committed revision."""
 
 import argparse
+import os
 from pathlib import Path
 import subprocess
+import tempfile
 from zipfile import ZipFile
 
 
@@ -20,7 +22,6 @@ INCLUDE = (
     "polyfish-rs/examples/metal_parity.rs",
     "polyfish-rs/examples/tch_parity.rs",
     "polyfish-rs/examples/research_bench.rs",
-    "polyfish-rs/examples/midgame_bench.rs",
     "polyfish-rs/src",
     "polyfish-rs/tests/research_simulator.rs",
     "polyfish-rs/tests/unit_push.rs",
@@ -28,6 +29,7 @@ INCLUDE = (
     "research",
     "polyfish-ui/public/research",
 )
+MIDGAME_EXAMPLE = "polyfish-rs/examples/midgame_bench.rs"
 
 
 def main():
@@ -40,12 +42,21 @@ def main():
         parser.error(f"Archive already exists: {output}")
     commit = subprocess.check_output(["git", "rev-parse", "--verify", args.ref + "^{commit}"],
                                      cwd=ROOT, text=True).strip()
-    subprocess.run([
-        "git", "archive", "--format=zip", "--prefix=polyfish-research-v1-rc.1/",
-        "--output", str(output), commit, "--", *INCLUDE,
-    ], cwd=ROOT, check=True)
-    with ZipFile(output, "a") as archive:
-        archive.writestr("polyfish-research-v1-rc.1/SOURCE_COMMIT", commit + "\n")
+    optional = subprocess.check_output(
+        ["git", "ls-tree", "--name-only", commit, "--", MIDGAME_EXAMPLE], cwd=ROOT, text=True,
+    ).splitlines()
+    with tempfile.TemporaryDirectory(dir=output.parent) as directory:
+        staged = Path(directory) / "source.zip"
+        subprocess.run([
+            "git", "archive", "--format=zip", "--prefix=polyfish-research-v1-rc.1/",
+            "--output", str(staged), commit, "--", *INCLUDE, *optional,
+        ], cwd=ROOT, check=True)
+        with ZipFile(staged, "a") as archive:
+            archive.writestr("polyfish-research-v1-rc.1/SOURCE_COMMIT", commit + "\n")
+        try:
+            os.link(staged, output)
+        except FileExistsError:
+            parser.error(f"Archive already exists: {output}")
 
 
 if __name__ == "__main__":

@@ -13,7 +13,14 @@ def lookup(report):
             for row in report["summary"]}
 
 
-def summarize(baseline, candidate):
+def summarize(baseline, candidate, *, allow_unverified_host=False):
+    host_fields = ("hostFingerprint", "platform")
+    if all(report.get(field) for report in (baseline, candidate) for field in host_fields):
+        for field in host_fields:
+            if baseline[field] != candidate[field]:
+                raise ValueError(f"Benchmark hosts differ: {field}")
+    elif not allow_unverified_host or any(report.get("hostFingerprint") for report in (baseline, candidate)):
+        raise ValueError("Both reports need a benchmark host fingerprint. Use --allow-unverified-host only for two historical runs on a known host.")
     for field in ("tribesCommit", "javaFlags", "machine", "java", "rust", "sha256"):
         if baseline[field] != candidate[field]:
             raise ValueError(f"Benchmark inputs differ: {field}")
@@ -57,10 +64,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("baseline", type=Path)
     parser.add_argument("candidate", type=Path)
+    parser.add_argument("--allow-unverified-host", action="store_true",
+                        help="Compare two older reports after independently verifying a shared host")
     args = parser.parse_args()
     before, after = (json.loads(path.read_text()) for path in (args.baseline, args.candidate))
+    try:
+        boards = list(summarize(before, after, allow_unverified_host=args.allow_unverified_host))
+    except ValueError as exc:
+        parser.error(str(exc))
     print(json.dumps({"rustBefore": before["rustCommit"], "rustAfter": after["rustCommit"],
-                      "boards": list(summarize(before, after))}, indent=2))
+                      "boards": boards}, indent=2))
 
 
 if __name__ == "__main__":

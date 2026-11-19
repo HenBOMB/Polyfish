@@ -132,6 +132,10 @@ def main():
         parser.error("Use positive workloads and at least three process pairs")
     if len(set(args.sides)) != len(args.sides):
         parser.error("Each side length may appear once")
+    csv_output = args.output.with_suffix(".csv")
+    if (args.output.suffix.lower() == ".csv" or args.output.resolve() == csv_output.resolve()
+            or (args.output.exists() and csv_output.exists() and args.output.samefile(csv_output))):
+        parser.error("JSON and CSV reports must have distinct output paths")
 
     tribes = args.tribes.resolve()
     if checked(["git", "rev-parse", "HEAD"], tribes) != REVISION:
@@ -181,7 +185,7 @@ def main():
         "raw": report,
         "summary": results,
     }, indent=2) + "\n")
-    with args.output.with_suffix(".csv").open("w", newline="") as file:
+    with csv_output.open("w", newline="") as file:
         fieldnames = ("side", "tiles", "mode", "metric", "javaMedian", "rustMedian", "rustAdvantageRatio", "pairedBootstrap95")
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()

@@ -2,15 +2,19 @@
 
 import argparse
 import collections
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager, ExitStack, suppress
 import hashlib
 from itertools import zip_longest
 import json
 import os
 from pathlib import Path
+import platform
+import plistlib
 import random
+import selectors
 import subprocess
 import tempfile
+import time
 
 from run_engine_benchmark import JAVA_FLAGS, REVISION, ROOT, SIDES, checked, measure, paired_summary
 
@@ -21,6 +25,7 @@ RUST_SOURCE = ROOT / "polyfish-rs" / "examples" / "midgame_bench.rs"
 KINDS = ("move", "attack", "harvest", "endTurn")
 BENCH_STATES = 512
 RETAIN_COUNTS = (0, 128, 512, 1024)
+ORACLE_REPLY_SECONDS = 30
 
 
 def write_json(path, value, *, compact=False):
@@ -32,44 +37,73 @@ def write_json(path, value, *, compact=False):
 
 
 @contextmanager
-def java_bench(tribes, javafx):
+def java_bench(tribes, javafx, source):
     if checked(["git", "rev-parse", "HEAD"], tribes) != REVISION:
         raise RuntimeError(f"Check out Tribes at {REVISION}")
+    if checked(["git", "status", "--porcelain", "--untracked-files=all", "--", "src", "lib"], tribes):
+        raise RuntimeError("Use an unmodified Tribes source tree")
     deps = os.pathsep.join([str(tribes / "lib" / "*"), str(javafx)])
     sources = sorted(str(path) for path in (tribes / "src").rglob("*.java"))
     with tempfile.TemporaryDirectory(prefix="polyfish-midgame-java-") as classes:
-        subprocess.run(["javac", "-cp", deps, "-d", classes, *sources, str(JAVA_SOURCE)],
+        subprocess.run(["javac", "-cp", deps, "-d", classes, *sources, str(source)],
                        cwd=tribes, capture_output=True, check=True)
         yield ["java", *JAVA_FLAGS, "-cp", os.pathsep.join([classes, deps]), "core.game.PolyfishMidgameBench"]
 
 
 @contextmanager
 def oracle(executable, fixture, cwd):
-    with tempfile.TemporaryFile(mode="w+") as errors:
+    with tempfile.TemporaryFile(mode="w+") as errors, selectors.DefaultSelector() as ready:
         proc = subprocess.Popen([*executable, str(fixture), "oracle"], cwd=cwd,
-                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors, text=True)
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors)
+        ready.register(proc.stdout, selectors.EVENT_READ)
+        buffer = bytearray()
 
         def query(op, node, **params):
-            proc.stdin.write(json.dumps(dict(op=op, node=node, **params)) + "\n")
-            proc.stdin.flush()
-            line = proc.stdout.readline()
+            deadline = time.monotonic() + ORACLE_REPLY_SECONDS
             try:
+                proc.stdin.write((json.dumps(dict(op=op, node=node, **params)) + "\n").encode())
+                proc.stdin.flush()
+                while buffer.find(b"\n") == -1:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not ready.select(remaining):
+                        raise TimeoutError(f"{executable[0]} did not reply to {op} for node {node}")
+                    chunk = os.read(proc.stdout.fileno(), 65536)
+                    if not chunk:
+                        raise EOFError("Oracle closed stdout")
+                    buffer.extend(chunk)
+                end = buffer.index(b"\n")
+                line = bytes(buffer[:end])
+                del buffer[:end + 1]
                 return json.loads(line)
-            except ValueError as exc:
+            except (BrokenPipeError, EOFError, ValueError) as exc:
                 errors.seek(0)
-                raise RuntimeError(f"{executable[0]} returned {line!r}: {errors.read()}") from exc
+                raise RuntimeError(f"{executable[0]} failed at {op} for node {node}: {errors.read()}") from exc
 
         try:
             yield query
         finally:
-            proc.stdin.close()
+            with suppress(BrokenPipeError):
+                proc.stdin.close()
             proc.stdout.close()
             if proc.poll() is None:
                 try:
                     proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    proc.terminate()
+                    proc.kill()
                     proc.wait()
+
+
+def check_schedule(schedule):
+    if not isinstance(schedule, list) or len(schedule) != max(RETAIN_COUNTS):
+        raise ValueError(f"Expected exactly {max(RETAIN_COUNTS)} scheduled branches")
+    for slot, branch in enumerate(schedule):
+        if not isinstance(branch, dict):
+            raise ValueError(f"Invalid branch at slot {slot + 1}")
+        node, action = branch.get("parent"), branch.get("action")
+        if (type(node) is not int or not 0 <= node <= slot or not isinstance(action, list)
+                or len(action) != 3 or any(type(value) is not int for value in action)
+                or not 0 <= action[0] < len(KINDS)):
+            raise ValueError(f"Invalid parent or action at branch {slot + 1}")
 
 
 def first_divergence(a, b):
@@ -77,6 +111,8 @@ def first_divergence(a, b):
 
 
 def check_branches(java, rust, schedule=None):
+    if schedule is not None:
+        check_schedule(schedule)
     roots = [engine("inspect", 0)["projection"] for engine in (java, rust)]
     if roots[0] != roots[1]:
         key = first_divergence(*roots)
@@ -180,6 +216,23 @@ def percentile_summary(raw):
     return summary
 
 
+def benchmark_host():
+    if platform.system() == "Darwin":
+        model = checked(["sysctl", "-n", "machdep.cpu.brand_string"], ROOT)
+        devices = plistlib.loads(subprocess.check_output(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice", "-a"]))
+        machine_id = next((device["IOPlatformUUID"] for device in devices if "IOPlatformUUID" in device), None)
+    elif platform.system() == "Linux":
+        model = next((line.partition(":")[2].strip() for line in Path("/proc/cpuinfo").read_text().splitlines()
+                      if line.split(":", 1)[0].strip() == "model name"), platform.machine())
+        machine_id = Path("/etc/machine-id").read_text().strip()
+    else:
+        raise RuntimeError("Benchmarks require macOS or Linux")
+    if not machine_id:
+        raise RuntimeError("Cannot identify this benchmark host")
+    fingerprint = hashlib.sha256(f"polyfish-midgame-v1\n{machine_id}".encode()).hexdigest()
+    return {"machine": model, "platform": platform.platform(), "hostFingerprint": fingerprint}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tribes", type=Path)
@@ -197,18 +250,43 @@ def main():
     args = parser.parse_args()
     if args.repeats < 3 or args.batches < 1 or args.decisions < 2 or args.decisions % 2:
         parser.error("Use at least three pairs, a positive batch count and an even decision count")
+    if len(set(args.sides)) != len(args.sides) or len(set(args.modes)) != len(args.modes):
+        parser.error("Each board side and workload mode may appear once")
+    if not args.preflight and not args.rust_revision:
+        parser.error("Pass --rust-revision for reproducible measurements")
     tribes = args.tribes.resolve()
     rust = [str(args.rust_binary.resolve(strict=True))]
     rust_dir = ROOT / "polyfish-rs"
     paths = {side: (FIXTURES / f"midgame-{side**2}.json", FIXTURES / f"branches-{side**2}.json")
              for side in args.sides}
-    with java_bench(tribes, args.javafx.resolve()) as java:
+    with tempfile.TemporaryDirectory(prefix="polyfish-midgame-inputs-") as directory, ExitStack() as stack:
+        snapshots = Path(directory)
+        hashes = {str(file.relative_to(ROOT)): hashlib.sha256(file.read_bytes()).hexdigest()
+                  for file in (Path(__file__).resolve(), RUST_SOURCE, ROOT / "research/run_engine_benchmark.py")}
+
+        def snapshot(file):
+            content = file.read_bytes()
+            hashes[str(file.relative_to(ROOT))] = hashlib.sha256(content).hexdigest()
+            copy = snapshots / file.name
+            copy.write_bytes(content)
+            return copy
+
+        java_source = snapshot(JAVA_SOURCE)
+        if args.preflight != "create":
+            paths = {side: (snapshot(fixture), snapshot(schedule)) for side, (fixture, schedule) in paths.items()}
+            try:
+                for _, schedule in paths.values():
+                    check_schedule(json.loads(schedule.read_text()))
+            except ValueError as exc:
+                parser.error(f"{schedule.name}: {exc}")
+        host = benchmark_host() if not args.preflight else {}
+        java = stack.enter_context(java_bench(tribes, args.javafx.resolve(), java_source))
         if args.preflight:
             checks = {}
             for side, (fixture, schedule_path) in paths.items():
-                with ExitStack() as stack:
-                    j = stack.enter_context(oracle(java, fixture, tribes))
-                    r = stack.enter_context(oracle(rust, fixture, rust_dir))
+                with ExitStack() as oracles:
+                    j = oracles.enter_context(oracle(java, fixture, tribes))
+                    r = oracles.enter_context(oracle(rust, fixture, rust_dir))
                     schedule = None if args.preflight == "create" else json.loads(schedule_path.read_text())
                     branches, checks[side**2] = check_branches(j, r, schedule)
                     if args.preflight == "create":
@@ -217,8 +295,6 @@ def main():
             write_json(args.output, checks)
             return
 
-        if not args.rust_revision:
-            parser.error("Pass --rust-revision for reproducible measurements")
         rng = random.Random(422)
         raw = []
         modes = {
@@ -245,13 +321,11 @@ def main():
                         journal.write(json.dumps(row) + "\n")
                         journal.flush()
                 print(f"Completed {repeat + 1}/{args.repeats} pairs per workload", flush=True)
-        inputs = [Path(__file__), JAVA_SOURCE, RUST_SOURCE, ROOT / "research/run_engine_benchmark.py",
-                  *(file for pair in paths.values() for file in pair)]
         write_json(args.output, {
             "rustCommit": args.rust_revision, "tribesCommit": REVISION, "javaFlags": JAVA_FLAGS,
-            "machine": checked(["sysctl", "-n", "machdep.cpu.brand_string"], ROOT) if os.uname().sysname == "Darwin" else os.uname().machine,
+            **host,
             "java": checked(["java", "--version"], tribes), "rust": checked(["rustc", "--version", "--verbose"], ROOT),
-            "sha256": {str(file.relative_to(ROOT)): hashlib.sha256(file.read_bytes()).hexdigest() for file in inputs},
+            "sha256": hashes,
             "raw": raw, "summary": percentile_summary(raw),
         })
         checkpoint.unlink()
