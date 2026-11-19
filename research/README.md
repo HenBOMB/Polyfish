@@ -14,6 +14,8 @@ Select one of your units and a highlighted destination, or choose a move in the 
 
 On water maps, Fishing unlocks Ports and shallow-water travel. Move a land unit onto your Port to embark. Sailing unlocks deep-ocean travel and the Scout upgrade. Land on a coast to disembark. Easy, Normal, and Expert use visible shores and objectives to build Ports and plan crossings. The Expert preset still uses a 20-action horizon and a 256-action simulation budget for search.
 
+The 1v1 generator gives Lakes a continuous land border and land routes to neutral villages, puts both Pangea capitals on a central mainland, and puts Continents capitals on separate landmasses. Archipelago settlements have shallow coasts, and Water World has small settlement islands. Saved games and replays carry their original terrain. Starting a fresh water match with a seed from an earlier v1.1 draft uses the corrected generator. [Polytopia map generation reference](https://wiki.polytopia.com/wiki/map-generation)
+
 To generate a model-free replay, run:
 
 ```sh

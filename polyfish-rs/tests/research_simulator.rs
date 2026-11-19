@@ -75,6 +75,238 @@ fn all_research_maps_have_valid_seeded_starts() {
     }
 }
 
+fn land_components(state: &GameState) -> Vec<Vec<i32>> {
+    let size = state.settings.size;
+    let mut seen = vec![false; (size * size) as usize];
+    let mut components = Vec::new();
+    for start in 0..size * size {
+        if seen[start as usize] || state.tiles[&start].is_water_terrain() {
+            continue;
+        }
+        seen[start as usize] = true;
+        let mut frontier = vec![start];
+        let mut component = Vec::new();
+        while let Some(idx) = frontier.pop() {
+            component.push(idx);
+            for near in polyfish::functions::get_adjacent_indices(state, idx, 1) {
+                if !seen[near as usize] && !state.tiles[&near].is_water_terrain() {
+                    seen[near as usize] = true;
+                    frontier.push(near);
+                }
+            }
+        }
+        components.push(component);
+    }
+    components.sort_by_key(|component| std::cmp::Reverse(component.len()));
+    components
+}
+
+#[test]
+fn water_maps_respect_their_geography_after_resources_are_placed() {
+    let maps = [
+        MapType::Lakes,
+        MapType::Continents,
+        MapType::Pangea,
+        MapType::Archipelago,
+        MapType::WaterWorld,
+    ];
+    for (size, island_count) in research::BOARD_SIZES.into_iter().zip([0, 1, 2, 3, 4, 9]) {
+        for kind in maps {
+            for seed in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 42, -999, i64::MAX] {
+                for tribes in [
+                    [TribeType::Imperius, TribeType::Bardur],
+                    [TribeType::Kickoo, TribeType::Imperius],
+                    [TribeType::Bardur, TribeType::Kickoo],
+                    [TribeType::Kickoo; 2],
+                ] {
+                    let game = research::new_match_on(
+                        size,
+                        kind,
+                        tribes,
+                        seed,
+                        MatchConfig::new(Opponent::Human, 2),
+                    );
+                    assert_water_geography(
+                        &game.state,
+                        kind,
+                        island_count,
+                        &format!("{kind:?} {size:?} seed {seed} {tribes:?}"),
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn assert_water_geography(state: &GameState, kind: MapType, island_count: usize, case: &str) {
+    use polyfish::functions::{get_adjacent_indices, get_plus_sign_indices, get_structure_type_at};
+
+    let size = state.settings.size;
+    let components = land_components(state);
+    let capital = |id| state.tribes[&id].starting_tile_coords.idx;
+    let village = |idx| get_structure_type_at(state, idx) == Some(StructureType::Village);
+    let settlements = state.tiles.keys().copied().filter(|&idx| village(idx));
+    let edge = state.tiles.values().filter(|tile| {
+        let (x, y) = (tile.coords.x, tile.coords.y);
+        x == 0 || y == 0 || x == size - 1 || y == size - 1
+    });
+    let land_pct = 100 * components.iter().map(Vec::len).sum::<usize>() / state.tiles.len();
+    let has_coast = |idx| {
+        get_plus_sign_indices(idx, size)
+            .into_iter()
+            .any(|near| state.tiles[&near].terrain_type == TerrainType::Water)
+    };
+    for idx in settlements.clone() {
+        assert!(
+            !state.tiles[&idx].is_water_terrain(),
+            "settlement under water: {case}"
+        );
+    }
+    for tribe in state
+        .tribes
+        .values()
+        .filter(|tribe| tribe.tribe_type == TribeType::Kickoo)
+    {
+        let fish = get_adjacent_indices(state, tribe.starting_tile_coords.idx, 1)
+            .into_iter()
+            .filter(|idx| {
+                state.tiles[idx].terrain_type == TerrainType::Water
+                    && state.tiles[idx].owner == tribe.id
+                    && state
+                        .resources
+                        .get(idx)
+                        .and_then(Option::as_ref)
+                        .is_some_and(|resource| resource.resource_type == ResourceType::Fish)
+            })
+            .count();
+        assert!(
+            fish >= 2,
+            "Kickoo needs two shallow fish: {case}, found {fish}"
+        );
+    }
+    match kind {
+        MapType::Lakes => {
+            assert!(
+                edge.clone().all(|tile| !tile.is_water_terrain()),
+                "wet outer border: {case}"
+            );
+            assert!((67..=73).contains(&land_pct), "{case}: {land_pct}% land");
+            assert_eq!(components.len(), 1, "disconnected land: {case}");
+            for id in [1, 2] {
+                let home = components
+                    .iter()
+                    .find(|component| component.contains(&capital(id)))
+                    .unwrap();
+                let reachable = home
+                    .iter()
+                    .filter(|&&idx| village(idx) && state.tiles[&idx].owner == 0)
+                    .count();
+                assert!(
+                    reachable >= 2,
+                    "fewer than two land-connected villages: {case}"
+                );
+            }
+        }
+        MapType::Pangea => {
+            assert!(
+                edge.clone().all(|tile| tile.is_water_terrain()),
+                "land on the outer edge: {case}"
+            );
+            assert!((44..=57).contains(&land_pct), "{case}: {land_pct}% land");
+            assert!(
+                components[0].contains(&((size / 2) * (size + 1))),
+                "center is off the mainland: {case}"
+            );
+            assert!(
+                [1, 2]
+                    .into_iter()
+                    .all(|id| components[0].contains(&capital(id))),
+                "capital off mainland: {case}"
+            );
+            assert_eq!(
+                components
+                    .iter()
+                    .skip(1)
+                    .filter(|group| group.len() == 1 && village(group[0]))
+                    .count(),
+                island_count,
+                "wrong number of island villages: {case}"
+            );
+        }
+        MapType::Continents => {
+            assert!((44..=57).contains(&land_pct), "{case}: {land_pct}% land");
+            for id in [1, 2] {
+                let home = components
+                    .iter()
+                    .find(|component| component.contains(&capital(id)))
+                    .unwrap();
+                assert!(
+                    home.len() >= state.tiles.len() / 9,
+                    "capital on a tiny island: {case}"
+                );
+                assert!(
+                    !home.contains(&capital(3 - id)),
+                    "capitals share a landmass: {case}"
+                );
+            }
+            assert_eq!(
+                components
+                    .iter()
+                    .filter(|group| group.len() == 1 && village(group[0]))
+                    .count(),
+                island_count,
+                "wrong number of island villages: {case}"
+            );
+        }
+        MapType::Archipelago | MapType::WaterWorld => {
+            let land_range = if kind == MapType::Archipelago {
+                32..=40
+            } else {
+                11..=17
+            };
+            assert!(land_range.contains(&land_pct), "{case}: {land_pct}% land");
+            assert!(components.len() >= 3, "missing separate islands: {case}");
+            for idx in settlements {
+                assert!(has_coast(idx), "settlement {idx} off the coast: {case}");
+            }
+            let mut open_water: std::collections::HashSet<_> = edge
+                .filter(|tile| tile.is_water_terrain())
+                .map(|tile| tile.coords.idx)
+                .collect();
+            let mut frontier: Vec<_> = open_water.iter().copied().collect();
+            while let Some(idx) = frontier.pop() {
+                for near in get_adjacent_indices(state, idx, 1) {
+                    if state.tiles[&near].is_water_terrain() && open_water.insert(near) {
+                        frontier.push(near);
+                    }
+                }
+            }
+            for id in [1, 2] {
+                let has_harbor =
+                    get_adjacent_indices(state, capital(id), 1)
+                        .into_iter()
+                        .any(|idx| {
+                            state.tiles[&idx].terrain_type == TerrainType::Water
+                                && state.tiles[&idx].owner == id
+                                && open_water.contains(&idx)
+                        });
+                assert!(has_harbor, "capital lacks a viable harbor: {case}");
+            }
+            if kind == MapType::WaterWorld {
+                assert!(
+                    components.iter().all(|group| group
+                        .iter()
+                        .filter(|&&idx| village(idx))
+                        .count()
+                        <= 2),
+                    "more than two settlements on an island: {case}"
+                );
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
 #[test]
 fn regular_tribes_use_the_expected_starting_units_and_tech() {
     use TechnologyType::*;
