@@ -614,8 +614,7 @@ impl Game {
         // Reward production if not the first turn
         if state.settings.turn > 0 {
             if let Some(tribe) = state.tribes.get(&new_pov) {
-                let cities: Vec<_> = tribe.cities.clone();
-                let spt = get_total_production(state, &cities);
+                let spt = get_total_production(state, &tribe.cities);
                 if spt > 0 {
                     undos.push(gain_stars(state, spt));
                 }

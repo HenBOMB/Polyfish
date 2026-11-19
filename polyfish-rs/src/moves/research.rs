@@ -82,8 +82,8 @@ pub fn generate_research_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>
         for tech_state in &tribe.tech_vanilla {
             // Get settings for this tech
             let settings =
-                crate::settings::technology::get_technology_setting(tech_state.tech_type);
-            for next_tech in settings.next {
+                crate::settings::technology::technology_setting(tech_state.tech_type);
+            for &next_tech in &settings.next {
                 let resolved = crate::settings::technology::resolve_tech_for_tribe(
                     next_tech,
                     tribe.tribe_type,
@@ -98,7 +98,7 @@ pub fn generate_research_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>
             if req_opt.is_none() {
                 if let Some(replaced) = settings.replaces_tech {
                     let replaced_settings =
-                        crate::settings::technology::get_technology_setting(replaced);
+                        crate::settings::technology::technology_setting(replaced);
                     req_opt = replaced_settings.requires;
                 }
             }

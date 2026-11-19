@@ -116,24 +116,18 @@ pub fn get_squared_euclidean_distance(a: i32, b: i32, size: i32) -> i32 {
 
 /// Get adjacent tile indices
 pub fn get_adjacent_indices(state: &GameState, idx: i32, range: i32) -> Vec<i32> {
-    let size = state.settings.size;
+    adjacent_indices(state.settings.size, idx, range).collect()
+}
+
+pub(crate) fn adjacent_indices(size: i32, idx: i32, range: i32) -> impl Iterator<Item = i32> {
     let coords = Coords::from_index(idx, size);
-    let mut result = Vec::new();
-
-    for dy in -range..=range {
-        for dx in -range..=range {
-            if dx == 0 && dy == 0 {
-                continue;
-            }
-            let nx = coords.x + dx;
-            let ny = coords.y + dy;
-            if nx >= 0 && nx < size && ny >= 0 && ny < size {
-                result.push(ny * size + nx);
-            }
-        }
-    }
-
-    result
+    let xs = (coords.x - range).max(0)..=(coords.x + range).min(size - 1);
+    let ys = (coords.y - range).max(0)..=(coords.y + range).min(size - 1);
+    ys.flat_map(move |y| {
+        xs.clone()
+            .filter(move |&x| x != coords.x || y != coords.y)
+            .map(move |x| y * size + x)
+    })
 }
 
 /// Get adjacent tiles
@@ -401,7 +395,7 @@ pub fn get_unit_movement(state: &GameState, unit: &UnitState) -> i32 {
 
 /// Get tech cost tier from a technology
 pub fn get_tech_tier(tech_type: TechnologyType) -> i32 {
-    crate::settings::technology::get_technology_setting(tech_type)
+    crate::settings::technology::technology_setting(tech_type)
         .tier
         .unwrap_or(1)
 }
@@ -828,7 +822,7 @@ pub fn idx_to_coords(idx: i32, size: i32) -> (i32, i32) {
 
 /// Get the tech cost based on number of cities and tier
 pub fn get_tech_cost(tribe: &TribeState, tech: TechnologyType) -> i32 {
-    let tier = crate::settings::technology::get_technology_setting(tech)
+    let tier = crate::settings::technology::technology_setting(tech)
         .tier
         .unwrap_or(1);
     let cities_count = tribe.cities.len() as i32;
@@ -883,7 +877,7 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
 
     // 100 per tech tier
     for tech in &tribe.tech_vanilla {
-        let tier = crate::settings::technology::get_technology_setting(tech.tech_type)
+        let tier = crate::settings::technology::technology_setting(tech.tech_type)
             .tier
             .unwrap_or(1);
         score += 100 * tier;

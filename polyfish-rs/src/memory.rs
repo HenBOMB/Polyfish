@@ -22,9 +22,8 @@ pub fn observe_all(state: &mut GameState) -> UndoCallback {
     let turn = state.settings.turn;
 
     // Phase 1 (immutable): gather (prev_idx, idx, ghost) per observer.
-    let observers: Vec<PlayerId> = state.tribes.keys().cloned().collect();
     let mut observations: Vec<(PlayerId, Vec<(i32, i32, MemUnit)>)> = Vec::new();
-    for &observer in &observers {
+    for &observer in state.tribes.keys() {
         let mut seen = Vec::new();
         for (owner, tribe) in &state.tribes {
             if *owner == observer {
@@ -55,6 +54,14 @@ pub fn observe_all(state: &mut GameState) -> UndoCallback {
         if !seen.is_empty() {
             observations.push((observer, seen));
         }
+    }
+
+    if observations.is_empty()
+        && state.tribes.values().all(|tribe| {
+            tribe.memory_units.is_empty() && tribe.memory_attacks.is_empty()
+        })
+    {
+        return crate::actions::noop_undo();
     }
 
     // Snapshot for undo (maps stay tiny thanks to MEM_HORIZON pruning).
@@ -98,7 +105,7 @@ pub fn note_unit_removed(state: &mut GameState, tile_idx: i32) -> UndoCallback {
     let witnesses: Vec<PlayerId> = state
         .tiles
         .get(&tile_idx)
-        .map(|t| t.explorers.iter().cloned().collect())
+        .map(|t| t.explorers.iter().collect())
         .unwrap_or_default();
     let mut removed: Vec<(PlayerId, MemUnit)> = Vec::new();
     for w in witnesses {

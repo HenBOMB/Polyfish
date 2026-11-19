@@ -1,7 +1,7 @@
 //! Technology settings and tech tree
 
 use crate::{
-    settings::get_unit_setting,
+    settings::units::get_unit_setting,
     types::{
         AbilityType, StructureType, TaskType, TechnologyType, TerrainType, TribeType, UnitType,
     },
@@ -28,6 +28,20 @@ pub struct TechnologySetting {
 
 /// Get technology settings by type
 pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
+    technology_setting(tech_type).clone()
+}
+
+/// Borrow the immutable rule data used by move generation and application.
+#[inline]
+pub(crate) fn technology_setting(tech_type: TechnologyType) -> &'static TechnologySetting {
+    static SETTINGS: std::sync::LazyLock<[Option<TechnologySetting>; 256]> =
+        std::sync::LazyLock::new(|| {
+            std::array::from_fn(|id| TechnologyType::from_repr(id as i8).map(make_technology_setting))
+        });
+    SETTINGS[tech_type as u8 as usize].as_ref().expect("known technology type")
+}
+
+fn make_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
     use TechnologyType::*;
 
     match tech_type {
@@ -372,7 +386,7 @@ pub fn has_technology(tech_list: &[crate::states::TechnologyState], tech: Techno
 pub fn get_tech_unlocking_unit(unit_type: UnitType) -> Option<TechnologyType> {
     use strum::IntoEnumIterator;
     for tech in TechnologyType::iter() {
-        let settings = get_technology_setting(tech);
+        let settings = technology_setting(tech);
         if settings.unlocks_unit == Some(unit_type)
             || settings.unlocks_special_units.contains(&unit_type)
         {
@@ -386,7 +400,7 @@ pub fn get_tech_unlocking_unit(unit_type: UnitType) -> Option<TechnologyType> {
 pub fn resolve_tech_for_tribe(tech: TechnologyType, tribe: TribeType) -> TechnologyType {
     use strum::IntoEnumIterator;
     for candidate_tech in TechnologyType::iter() {
-        let settings = get_technology_setting(candidate_tech);
+        let settings = technology_setting(candidate_tech);
         if settings.replaces_tech == Some(tech) && settings.tribe_type == Some(tribe) {
             return candidate_tech;
         }
@@ -413,7 +427,7 @@ pub fn get_researchable_techs(
         let resolved = resolve_tech_for_tribe(tech, tribe_type);
 
         if !has_technology(tech_list, resolved) {
-            let settings = get_technology_setting(resolved);
+            let settings = technology_setting(resolved);
             if let Some(req) = settings.requires {
                 // To be researchable, prerequisite must be RESEARCHED
                 if has_technology(tech_list, req) {
@@ -430,7 +444,7 @@ pub fn get_researchable_techs(
 
 /// Get all units unlocked by a technology for a specific tribe
 pub fn get_unlocked_units(tech_type: TechnologyType, tribe: TribeType) -> Vec<UnitType> {
-    let settings = get_technology_setting(tech_type);
+    let settings = technology_setting(tech_type);
     let mut units = Vec::new();
 
     // 1. Filter out techs that belong to other special tribes

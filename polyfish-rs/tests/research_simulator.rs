@@ -28,6 +28,68 @@ fn fixture(size: MapSize) -> Game {
 }
 
 #[test]
+fn neutral_roads_require_technology_and_visibility() {
+    let mut game = fixture(MapSize::Tiny);
+    let idx = *game
+        .state
+        .tiles
+        .iter()
+        .find(|(_, tile)| tile.owner == 0)
+        .unwrap()
+        .0;
+    let road = BuildMove::new(idx, StructureType::Road);
+    let tile = game.state.tiles.get_mut(&idx).unwrap();
+    tile.terrain_type = TerrainType::Field;
+    tile.explorers.insert(1);
+    assert!(!is_legal(&game, &road));
+
+    let tribe = game.state.tribes.get_mut(&1).unwrap();
+    tribe.stars = 20;
+    tribe.tech_vanilla.push(polyfish::states::TechnologyState {
+        tech_type: TechnologyType::Roads,
+        discovered: true,
+        discovered_turn: 0,
+    });
+    assert!(is_legal(&game, &road));
+
+    game.state.tiles[&idx].explorers.remove(&1);
+    assert!(!is_legal(&game, &road));
+    game.state.settings._fow = false;
+    assert!(is_legal(&game, &road));
+}
+
+#[test]
+fn first_contact_respects_fog_and_invisibility() {
+    use polyfish::actions::try_discover_other_tribes;
+    use polyfish::types::UnitEffect;
+
+    let mut game = fixture(MapSize::Tiny);
+    let idx = game.state.tribes[&2].units[0].coords.idx;
+    game.state.tiles[&idx].explorers.remove(&1);
+    let _ = try_discover_other_tribes(&mut game.state);
+    assert!(game.state.tribes[&1].known_players.is_empty());
+
+    game.state.tiles[&idx].explorers.insert(1);
+    game.state.tribes[&2].units[0]
+        .effects
+        .insert(UnitEffect::Invisible);
+    let _ = try_discover_other_tribes(&mut game.state);
+    assert!(game.state.tribes[&1].known_players.is_empty());
+
+    game.state.tribes[&2].units[0]
+        .effects
+        .remove(&UnitEffect::Invisible);
+    let stars = game.state.tribes[&1].stars;
+    let reward = polyfish::functions::get_star_exchange(&game.state, 2);
+    let undo = try_discover_other_tribes(&mut game.state);
+    assert!(game.state.tribes[&1].known_players.contains(&2));
+    assert_eq!(game.state.tribes[&1].stars, stars + reward);
+    undo(&mut game.state);
+    assert!(game.state.tribes[&1].known_players.is_empty());
+    assert_eq!(game.state.tribes[&1].stars, stars);
+}
+
+#[test]
 fn all_research_maps_have_valid_seeded_starts() {
     for size in research::BOARD_SIZES {
         for (kind, name, _) in research::MAP_TYPES {

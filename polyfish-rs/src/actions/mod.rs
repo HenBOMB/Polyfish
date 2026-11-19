@@ -24,12 +24,16 @@ pub fn noop_undo() -> UndoCallback {
 }
 
 /// Chain multiple undo callbacks into one
-pub fn chain_undos(undos: Vec<UndoCallback>) -> UndoCallback {
-    Box::new(move |state| {
-        for undo in undos.into_iter().rev() {
-            undo(state);
-        }
-    })
+pub fn chain_undos(mut undos: Vec<UndoCallback>) -> UndoCallback {
+    match undos.len() {
+        0 => noop_undo(),
+        1 => undos.pop().unwrap(),
+        _ => Box::new(move |state| {
+            for undo in undos.into_iter().rev() {
+                undo(state);
+            }
+        }),
+    }
 }
 
 /// Modify terrain type at a tile index
@@ -353,15 +357,21 @@ pub fn try_discover_other_tribes(state: &mut GameState) -> UndoCallback {
 
     let mut undos: Vec<UndoCallback> = Vec::new();
 
-    // Check explored tiles for enemy units
-    let explored_tiles: Vec<i32> = state
-        .tiles
-        .iter()
-        .filter(|(_, t)| t.explorers.contains(&pov_id))
-        .map(|(&idx, _)| idx)
+    // Only occupied tiles can introduce a tribe. Retain board iteration order
+    // so meeting multiple tribes in one action produces the same history.
+    let mut explored_tiles: Vec<_> = state
+        .tribes
+        .values()
+        .flat_map(|tribe| &tribe.units)
+        .filter(|unit| unit.owner != pov_id)
+        .filter_map(|unit| state.tiles.get_full(&unit.coords.idx))
+        .filter(|(_, _, tile)| tile.explorers.contains(&pov_id))
+        .map(|(order, &idx, _)| (order, idx))
         .collect();
+    explored_tiles.sort_unstable();
+    explored_tiles.dedup();
 
-    for idx in explored_tiles {
+    for (_, idx) in explored_tiles {
         if let Some(enemy) = get_enemy_at(state, idx, pov_id) {
             let enemy_owner = enemy.owner;
 

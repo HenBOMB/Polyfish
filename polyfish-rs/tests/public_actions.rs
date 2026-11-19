@@ -97,6 +97,13 @@ fn simulation_rotation_is_per_call() {
     let mut game = match_game();
     let before = serde_json::to_value(&game.state).unwrap();
     let first = game.current_player_id();
+    assert_eq!(
+        game.decision()
+            .simulate_index(usize::MAX, TurnRotation::NextPlayer)
+            .err(),
+        Some(ActionError::IllegalAction)
+    );
+    assert_eq!(serde_json::to_value(&game.state).unwrap(), before);
     let undo = game
         .simulate(&Action::EndTurn, TurnRotation::NextPlayer)
         .unwrap();

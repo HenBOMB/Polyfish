@@ -30,7 +30,8 @@ pub use upgrade::UpgradeMove;
 
 use crate::actions::UndoCallback;
 use crate::functions::{
-    get_adjacent_indices, get_enemy_at, get_structure_at, get_structure_type_at, get_unit_at,
+    adjacent_indices, get_adjacent_indices, get_enemy_at, get_structure_at, get_structure_type_at,
+    get_unit_at,
 };
 use crate::settings::resources::get_resource_setting;
 use crate::settings::{get_unit_setting, has_skill};
@@ -234,21 +235,52 @@ pub fn generate_legal_moves(state: &GameState) -> Vec<Box<dyn Move>> {
     // EndTurn is always available
     moves.push(Box::new(EndTurnMove));
 
+    let occupied = OccupiedTiles::new(state);
     // 2. Army Moves (Units, Summons, Upgrades)
     // Unit-action moves are emitted per unit inside generate_unit_moves.
-    generate_unit_moves(state, &mut moves);
+    generate_unit_moves(state, &occupied, &mut moves);
     crate::moves::summon::generate_summon_moves(state, &mut moves);
     crate::moves::upgrade::generate_upgrade_moves(state, &mut moves);
 
     // 3. Econ Moves (Research, Build, Harvest, Econ Abilities)
-    generate_econ_moves(state, &mut moves);
+    generate_econ_moves(state, &occupied, &mut moves);
     crate::moves::abilities::unit_actions::generate_economic_ability_moves(state, &mut moves);
     crate::moves::abilities::diplomacy::generate_diplomacy_moves(state, &mut moves);
 
     moves
 }
 
-fn generate_unit_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
+// Built from the units once per legal enumeration. Custom indexes outside the
+// inline range still use the existing lookup, including its owner ordering.
+struct OccupiedTiles([u64; 16]);
+
+impl OccupiedTiles {
+    fn new(state: &GameState) -> Self {
+        let mut occupied = Self([0; 16]);
+        for unit in state.tribes.values().flat_map(|tribe| &tribe.units) {
+            let index = unit.coords.idx as usize;
+            if let Some(word) = occupied.0.get_mut(index / 64) {
+                *word |= 1 << (index % 64);
+            }
+        }
+        occupied
+    }
+
+    fn may_contain(&self, index: i32) -> bool {
+        let index = index as usize;
+        self.0.get(index / 64).is_none_or(|word| word & (1 << (index % 64)) != 0)
+    }
+
+    fn enemy_at<'a>(&self, state: &'a GameState, index: i32, pov: PlayerId) -> Option<&'a UnitState> {
+        if self.may_contain(index) {
+            get_enemy_at(state, index, pov)
+        } else {
+            None
+        }
+    }
+}
+
+fn generate_unit_moves(state: &GameState, occupied: &OccupiedTiles, moves: &mut Vec<Box<dyn Move>>) {
     let pov_id = state.settings.current_player_turn_id;
 
     // Get current player's tribe
@@ -272,12 +304,12 @@ fn generate_unit_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
 
         // 3. Attack (Requires positive health)
         if !unit.attacked && unit.health > 0.0 {
-            generate_attack_moves(state, unit, unit.coords.idx, moves);
+            generate_attack_moves(state, unit, unit.coords.idx, occupied, moves);
         }
 
         // 4. Steps (Escape units will have moved=false after attacking, so this covers them)
         if !unit.moved {
-            generate_step_moves(state, unit, moves);
+            generate_step_moves(state, unit, occupied, moves);
         }
     }
 }
@@ -317,7 +349,7 @@ fn generate_capture_moves(state: &GameState, unit: &UnitState, moves: &mut Vec<B
 }
 
 /// Generate economy moves
-fn generate_econ_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
+fn generate_econ_moves(state: &GameState, occupied: &OccupiedTiles, moves: &mut Vec<Box<dyn Move>>) {
     let pov_id = state.settings.current_player_turn_id;
 
     // Get current player's tribe
@@ -335,15 +367,12 @@ fn generate_econ_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
             }) {
                 continue;
             }
-            // Check for enemy unit
-            if get_enemy_at(state, tile_idx, pov_id).is_some() {
-                continue;
-            }
-
             // Check for harvesting
             if let Some(Some(resource)) = state.resources.get(&tile_idx).as_ref() {
                 // Must not have a structure
-                if get_structure_at(state, tile_idx).is_some() {
+                if get_structure_at(state, tile_idx).is_some()
+                    || occupied.enemy_at(state, tile_idx, pov_id).is_some()
+                {
                     continue;
                 }
 
@@ -369,7 +398,7 @@ fn generate_econ_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
     crate::moves::research::generate_research_moves(state, moves);
 
     // Generate build moves
-    crate::moves::build::generate_build_moves(state, moves);
+    crate::moves::build::generate_build_moves_with_occupancy(state, occupied, moves);
 
     // Generate forest moves (Clear/Grow/Burn)
     crate::moves::abilities::forest::generate_forest_moves(state, moves);
@@ -400,12 +429,17 @@ impl std::cmp::PartialOrd for ReachableNode {
 }
 
 /// Generate step moves for a unit using pathfinding
-fn generate_step_moves(state: &GameState, unit: &UnitState, moves: &mut Vec<Box<dyn Move>>) {
+fn generate_step_moves(
+    state: &GameState,
+    unit: &UnitState,
+    occupied: &OccupiedTiles,
+    moves: &mut Vec<Box<dyn Move>>,
+) {
     if unit.moved {
         return;
     }
 
-    let reachable = compute_reachable_tiles(state, unit);
+    let reachable = compute_reachable_tiles(state, unit, occupied);
 
     for (&tile_index, _) in &reachable {
         if unit.coords.idx == tile_index {
@@ -414,7 +448,9 @@ fn generate_step_moves(state: &GameState, unit: &UnitState, moves: &mut Vec<Box<
 
         // Cannot end turn on a tile occupied by another unit (own or enemy)
         // Friendly units can be passed through but not occupied.
-        if crate::functions::get_true_unit_at(state, tile_index).is_some() {
+        if occupied.may_contain(tile_index)
+            && crate::functions::get_true_unit_at(state, tile_index).is_some()
+        {
             continue;
         }
 
@@ -430,6 +466,7 @@ fn generate_step_moves(state: &GameState, unit: &UnitState, moves: &mut Vec<Box<
 fn compute_reachable_tiles(
     state: &GameState,
     unit: &UnitState,
+    occupied: &OccupiedTiles,
 ) -> std::collections::BTreeMap<i32, f32> {
     let mut effective_movement = crate::functions::get_unit_movement(state, unit) as f32;
     // Cap movement at 1 if unit has segments attached
@@ -468,12 +505,12 @@ fn compute_reachable_tiles(
             continue;
         }
 
-        for n_idx in get_adjacent_indices(state, current.index, 1) {
+        for n_idx in adjacent_indices(state.settings.size, current.index, 1) {
             if n_idx == unit.coords.idx {
                 continue;
             }
 
-            if !is_steppable(state, unit, n_idx, false) {
+            if !is_steppable(state, unit, n_idx, false, Some(occupied)) {
                 continue;
             }
 
@@ -487,16 +524,18 @@ fn compute_reachable_tiles(
             // "Rounding up" rule: We allow the move even if new_cost > effective_movement,
             // provided current.cost < effective_movement (checked above).
 
-            let terminal = is_terminal(state, unit, n_idx);
-
             let existing_cost = reachable.get(&n_idx);
             if existing_cost.is_none() || new_cost < *existing_cost.unwrap() {
                 reachable.insert(n_idx, new_cost);
-                open_list.push(ReachableNode {
-                    index: n_idx,
-                    cost: new_cost,
-                    terminal,
-                });
+                // Keep endpoints in the result without queuing tiles from
+                // which the unit cannot start another step.
+                if new_cost < effective_movement && !is_terminal(state, unit, n_idx, Some(occupied)) {
+                    open_list.push(ReachableNode {
+                        index: n_idx,
+                        cost: new_cost,
+                        terminal: false,
+                    });
+                }
             }
         }
     }
@@ -513,6 +552,15 @@ pub fn compute_shortest_path(
     // Cap movement at 1 if unit has segments attached
     if unit.child_unit_idx.is_some() {
         effective_movement = 1.0;
+    }
+    // Each edge costs at least half a move. A legal adjacent step costing at
+    // most one cannot be improved, and the search keeps the direct path on ties.
+    if effective_movement > 0.0
+        && crate::functions::get_chebyshev_distance(unit.coords.idx, target_idx, state.settings.size) == 1
+        && is_steppable(state, unit, target_idx, true, None)
+        && (0.0..=1.0).contains(&compute_movement_cost(state, unit, unit.coords.idx, target_idx))
+    {
+        return Some(vec![target_idx]);
     }
     let mut reachable = std::collections::HashMap::new();
     let mut parent = std::collections::HashMap::new();
@@ -557,12 +605,12 @@ pub fn compute_shortest_path(
             continue;
         }
 
-        for n_idx in get_adjacent_indices(state, current.index, 1) {
+        for n_idx in adjacent_indices(state.settings.size, current.index, 1) {
             if n_idx == unit.coords.idx {
                 continue;
             }
 
-            if !is_steppable(state, unit, n_idx, true) {
+            if !is_steppable(state, unit, n_idx, true, None) {
                 continue;
             }
 
@@ -573,7 +621,7 @@ pub fn compute_shortest_path(
 
             let new_cost = current.cost + move_cost;
 
-            let terminal = is_terminal(state, unit, n_idx);
+            let terminal = is_terminal(state, unit, n_idx, None);
 
             let existing_cost = reachable.get(&n_idx);
             if existing_cost.is_none() || new_cost < *existing_cost.unwrap() {
@@ -641,7 +689,12 @@ fn compute_movement_cost(state: &GameState, unit: &UnitState, from_idx: i32, to_
     cost
 }
 
-fn is_terminal(state: &GameState, unit: &UnitState, tile_idx: i32) -> bool {
+fn is_terminal(
+    state: &GameState,
+    unit: &UnitState,
+    tile_idx: i32,
+    occupied: Option<&OccupiedTiles>,
+) -> bool {
     let settings = get_unit_setting(unit.unit_type);
     if settings.skills.contains(&SkillType::Fly) {
         return false;
@@ -668,7 +721,7 @@ fn is_terminal(state: &GameState, unit: &UnitState, tile_idx: i32) -> bool {
     }
 
     // Zone of Control (ZOC)
-    if is_adjacent_to_enemy(state, tile_idx, unit.owner) {
+    if is_adjacent_to_enemy(state, tile_idx, unit.owner, occupied) {
         let ignores_zoc = settings.skills.contains(&SkillType::Infiltrate)
             || settings.skills.contains(&SkillType::Creep)
             || settings.skills.contains(&SkillType::Sneak)
@@ -757,15 +810,16 @@ fn is_naval_unit(unit_type: UnitType) -> bool {
         .contains(&SkillType::Carry)
 }
 
-fn is_adjacent_to_enemy(state: &GameState, idx: i32, owner: PlayerId) -> bool {
-    for n_idx in get_adjacent_indices(state, idx, 1) {
-        if let Some(enemy) = get_enemy_at(state, n_idx, owner) {
-            if !enemy.effects.contains(&UnitEffect::Invisible) {
-                return true;
-            }
-        }
-    }
-    false
+fn is_adjacent_to_enemy(
+    state: &GameState,
+    idx: i32,
+    owner: PlayerId,
+    occupied: Option<&OccupiedTiles>,
+) -> bool {
+    adjacent_indices(state.settings.size, idx, 1).any(|neighbor| {
+        occupied.is_none_or(|tiles| tiles.may_contain(neighbor))
+            && get_enemy_at(state, neighbor, owner).is_some()
+    })
 }
 
 /// Generate attack moves for a unit
@@ -773,6 +827,7 @@ fn generate_attack_moves(
     state: &GameState,
     unit: &UnitState,
     from_idx: i32,
+    occupied: &OccupiedTiles,
     moves: &mut Vec<Box<dyn Move>>,
 ) {
     // If unit has moved, it needs Dash to attack
@@ -801,8 +856,8 @@ fn generate_attack_moves(
         let range = get_unit_setting(unit.unit_type).range;
 
         // Check all tiles in range
-        for target_idx in get_tiles_in_range(state, from_idx, range) {
-            if let Some(enemy) = get_enemy_at(state, target_idx, unit.owner) {
+        for target_idx in adjacent_indices(state.settings.size, from_idx, range) {
+            if let Some(enemy) = occupied.enemy_at(state, target_idx, unit.owner) {
                 if !crate::functions::is_at_peace(state, unit.owner, enemy.owner) {
                     moves.push(Box::new(AttackMove::new(from_idx, target_idx)));
                 }
@@ -811,53 +866,22 @@ fn generate_attack_moves(
     }
 }
 
-/// Get all tile indices within range (for ranged units)
-fn get_tiles_in_range(state: &GameState, from_idx: i32, range: i32) -> Vec<i32> {
-    let map_size = state.settings.size;
-    let fx = from_idx % map_size;
-    let fy = from_idx / map_size;
-
-    let mut tiles = Vec::new();
-
-    for dy in -range..=range {
-        for dx in -range..=range {
-            if dx == 0 && dy == 0 {
-                continue;
-            }
-
-            let nx = fx + dx;
-            let ny = fy + dy;
-
-            if nx >= 0 && nx < map_size && ny >= 0 && ny < map_size {
-                if dx.abs().max(dy.abs()) <= range {
-                    tiles.push(ny * map_size + nx);
-                }
-            }
-        }
-    }
-
-    tiles
-}
-
-fn is_steppable(state: &GameState, unit: &UnitState, idx: i32, strict: bool) -> bool {
-    // Can only step on explored tiles, regardless F
-    let is_explored = state
-        .tiles
-        .get(&idx)
-        .map(|t| t.explorers.contains(&unit.owner))
-        .unwrap_or(false);
-
-    if !is_explored {
+fn is_steppable(
+    state: &GameState,
+    unit: &UnitState,
+    idx: i32,
+    strict: bool,
+    occupied: Option<&OccupiedTiles>,
+) -> bool {
+    let Some(tile) = state.tiles.get(&idx).filter(|tile| tile.explorers.contains(&unit.owner)) else {
         return false;
-    }
+    };
 
     let settings = get_unit_setting(unit.unit_type);
 
     let tribe = state.tribes.get(&unit.owner).unwrap();
-    let tile = state.tiles.get(&idx).unwrap();
-
-    // Use FOW-safe terrain access for MCTS anti-cheat
-    let terrain = crate::fow::get_terrain_at(state, idx, unit.owner);
+    // This tile is explored, so the fog-of-war accessor would read the same value.
+    let terrain = tile.terrain_type;
 
     // tech check using FOW-safe terrain
     if !is_navigationable_terrain(state, tribe, unit.unit_type, terrain, tile) {
@@ -874,7 +898,7 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32, strict: bool) -> 
     }
 
     // cannot step if the tile is occupied by an enemy (or any unit if strict)
-    if let Some(other) = get_unit_at(state, idx) {
+    if occupied.is_none_or(|tiles| tiles.may_contain(idx)) && let Some(other) = get_unit_at(state, idx) {
         if strict || other.owner != unit.owner {
             return false;
         }
@@ -955,15 +979,15 @@ fn is_navigationable_terrain(
 
     match terrain {
         TerrainType::Water => tribe.tech_vanilla.iter().any(|t| {
-            let s = crate::settings::technology::get_technology_setting(t.tech_type);
+            let s = crate::settings::technology::technology_setting(t.tech_type);
             s.unlocks_terrain == Some(TerrainType::Water)
         }),
         TerrainType::Ocean => tribe.tech_vanilla.iter().any(|t| {
-            let s = crate::settings::technology::get_technology_setting(t.tech_type);
+            let s = crate::settings::technology::technology_setting(t.tech_type);
             s.unlocks_terrain == Some(TerrainType::Ocean)
         }),
         TerrainType::Mountain => tribe.tech_vanilla.iter().any(|t| {
-            let s = crate::settings::technology::get_technology_setting(t.tech_type);
+            let s = crate::settings::technology::technology_setting(t.tech_type);
             s.unlocks_terrain == Some(TerrainType::Mountain)
         }),
         _ => {
@@ -971,7 +995,7 @@ fn is_navigationable_terrain(
             // Flooded land is treated like water.
             if tile.is_flooded() {
                 return tribe.tech_vanilla.iter().any(|t| {
-                    let s = crate::settings::technology::get_technology_setting(t.tech_type);
+                    let s = crate::settings::technology::technology_setting(t.tech_type);
                     s.unlocks_terrain == Some(TerrainType::Water)
                 });
             }

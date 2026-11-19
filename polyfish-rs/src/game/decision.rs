@@ -104,10 +104,7 @@ impl Game {
     ) -> Result<UndoCallback, ActionError> {
         let decision = self.decision();
         let index = decision.resolve(action)?;
-        decision
-            .game
-            .simulate_generated_with_rotation(decision.moves[index].as_ref(), Some(rotation))
-            .ok_or(ActionError::ExecutionFailed)
+        decision.simulate_index(index, rotation)
     }
 }
 
@@ -146,6 +143,21 @@ impl Decision<'_> {
         let selected = self.moves.get(index).ok_or(ActionError::IllegalAction)?;
         self.game
             .play_generated(selected.as_ref())
+            .ok_or(ActionError::ExecutionFailed)
+    }
+
+    /// Simulate one of the moves from this decision's list by index.
+    pub fn simulate_index(
+        self,
+        index: usize,
+        rotation: TurnRotation,
+    ) -> Result<UndoCallback, ActionError> {
+        if self.game.state.settings._game_over {
+            return Err(ActionError::GameOver);
+        }
+        let selected = self.moves.get(index).ok_or(ActionError::IllegalAction)?;
+        self.game
+            .simulate_generated_with_rotation(selected.as_ref(), Some(rotation))
             .ok_or(ActionError::ExecutionFailed)
     }
 
