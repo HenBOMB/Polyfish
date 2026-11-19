@@ -666,8 +666,8 @@ function checkRewardPopup() {
         const counts = moveTypes.reduce((acc, t) => { acc[t] = (acc[t] || 0) + 1; return acc; }, {});
         if (counts[9]) console.log("🎁 Reward moves detected in legal moves:", counts[9]);
 
-        // Collect all unique reward moves (type 9)
-        const rewardMoves = currentLegalMoves.filter(m => m && m.moveType === 9);
+        const pendingRewards = currentLegalMoves.filter(m => m && m.moveType === 9);
+        const rewardMoves = pendingRewards.filter(move => move.target === pendingRewards[0]?.target);
 
         // Polytopia usually forces selection if there are multiple rewards (e.g. Workshop vs Explorer)
         if (rewardMoves.length >= 1) {

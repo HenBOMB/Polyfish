@@ -111,6 +111,10 @@ impl DotNetRandom {
         let sample = self.sample();
         ((sample * (range as f64)) as i64 + (min as i64)) as i32
     }
+
+    pub(crate) fn next_index(&mut self, len: usize) -> usize {
+        self.next_range(0, len as i32) as usize
+    }
 }
 
 impl RngCore for DotNetRandom {

@@ -339,8 +339,27 @@ pub fn step_unit(
         tile._unit_owner_id = Some(unit_owner);
     }
 
-    let mut undos = Vec::new();
+    let mut undos: Vec<UndoCallback> = Vec::new();
     let _rewards: Option<()> = None; // Stars, task progress
+
+    if !involuntary
+        && let Some(&first_step) = path.first()
+        && let Some(city) = state.tribes.get_mut(&unit_owner).and_then(|tribe| {
+            tribe.cities.iter_mut().find(|city| city.idx == old_tile_idx)
+        })
+    {
+        let origin = Coords::from_index(old_tile_idx, map_size);
+        let next = Coords::from_index(first_step, map_size);
+        let direction = ((next.x - origin.x).signum(), (next.y - origin.y).signum());
+        let old_departure = city.last_departure.replace(direction);
+        undos.push(Box::new(move |s: &mut GameState| {
+            if let Some(city) = s.tribes.get_mut(&unit_owner).and_then(|tribe| {
+                tribe.cities.iter_mut().find(|city| city.idx == old_tile_idx)
+            }) {
+                city.last_departure = old_departure;
+            }
+        }));
+    }
 
     let tiles_to_reveal = if let Some(tribe) = state.tribes.get(&unit_owner) {
         if let Some(unit) = tribe.units.get(unit_idx) {

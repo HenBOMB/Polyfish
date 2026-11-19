@@ -209,6 +209,7 @@ pub fn observation(game: &Game, pov: PlayerId) -> Game {
             let mut cities = std::mem::take(&mut tribe.cities);
             for city in &mut cities {
                 city._territory.retain(|idx| visible.contains(idx));
+                city.last_departure = None;
             }
             let mut units = std::mem::take(&mut tribe.units);
             units.retain(|unit| !unit.effects.contains(&crate::types::UnitEffect::Invisible));

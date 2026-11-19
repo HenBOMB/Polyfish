@@ -3,7 +3,9 @@ use crate::actions::city::add_population;
 use crate::actions::discovery::discover_tiles;
 use crate::actions::tech::unlock_tech;
 use crate::actions::{UndoCallback, chain_undos, gain_stars};
-use crate::functions::{get_adjacent_indices, get_best_capital, get_city_owning_tile};
+use crate::functions::{
+    get_adjacent_indices, get_best_capital, get_city_owning_tile, get_structure_at,
+};
 use crate::settings::structures::get_structure_setting;
 use crate::states::{GameState, StructureState};
 use crate::types::{
@@ -155,18 +157,7 @@ pub fn destroy_structure(state: &mut GameState, idx: i32) -> UndoCallback {
         s.structures.insert(idx, Some(undo_structure.clone()));
     }));
 
-    // Handle population reduction for city structures
-    if structure.structure_type != StructureType::Ruin {
-        if let Some(city) = get_city_owning_tile(state, idx) {
-            let city_tile_idx = city.idx;
-            let settings = get_structure_setting(structure.structure_type);
-
-            if settings.reward_pop > 0 {
-                // Reduce population (negative add)
-                undos.push(add_population(state, city_tile_idx, -settings.reward_pop));
-            }
-        }
-    }
+    adjust_structure_population(state, idx, structure.structure_type, -1, &mut undos);
 
     // Valid stats for undo
     let pov_id = state.settings.current_player_turn_id;
@@ -229,37 +220,58 @@ pub fn build_structure(
     // 2. Create structure
     undos.push(create_structure(state, idx, structure_type, 1));
 
-    // 3. Add population
-    if let Some(city) = get_city_owning_tile(state, idx) {
-        let city_tile_idx = city.idx;
-        let mut reward_pop = settings.reward_pop;
-
-        // Handle adjacent multipliers (Windmill, Sawmill, Forge)
-        if !settings.adjacent_types.is_empty() {
-            use crate::functions::get_adjacent_indices;
-            use crate::functions::get_structure_at;
-
-            let adj = get_adjacent_indices(state, idx, 1);
-            let adj_count = adj
-                .iter()
-                .filter(|&&adj_idx| {
-                    if let Some(s) = get_structure_at(state, adj_idx) {
-                        settings.adjacent_types.contains(&s.structure_type)
-                    } else {
-                        false
-                    }
-                })
-                .count() as i32;
-            reward_pop *= adj_count;
-        }
-
-        if reward_pop > 0 {
-            undos.push(add_population(state, city_tile_idx, reward_pop));
-        }
-    }
+    adjust_structure_population(state, idx, structure_type, 1, &mut undos);
 
     chain_undos(undos)
 }
+
+fn adjust_structure_population(
+    state: &mut GameState,
+    idx: i32,
+    structure_type: StructureType,
+    change: i32,
+    undos: &mut Vec<UndoCallback>,
+) {
+    let Some(city) = get_city_owning_tile(state, idx) else {
+        return;
+    };
+    let (owner, city_idx) = (city.owner, city.idx);
+    let settings = get_structure_setting(structure_type);
+    let mut reward_pop = if settings.adjacent_types.is_empty() {
+        settings.reward_pop
+    } else {
+        0
+    };
+
+    for nearby_idx in get_adjacent_indices(state, idx, 1) {
+        if !state.tiles.get(&nearby_idx).is_some_and(|tile| tile.owner == owner) {
+            continue;
+        }
+        let Some(nearby) = get_structure_at(state, nearby_idx) else {
+            continue;
+        };
+        if settings.adjacent_types.contains(&nearby.structure_type) {
+            reward_pop += settings.reward_pop;
+        }
+
+        // A new input building can also feed an existing improvement across a city border.
+        let nearby_settings = get_structure_setting(nearby.structure_type);
+        if nearby_settings.reward_pop > 0 && nearby_settings.adjacent_types.contains(&structure_type) {
+            if let Some(nearby_city) = get_city_owning_tile(state, nearby_idx) {
+                undos.push(add_population(
+                    state,
+                    nearby_city.idx,
+                    change * nearby_settings.reward_pop,
+                ));
+            }
+        }
+    }
+
+    if reward_pop != 0 {
+        undos.push(add_population(state, city_idx, change * reward_pop));
+    }
+}
+
 /// Capture a ruin and gain rewards
 pub fn capture_ruin(
     state: &mut GameState,
@@ -405,6 +417,7 @@ pub fn capture_ruin(
                     production: 3,
                     owner: pov_id,
                     rewards: vec![CityRewardType::CityWall],
+                    last_departure: None,
                     _territory: territory.clone(),
                 };
                 let city_score = crate::score::get_city_transfer_score(&city);
@@ -638,6 +651,7 @@ pub fn capture_ruin(
                 production: 3,
                 owner: pov_id,
                 rewards: vec![CityRewardType::CityWall], // Grant City Walls
+                last_departure: None,
                 _territory: territory.clone(),
             };
 

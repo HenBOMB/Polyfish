@@ -1,11 +1,18 @@
-use polyfish::actions::city::capture_city;
+use polyfish::Coords;
+use polyfish::actions::city::{add_population, capture_city};
+use polyfish::actions::structure::destroy_structure;
+use polyfish::functions::{get_city_at, get_city_production, get_true_unit_at};
 use polyfish::game::Game;
-use polyfish::moves::EndTurnMove;
+use polyfish::moves::{BuildMove, EndTurnMove, RewardMove, StepMove, SummonMove};
 use polyfish::research::{
     self, EXPERT_BUDGET, MatchConfig, MatchResult, Opponent, OpponentPreset, observation,
 };
 use polyfish::settings::technology::get_technology_setting;
-use polyfish::types::{MapSize, ModeType, ResourceType, StructureType, TerrainType, TribeType};
+use polyfish::states::{CityState, GameState};
+use polyfish::types::{
+    CityRewardType, MapSize, ModeType, ResourceType, StructureType, TerrainType, TribeType,
+    UnitType,
+};
 
 fn fixture(size: MapSize) -> Game {
     research::new_match(
@@ -54,6 +61,175 @@ fn drylands_uses_the_selected_climates_without_open_water() {
             }
         }
     }
+}
+
+#[test]
+fn bardur_drylands_has_fields_and_forests_at_each_size() {
+    for size in [MapSize::Tiny, MapSize::Small, MapSize::Normal] {
+        for seed in [0, 1, 42, -6_231_624_982_178_099_917] {
+            let game = research::new_match(
+                size,
+                [TribeType::Bardur; 2],
+                seed,
+                MatchConfig::new(Opponent::Human, 2),
+            );
+            let tiles = &game.state.tiles;
+            let count = |terrain| {
+                tiles
+                    .values()
+                    .filter(|tile| tile.terrain_type == terrain)
+                    .count()
+            };
+            let forest = count(TerrainType::Forest);
+            assert!(
+                forest > tiles.len() / 8 && forest < tiles.len() / 2,
+                "{size:?}, seed {seed}: {forest}"
+            );
+            assert!(
+                count(TerrainType::Field) > tiles.len() / 4,
+                "{size:?}, seed {seed}"
+            );
+        }
+    }
+}
+
+#[test]
+fn workshop_adds_one_star_per_turn_and_is_paid_after_loading() {
+    let mut game = fixture(MapSize::Tiny);
+    let capital = game.state.tribes[&1].cities[0].idx;
+    let _ = add_population(&mut game.state, capital, 2);
+    let income =
+        |state: &GameState| get_city_production(state, get_city_at(state, capital).unwrap());
+    let before = income(&game.state);
+    let undo = game
+        .play_move(&RewardMove::new(capital, CityRewardType::Workshop))
+        .unwrap();
+    assert_eq!(income(&game.state), before + 1);
+    undo(&mut game.state);
+    assert_eq!(income(&game.state), before);
+    let _ = game
+        .play_move(&RewardMove::new(capital, CityRewardType::Workshop))
+        .unwrap();
+
+    let saved = game.to_json().unwrap();
+    let mut reloaded = Game::from_json(&saved).unwrap();
+    assert_eq!(income(&reloaded.state), before + 1);
+    let stars = reloaded.state.tribes[&1].stars;
+    let _ = reloaded.play_move(&EndTurnMove).unwrap();
+    let _ = reloaded.play_move(&EndTurnMove).unwrap();
+    assert_eq!(reloaded.state.tribes[&1].stars, stars + before + 1);
+}
+
+#[test]
+fn lumber_huts_feed_a_friendly_sawmill_across_city_borders() {
+    let mut game = fixture(MapSize::Tiny);
+    let home = game.state.tribes[&1].cities[0].idx;
+    let (neighbor_city, mill, hut, enemy_hut) = (60, 59, 58, 48);
+    game.state
+        .tribes
+        .get_mut(&1)
+        .unwrap()
+        .cities
+        .push(CityState {
+            idx: neighbor_city,
+            owner: 1,
+            production: 1,
+            ..CityState::default()
+        });
+    game.state.tribes.get_mut(&1).unwrap().stars = 100;
+    game.state.settings._fow = false;
+
+    let enemy_city = game.state.tribes[&2].cities[0].idx;
+    for (index, owner, city, terrain) in [
+        (mill, 1, neighbor_city, TerrainType::Field),
+        (hut, 1, home, TerrainType::Forest),
+        (enemy_hut, 2, enemy_city, TerrainType::Forest),
+    ] {
+        let tile = game.state.tiles.get_mut(&index).unwrap();
+        tile.owner = owner;
+        tile.ruling_city_coords = Some(Coords::from_index(city, 11));
+        tile.terrain_type = terrain;
+        game.state.structures.shift_remove(&index);
+    }
+    let _ = polyfish::actions::structure::create_structure(
+        &mut game.state,
+        enemy_hut,
+        StructureType::LumberHut,
+        1,
+    );
+    let population = |state: &GameState, city| get_city_at(state, city).unwrap().population;
+    let home_pop = population(&game.state, home);
+
+    let undo_mill = game
+        .play_move(&BuildMove::new(mill, StructureType::Sawmill))
+        .unwrap();
+    assert_eq!(population(&game.state, neighbor_city), 0);
+    let undo_hut = game
+        .play_move(&BuildMove::new(hut, StructureType::LumberHut))
+        .unwrap();
+    assert_eq!(population(&game.state, home), home_pop + 1);
+    assert_eq!(population(&game.state, neighbor_city), 1);
+    let undo_destroy = destroy_structure(&mut game.state, hut);
+    assert_eq!(population(&game.state, home), home_pop);
+    assert_eq!(population(&game.state, neighbor_city), 0);
+    undo_destroy(&mut game.state);
+    assert_eq!(population(&game.state, neighbor_city), 1);
+
+    undo_hut(&mut game.state);
+    undo_mill(&mut game.state);
+    let _ = game
+        .play_move(&BuildMove::new(hut, StructureType::LumberHut))
+        .unwrap();
+    let _ = game
+        .play_move(&BuildMove::new(mill, StructureType::Sawmill))
+        .unwrap();
+    assert_eq!(population(&game.state, neighbor_city), 1);
+}
+
+#[test]
+fn giant_push_uses_the_city_departure_after_training_a_catapult() {
+    let mut game = fixture(MapSize::Tiny);
+    let capital = game.state.tribes[&1].cities[0].idx;
+    let size = game.state.settings.size;
+    let (north, north_again) = (capital - size, capital - 2 * size);
+    for idx in [north, north_again] {
+        game.state.tiles.get_mut(&idx).unwrap().terrain_type = TerrainType::Field;
+    }
+    let _ = game.play_move(&StepMove::new(capital, north)).unwrap();
+    assert_eq!(
+        get_city_at(&game.state, capital).unwrap().last_departure,
+        Some((0, -1))
+    );
+    let _ = game.play_move(&EndTurnMove).unwrap();
+    let _ = game.play_move(&EndTurnMove).unwrap();
+    let _ = game.play_move(&StepMove::new(north, north_again)).unwrap();
+    game.state.tribes.get_mut(&1).unwrap().stars = 10;
+    let _ = game
+        .play_move(&SummonMove::new(capital, UnitType::Catapult))
+        .unwrap();
+
+    let saved = game.to_json().unwrap();
+    let mut reloaded = Game::from_json(&saved).unwrap();
+    let undo = reloaded
+        .play_move(&RewardMove::new(capital, CityRewardType::SuperUnit))
+        .unwrap();
+    assert_eq!(
+        get_true_unit_at(&reloaded.state, north).unwrap().unit_type,
+        UnitType::Catapult
+    );
+    assert_eq!(
+        get_true_unit_at(&reloaded.state, capital)
+            .unwrap()
+            .unit_type,
+        UnitType::Giant
+    );
+    undo(&mut reloaded.state);
+    assert_eq!(
+        get_true_unit_at(&reloaded.state, capital)
+            .unwrap()
+            .unit_type,
+        UnitType::Catapult
+    );
 }
 
 #[test]

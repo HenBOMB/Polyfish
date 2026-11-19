@@ -492,14 +492,6 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
         }
     }
 
-    let rewards = city
-        .rewards
-        .iter()
-        // workshops or parks give +1 production
-        .filter(|r| **r == CityRewardType::Workshop || **r == CityRewardType::Park);
-
-    prod += rewards.count() as i32;
-
     // Clathrus and Market bonuses
     for &idx in &city._territory {
         if let Some(structure) = crate::functions::get_structure_at(state, idx) {
@@ -792,8 +784,13 @@ pub fn calculate_pushable_position(state: &GameState, unit: &UnitState) -> Optio
         if state.settings._verbose {
             println!("Chosen using center");
         }
-        // Rule 4: Not previously moved or attacked: push towards center
-        get_direction_toward_center(initial_x, initial_y, center_x, center_y)
+        // A newly trained defender inherits the direction of the last unit to leave this city.
+        get_city_at(state, unit.coords.idx)
+            .filter(|city| {
+                city.owner == unit.owner && unit.owner == state.settings.current_player_turn_id
+            })
+            .and_then(|city| city.last_departure)
+            .unwrap_or_else(|| get_direction_toward_center(initial_x, initial_y, center_x, center_y))
     };
 
     // If tile occupied or impassable, try CCW then CW one tile at a time.

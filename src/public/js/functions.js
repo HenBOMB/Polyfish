@@ -65,16 +65,13 @@ function getCityProduction(state, city) {
         return 0;
     }
 
-    let prod = city.level || 0;
+    let prod = city.production ?? city.level ?? 0;
 
     // Capitals get a +1 star bonus
     const centerTile = state.tiles[city.idx];
     if (centerTile && centerTile.capitalOf === city.owner && centerTile.capitalOf !== 0) {
         prod += 1;
     }
-
-    const rewards = (city.rewards || []).filter(r => r === RewardTypes.Park || r === 2);
-    prod += rewards.length;
 
     const size = state.settings.size;
 
