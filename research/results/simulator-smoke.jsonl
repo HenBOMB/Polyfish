@@ -1,9 +1,9 @@
 {"actions": 174, "mapSize": 121, "result": {"status": "won", "winner": 2}, "seed": 42, "turn": 14, "browserBotActions": 5, "preset": "easy"}
-{"actions": 412, "mapSize": 121, "result": {"status": "won", "winner": 1}, "seed": 42, "turn": 26, "browserBotActions": 5, "preset": "normal"}
+{"actions": 502, "mapSize": 121, "result": {"status": "won", "winner": 1}, "seed": 42, "turn": 30, "browserBotActions": 5, "preset": "normal"}
 {"actions": 87, "mapSize": 121, "result": {"status": "won", "winner": 1}, "seed": 42, "turn": 9, "browserBotActions": 5, "preset": "expert"}
 {"actions": 947, "mapSize": 196, "result": {"status": "won", "winner": 2}, "seed": 42, "turn": 31, "browserBotActions": 5, "preset": "easy"}
 {"actions": 623, "mapSize": 196, "result": {"status": "won", "winner": 2}, "seed": 42, "turn": 21, "browserBotActions": 5, "preset": "normal"}
 {"actions": 314, "mapSize": 196, "result": {"status": "won", "winner": 1}, "seed": 42, "turn": 21, "browserBotActions": 5, "preset": "expert"}
-{"actions": 1040, "mapSize": 256, "result": {"status": "won", "winner": 1}, "seed": 42, "turn": 28, "browserBotActions": 5, "preset": "easy"}
+{"actions": 1144, "mapSize": 256, "result": {"status": "won", "winner": 1}, "seed": 42, "turn": 29, "browserBotActions": 5, "preset": "easy"}
 {"actions": 1349, "mapSize": 256, "result": {"status": "won", "winner": 1}, "seed": 42, "turn": 35, "browserBotActions": 5, "preset": "normal"}
 {"actions": 511, "mapSize": 256, "result": {"status": "won", "winner": 1}, "seed": 42, "turn": 23, "browserBotActions": 4, "preset": "expert"}

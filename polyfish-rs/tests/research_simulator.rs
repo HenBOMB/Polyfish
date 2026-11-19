@@ -4,6 +4,7 @@ use polyfish::moves::EndTurnMove;
 use polyfish::research::{
     self, EXPERT_BUDGET, MatchConfig, MatchResult, Opponent, OpponentPreset, observation,
 };
+use polyfish::settings::technology::get_technology_setting;
 use polyfish::types::{MapSize, ModeType, ResourceType, StructureType, TerrainType, TribeType};
 
 fn fixture(size: MapSize) -> Game {
@@ -13,6 +14,26 @@ fn fixture(size: MapSize) -> Game {
         42,
         MatchConfig::new(Opponent::Expert, 2),
     )
+}
+
+#[test]
+fn standard_tech_branches_agree_on_prerequisites_and_tiers() {
+    use polyfish::types::TechnologyType::{Aquatism, Basic, Fishing, Navigation, Ramming, Sailing};
+
+    let mut pending = vec![Basic];
+    while let Some(parent) = pending.pop() {
+        let setting = get_technology_setting(parent);
+        for child in setting.next {
+            let child_setting = get_technology_setting(child);
+            assert_eq!(child_setting.requires, (parent != Basic).then_some(parent));
+            assert_eq!(child_setting.tier.unwrap(), setting.tier.unwrap() + 1);
+            pending.push(child);
+        }
+    }
+
+    assert_eq!(get_technology_setting(Fishing).next, vec![Sailing, Ramming]);
+    assert_eq!(get_technology_setting(Sailing).next, vec![Navigation]);
+    assert_eq!(get_technology_setting(Ramming).next, vec![Aquatism]);
 }
 
 #[test]

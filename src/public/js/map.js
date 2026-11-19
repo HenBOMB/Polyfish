@@ -1,3 +1,14 @@
+const CITY_HOUSE_SPOTS = [
+    [1, 50, 53],
+    [2, 77, 51],
+    [3, 64, 66],
+    [4, 40, 61],
+    [1, 88, 60],
+    [2, 49, 40],
+    [3, 79, 39],
+    [4, 64, 78],
+];
+
 class MapRenderer {
     constructor(container) {
         this.container = container;
@@ -264,7 +275,9 @@ class MapRenderer {
                 if (struct.type === 29) classes.push('monument');
                 if (struct.type === 47) {
                     classes.push('lighthouse');
-                } else if ([5, 6, 8, 12, 13, 21, 22].includes(struct.type)) {
+                } else if (struct.type === 12) {
+                    classes.push('lumber-hut');
+                } else if ([5, 6, 8, 13, 21, 22].includes(struct.type)) {
                     classes.push('improvement');
                 }
                 this.updateLayer(idx, 'structure', structFile, pos, 2000, classes);
@@ -280,7 +293,7 @@ class MapRenderer {
             const tribeColor = TRIBE_COLORS[city.tribe.type] || 'rgba(0,0,0,0.5)';
 
             const isCapital = tile.capitalOf > 0;
-            this.updateLayer(idx, 'city', getCityFile(city.tribe.type, isCapital), pos, 4000, ['city']);
+            this.renderCityBuildings(idx, pos, city, tile, isCapital);
             const statsEl = this.updateLayer(idx, 'city-stats', '', pos, 4100, ['city-stats-layer']);
 
             // Calculate segments (Polytopia style: dots for units, fill for population)
@@ -335,6 +348,23 @@ class MapRenderer {
         } else {
             this.removeLayer(idx, 'unit');
         }
+    }
+
+    renderCityBuildings(idx, pos, city, tile, isCapital) {
+        const art = this.updateLayer(idx, 'city', '', pos, 4000, ['city']);
+        const tribeType = cityArtTribe(tile, city.tribe.type);
+        const houseCount = Math.min(CITY_HOUSE_SPOTS.length, Math.max(1, city.level) + 2);
+        const key = `${tribeType}:${houseCount}:${isCapital}`;
+        if (art.dataset.buildingLayout === key) return;
+
+        const buildings = CITY_HOUSE_SPOTS.slice(0, houseCount);
+        if (isCapital) buildings.push([7, 63, 47]);
+        art.innerHTML = buildings.map(([variant, x, y]) => {
+            const image = getCityFile(tribeType, variant);
+            const castle = variant === 7 ? ' city-castle' : '';
+            return `<span class="city-building${castle}" style="left:${x}px;top:${y}px;z-index:${y};background-image:url('textures/${image}.png')"></span>`;
+        }).join('');
+        art.dataset.buildingLayout = key;
     }
 
     updateLayer(idx, layerName, filename, pos, zIndex, classes = []) {

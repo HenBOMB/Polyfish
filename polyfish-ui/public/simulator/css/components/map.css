@@ -60,10 +60,17 @@
     margin-top: -17px !important;
 }
 
+.structure.lumber-hut {
+    /* The logs extend farther right and forward than the house. */
+    width: 54px !important;
+    margin-left: 47px !important;
+    margin-top: -26px !important;
+}
+
 .structure.lighthouse {
-    width: 50px !important;
-    margin-left: 39px !important;
-    margin-top: -8px !important;
+    width: 62.5px !important;
+    margin-left: 32.75px !important;
+    margin-top: -48px !important;
 }
 
 .monument {
@@ -102,10 +109,22 @@
 }
 
 .tile.city {
-    width: 116px;
-    margin-left: 6px;
-    margin-top: -67px;
     pointer-events: none;
+}
+
+.city-building {
+    position: absolute;
+    width: 42px;
+    height: 46px;
+    transform: translate(-50%, -100%);
+    background-position: center bottom;
+    background-repeat: no-repeat;
+    background-size: contain;
+}
+
+.city-building.city-castle {
+    width: 48px;
+    height: 54px;
 }
 
 /* Refined City Nameplate & Growth Bar - REFINED V7 */

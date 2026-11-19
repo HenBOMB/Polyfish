@@ -426,7 +426,7 @@ function updateSelectionInfo(clickX = null, clickY = null) {
             const tribeName = TRIBE_ID_2_NAME[tribeType];
             title = city.name || (tile.capitalOf > 0 ? "Capital" : "City");
             subtitle = `${tribeName} Territory`;
-            thumbFile = getCityFile(tribeType, tile.capitalOf > 0);
+            thumbFile = getCityFile(cityArtTribe(tile, tribeType), tile.capitalOf > 0 ? 7 : 1);
         } else {
             title = resourceName ? `${terrainName}, ${resourceName}` : terrainName;
             subtitle = resourceName ? "Extract this resource to upgrade your city" : "A sturdy foundation for your empire";
@@ -602,39 +602,21 @@ function updateTechModal(tribe, modalBody, overlayEl) {
     hub.innerHTML = `<img src="${hubIcon}" alt="">`;
     nodesContainer.appendChild(hub);
 
-    const centerX = 0;
-    const centerY = 0;
+    const cityCount = (tribe.cities || []).length;
+    const hasPhilosophy = unlockedTechs.includes(22);
+    const technologies = TechTree[0].map(techId => ({ techId, parentId: 0, tier: 1 }));
 
-    // Helper to get coordinates
-    const getCoords = (techId) => {
-        const node = TechNodes[techId];
-        return node ? { x: node.x, y: node.y } : { x: 0, y: 0 };
-    };
-
-    // Render Nodes and Edges
-    Object.keys(TechNodes).forEach(id => {
-        const techId = parseInt(id);
-        const meta = TechNodes[techId];
-        const { x, y } = getCoords(techId);
-
-        // Find parent for edge
-        let parentId = 0;
-        for (const [pId, children] of Object.entries(TechTree)) {
-            if (children.includes(techId)) {
-                parentId = parseInt(pId);
-                break;
-            }
+    for (const { techId, parentId, tier } of technologies) {
+        for (const child of TechTree[techId] || []) {
+            technologies.push({ techId: child, parentId: techId, tier: tier + 1 });
         }
+        const meta = TechNodes[techId];
+        const { x, y } = meta;
+        const parent = TechNodes[parentId] || { x: 0, y: 0 };
 
-        const pCoords = parentId === 0 ? { x: 0, y: 0 } : getCoords(parentId);
-
-        // Draw edge
         const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        // We need the coordinates relative to the SVG center.
-        // Our nodes are positioned via transform: translate(x, y) relative to center.
-        // SVG coordinates are absolute. We'll set viewBox to -600 -500 1200 1000
-        line.setAttribute('x1', pCoords.x);
-        line.setAttribute('y1', pCoords.y);
+        line.setAttribute('x1', parent.x);
+        line.setAttribute('y1', parent.y);
         line.setAttribute('x2', x);
         line.setAttribute('y2', y);
         line.setAttribute('class', 'tech-line' + (unlockedTechs.includes(techId) ? ' active' : ''));
@@ -649,21 +631,11 @@ function updateTechModal(tribe, modalBody, overlayEl) {
         node.style.left = `calc(50% + ${x}px - 45px)`;
         node.style.top = `calc(50% + ${y}px - 45px)`;
 
-        // Accurate Tech Cost Calculation
-        const numCities = (tribe.cities || []).length;
-        // Determine tier via BFS or hardcode?
-        // For visual simplicity, let's assume standard costs for now or fetch from backend if available.
-        // Actually, we can get tier from the tree depth.
-        // Or just generic:
-        const tier = 1; // Simplify for now as we don't have tier data in TechNodes yet, or we can look it up.
-        // Better:
-        let depth = 1;
-        // ... (We can improve tier calc later, or add it to TechNodes)
-
-        const hasPhilosophy = unlockedTechs.includes(22);
-        // Fallback cost logic
-        const baseCost = 4 + (numCities * depth);
-        const cost = hasPhilosophy ? Math.ceil(baseCost * 0.77) : baseCost;
+        const baseCost = 4 + cityCount * tier;
+        const cost = hasPhilosophy ? Math.ceil(baseCost * 0.66) : baseCost;
+        node.title = parentId
+            ? `Tier ${tier} · Requires ${TechnologyNames[parentId]}`
+            : `Tier ${tier}`;
 
         node.innerHTML = `
             <img class="tech-icon" src="textures/${meta.icon}.png" alt="">
@@ -681,7 +653,7 @@ function updateTechModal(tribe, modalBody, overlayEl) {
             };
         }
         nodesContainer.appendChild(node);
-    });
+    }
 
     edgesSvg.setAttribute('viewBox', `-600 -450 1200 900`);
 

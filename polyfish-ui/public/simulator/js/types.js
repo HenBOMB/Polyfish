@@ -135,12 +135,12 @@ const TechnologyNames = {
     10: "Fishing", 12: "Aquatism", 13: "Sailing", 14: "Navigation",
     15: "Hunting", 16: "Forestry", 17: "Mathematics", 18: "Archery", 19: "Spiritualism",
     20: "Climbing", 21: "Meditation", 22: "Philosophy", 23: "Mining", 24: "Smithery",
-    25: "Free Diving", 26: "Spearing", 28: "Waterways", 30: "Frostwork", 31: "Polar Warfare",
-    32: "Polarism", 35: "Shock Tactics", 36: "Recycling", 38: "Diplomacy", 39: "Ramming",
-    41: "Sledding", 42: "Ice Fishing", 43: "Pascetism", 49: "Oceantology", 121: "Rituals"
+    25: "Free Diving", 26: "Spearing", 28: "Forest Magic", 30: "Frostwork", 31: "Polar Warfare",
+    32: "Polarism", 35: "Shock Tactics", 36: "Recycling", 37: "Hydrology", 38: "Diplomacy",
+    41: "Sledding", 42: "Ice Fishing", 44: "Ramming", 48: "Waterways", 49: "Oceantology",
+    120: "Synergy", 121: "Rituals"
 }
 
-// Tech tree dependencies: tech_id -> [next techs that require it]
 // Tech tree dependencies: tech_id -> [next techs that require it]
 const TechTree = {
     // Unrequired (implicit) -> Tier 1 roots
@@ -158,9 +158,9 @@ const TechTree = {
     23: [24],     // Mining -> Smithery
     21: [22],     // Meditation -> Philosophy
     // Fishing branch
-    10: [13, 39], // Fishing -> Sailing, Ramming
+    10: [13, 44], // Fishing -> Sailing, Ramming
     13: [14],     // Sailing -> Navigation
-    39: [12],     // Ramming -> Aquatism
+    44: [12],     // Ramming -> Aquatism
     // Hunting branch
     15: [18, 16], // Hunting -> Archery, Forestry
     18: [19],     // Archery -> Spiritualism
@@ -189,8 +189,8 @@ const TechNodes = {
     10: { x: -130, y: 100, icon: "animals/fish" }, // Fishing
     13: { x: -240, y: 120, icon: "units/Imperius/default/Imperius_default_Scoutship" }, // Sailing
     14: { x: -340, y: 140, icon: "units/Imperius/default/Imperius_default_Bombership" }, // Navigation
-    12: { x: -200, y: 200, icon: "terrain/water/ocean" }, // Aquatism
-    39: { x: -280, y: 280, icon: "units/Imperius/default/Imperius_default_Rammership" }, // Ramming
+    44: { x: -165, y: 235, icon: "units/Imperius/default/Imperius_default_Rammership" }, // Ramming
+    12: { x: -230, y: 335, icon: "terrain/water/ocean" }, // Aquatism
 
     // Hunting Branch (-144 deg - North West)
     15: { x: -130, y: -100, icon: "animals/horse0003" }, // Hunting
