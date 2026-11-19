@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Contributor guidance for this repository.
 
 ## What this is
 
@@ -109,7 +109,7 @@ Four implementations read the same `model.safetensors`, selected by Cargo featur
 
 ⚠️ **candle and strided tensors.** `candle_nn::Linear` on a non-contiguous 3-D input returns wrong values for every batch row after the first — by position, not contents. `network.rs` hit this on the cross-attention query tokens and every batched evaluation on the default backend was corrupted for all but one row (see audit T1). Call `.contiguous()` on anything that reaches a matmul after a `transpose`. A batch-invariance test does **not** catch it; only an oracle outside candle does.
 
-### ⚠️ The multi-implementation sync constraint
+### Model compatibility
 The network architecture is implemented in **Rust (candle) and Python (PyTorch)** and must stay byte-compatible because they read/write the same `model.safetensors`:
 - Rust: `polyfish-rs/src/ai/network.rs` — used by `self_play`, `arena`, the server, and the Rust `train` binary.
 - Python: `polyfish-rs/train.py` — the primary trainer used by `run_training_loop.sh`; `init_model.py` creates the initial weights from this definition.

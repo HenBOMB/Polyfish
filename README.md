@@ -60,7 +60,7 @@ For GPU setup, see the remote and Vast.ai scripts. The launch and reporting tool
 
 ## Repository guide
 
-- [`polyfish-rs/`](polyfish-rs/) contains the game engine, web server, agents, and training binaries. The technical guide covers policy and feature encoding, checkpoint compatibility, and Candle, libtorch, and Metal inference. [Technical guide](CLAUDE.md)
+- [`polyfish-rs/`](polyfish-rs/) contains the game engine, web server, agents, and training binaries. The contributor guide covers engine invariants, checkpoint compatibility, and verification commands. [Contributor guide](AGENTS.md)
 - [`src/public/`](src/public/) contains the primary graphical simulator. [`polyfish-ui/`](polyfish-ui/) contains the Vite frontend and the plain research board.
 - [`research/`](research/) contains the simulator quickstart, benchmark fixtures and reproduction commands, and paper draft. [Paper draft](research/PAPER.md)
 - [`polyfish-mod/`](polyfish-mod/) contains the Steam replay capture mod. [`polyfish-scraper/`](polyfish-scraper/) contains game data utilities.

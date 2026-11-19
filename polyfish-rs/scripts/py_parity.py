@@ -150,8 +150,7 @@ def main():
         for f in failures:
             print(f"  - {f}")
         print("\nA mismatch here means model.safetensors does not round-trip between")
-        print("self_play/arena and the trainer. See CLAUDE.md, 'multi-implementation")
-        print("sync constraint'.")
+        print("self_play/arena and the trainer. See AGENTS.md, 'Model compatibility'.")
         return 1
 
     print(f"\nforward parity OK (worst: {worst_name} at {worst:.3e}, tol {TOL:.0e})")
