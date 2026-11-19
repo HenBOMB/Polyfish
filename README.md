@@ -1,80 +1,74 @@
 # Polyfish
 
-An `AI NN` + MCTS `Rust` capable of playing the award winning `Polytopia` strategy game. 
+Polyfish is an open-source Rust game engine for *The Battle of Polytopia*. Fork it to use the game rules, map generation, and fog-of-war observations as the environment for your own bots and training pipelines. The engine runs headlessly without a model checkpoint, and the browser simulator lets you play and inspect matches.
 
-## Features
-- **Replica Simulation**: I painstakingly rebuilt the entire Polytopia game logic in Typescript, then translated it to Rust for performance and AI training.
-- **Web UI**: Mimicry of the original game's UI, fully interactive and served by the Rust backend.
-- **AI Engine**: A hybrid MCTS (Monte Carlo Tree Search) + Neural Network (Alpha-Zero style) approach, trained by self-play.
-- **Strength Ladder**: Frozen-anchor Elo measurement (`arena` + `ladder.py` + `elo.py`) wired into the training loop, with plateau early-stop.
-- **Training Dashboard**: Live charts of loss, move mix, and value distribution, served by the same backend.
-- **Game RIPPER**: C++ injection script that extracts live game states from the Steam version of Polytopia.
+The repository also includes model-free opponents, MCTS agents, and toolkits for self-play, neural-network training, and head-to-head evaluation.
 
-## Quick Start
+## Use the Rust engine
 
-The model-free simulator supports 1v1 Might with fog of war on six map types, all 12 regular tribes, and boards up to 900 tiles. The quickstart covers browser play, seeded headless matches, and the Tribes-style opponent presets. [Research simulator quickstart](research/README.md)
+The `polyfish` crate lives in [`polyfish-rs/`](polyfish-rs/). To use it from another Rust project, clone or fork this repo and add the crate as a Cargo path dependency. For sibling checkouts, add this to your `Cargo.toml`.
 
-1. Install **Rust**, **Node**, and **Python 3**.
-2. Build the frontend once: `cd polyfish-ui && npm install && npm run build` (the server serves `polyfish-ui/dist`).
-3. From the repository root, run `./scripts/run-server.sh` or `scripts\run-server.bat` on Windows.
-4. Open `http://localhost:3000` for the simulator, `http://localhost:3000/simulator/training.html` for the training dashboard.
+```toml
+[dependencies]
+polyfish = { path = "../Polyfish/polyfish-rs" }
+```
 
-On startup the server loads `polyfish-rs/live_game.json`, then `saved_state.json`, then the newest `replays/mod_replay_*.json`, before falling back to a generated map.
+Create a seeded match, give your policy the acting player's observation and legal actions, and pass its choice back to the engine for validation and application. The API also supports simulation and undo for search, as well as saves and replays for reproducing matches. [Rust simulator API and agent example](research/simulator-api.md)
+
+The model-free simulator supports **1v1 Might with fog of war**, all **12 regular tribes**, and boards of **121, 196, 256, 324, 400, and 900 tiles**. The supported map types are Drylands, Lakes, Continents, Pangea, Archipelago, and Water World. [Simulator guide](research/README.md)
+
+## Run a match
+
+### Headless
+
+From the repository root, run a seeded match between two built-in opponents. The command prints a JSON result.
+
+```sh
+cargo run --manifest-path polyfish-rs/Cargo.toml --locked --release --bin research_match -- \
+  --map-type drylands --map-size 121 --tribe1 imperius --tribe2 bardur --seed 42 \
+  --preset1 easy --preset2 normal --max-turns 20
+```
+
+Add `--replay polyfish-match.json` to save a replay you can open in the browser simulator. [Headless match options](research/README.md#play-locally)
+
+### Browser
+
+From the repository root, start the Rust server and open the simulator. A full checkout serves the graphical board directly. [Open the local simulator](http://127.0.0.1:3000/simulator/)
+
+```sh
+cd polyfish-rs
+POLYFISH_LISTEN=127.0.0.1:3000 cargo run --locked --release --bin polyfish
+```
+
+Easy, Normal, and Expert are available without a checkpoint. To use the learned opponent on 121-tile Drylands, place a compatible `model.safetensors` in `polyfish-rs/`. At startup, the server looks for `live_game.json`, `saved_state.json`, or the newest `replays/mod_replay_*.json` in that directory before generating a map.
+
+## AI and training toolkits
+
+- **Model-free opponents.** Easy, Normal, and Expert are built-in baselines for browser and headless matches. The crate also includes a heuristic MCTS agent. [Opponent presets](research/README.md#play-locally) · [Heuristic MCTS](polyfish-rs/src/ai/heuristic_mcts.rs)
+- **Neural self-play and training.** The bundled AlphaZero-style pipeline uses Rust Gumbel MCTS to generate self-play data and PyTorch to train `model.safetensors`. Its current features and checkpoints use 11×11 boards. The self-play CLI supports preset, checkpoint, and anchor opponents. [Self-play binary](polyfish-rs/src/bin/self_play.rs) · [Training driver](polyfish-rs/run_training_loop.sh) · [PyTorch trainer](polyfish-rs/train.py)
+- **Evaluation and monitoring.** Run checkpoint matches with `arena`, track strength against frozen Elo anchors with `ladder.py` and `elo.py`, and view loss, move mix, and value distribution in the training dashboard. [Arena](polyfish-rs/src/bin/arena.rs) · [Strength ladder](polyfish-rs/ladder.py) · [Local training dashboard](http://127.0.0.1:3000/simulator/training.html)
+
+For the bundled neural pipeline on macOS or Linux, install Rust and Python 3 and run these commands from the repository root. The training driver initializes the model, generates `games_*.safetensors`, updates the checkpoint, and periodically runs an arena strength check.
+
+```sh
+cd polyfish-rs
+./local_setup.sh
+./run_training_loop.sh
+```
+
+For GPU setup, see the remote and Vast.ai scripts. The launch and reporting tools also include a Windows training driver. [Remote setup](polyfish-rs/remote_setup.sh) · [Vast.ai setup](polyfish-rs/vast_setup.sh) · [Windows launcher](scripts/run-training.bat)
+
+## Repository guide
+
+- [`polyfish-rs/`](polyfish-rs/) contains the game engine, web server, agents, and training binaries. The technical guide covers policy and feature encoding, checkpoint compatibility, and Candle, libtorch, and Metal inference. [Technical guide](CLAUDE.md)
+- [`src/public/`](src/public/) contains the primary graphical simulator. [`polyfish-ui/`](polyfish-ui/) contains the Vite frontend and the plain research board.
+- [`research/`](research/) contains the simulator quickstart, benchmark fixtures and reproduction commands, and paper draft. [Paper draft](research/PAPER.md)
+- [`polyfish-mod/`](polyfish-mod/) contains the Steam replay capture mod. [`polyfish-scraper/`](polyfish-scraper/) contains game data utilities.
 
 ## Research and training records
 
-- **[expert_pipeline_audit.md](docs/experiments/expert_pipeline_audit.md)** — the current open-work list for the training pipeline. Every item has a status and a command that re-checks it. Start here.
-- **[hypothesis_driven_improvements.md](docs/experiments/hypothesis_driven_improvements.md)** — pre-registered experiments with COMMITTED/REJECTED verdicts. Read before proposing a change; several obvious ideas have already been measured.
-- **[expert_review.md](docs/experiments/expert_review.md)** / **[expert_boost_throughput.md](docs/experiments/expert_boost_throughput.md)** — prior search/learning-signal review and a measured throughput investigation.
-- [GitHub issues](https://github.com/kadenstaker/Polyfish/issues) for everything else.
+- Training pipeline work and experiments. [Pipeline audit](docs/experiments/expert_pipeline_audit.md) · [Registered experiments and results](docs/experiments/hypothesis_driven_improvements.md)
+- Search, learning signals, and throughput. [Expert review](docs/experiments/expert_review.md) · [Throughput investigation](docs/experiments/expert_boost_throughput.md)
+- Engine architecture, branching factor, and observation memory. [Engine notes](docs/notes/notes.md) · [Heuristics](docs/notes/notes-heuristics.md) · [Memory](docs/notes/notes-memory.md)
 
-The one perennial item: training the network well still needs monster compute.
-
-## Training
-
-The root-level launch and reporting tools live in [scripts/](scripts/). On Windows, start the training driver with `scripts\run-training.bat`.
-
-- **`polyfish-rs/local_setup.sh`**: Creates `polyfish-rs/.venv` from `polyfish-rs/requirements.txt`. `remote_setup.sh` / `vast_setup.sh` do the same on a GPU box and also install PyTorch.
-- **`polyfish-rs/run_training_loop.sh`**: The driver — `init_model.py` → `self_play` (Rust, writes `games_*.safetensors`) → `train.py` (PyTorch, updates `model.safetensors`) → log a row and checkpoint, plus a strength-gauge arena match every few iterations.
-- **`polyfish-rs/train.py`**: The PyTorch trainer. Its network definition must stay byte-compatible with `polyfish-rs/src/ai/network.rs` — both read and write the same `model.safetensors`.
-- Head-to-head evaluation: `cargo run --release --bin arena -- --model1 a.safetensors --model2 b.safetensors --games 32 --mcts 64` (each seed is played twice with sides swapped).
-
-## Core Modules
-
-- **`polyfish-rs/`**: The Rust game engine, AI, web backend, and every training binary. Almost all work happens here.
-- **`polyfish-ui/`**: Vite/React frontend. The Rust server serves its `dist/` build, including the forked static UI under `public/simulator/`.
-- **`src/public/`**: The original static Web UI (JS/HTML/CSS) the `polyfish-ui/public/simulator/` fork came from. Not mounted by the server, but ahead of the fork in places (its `training.html` has the Elo-ladder chart) — check which copy you are editing.
-- **`polyfish-mod/`**: C# BepInEx/PolyMod mod that auto-plays replays inside the real Steam game and POSTs captured states to the local server.
-- **`polyfish-scraper/`**: Utilities for gathering game data and assets.
-- **`CLAUDE.md`**: The per-file map of the tree, including the traps. The deep reference this README summarises.
-- **[notes.md](docs/notes/notes.md) / [notes-heuristics.md](docs/notes/notes-heuristics.md) / [notes-memory.md](docs/notes/notes-memory.md)**: Architectural research, branching-factor analysis, and the observation-memory channels.
-
-## AI Architecture
-
-- **`polyfish-rs/src/ai/gumbel_mcts.rs`**: Gumbel Alpha-Zero search — the one self-play training actually runs.
-- **`polyfish-rs/src/ai/mcts_zero.rs`**: The PUCT Alpha-Zero MCTS (`mcts.rs` and `original_mcts_zero.rs` are older implementations kept for comparison).
-- **`polyfish-rs/src/ai/heuristic_mcts.rs`**: Network-free MCTS for UI analysis and the interactive `trainer` binary.
-- **`polyfish-rs/src/ai/network.rs`**: `PolyZeroNet` — candle ResNet trunk plus cross-attention, a decomposed policy, and a value head.
-- **`polyfish-rs/src/ai/mapper.rs`**: Maps moves onto the four policy heads (action type, source, target, option) so the policy is independent of legal-move ordering.
-- **`polyfish-rs/src/ai/features.rs`**: Logic for encoding GameState into NN tensors (11x11 maps).
-- **`polyfish-rs/src/ai/evaluator/`**: Modular logic for Economy, Military, Research, Exploration, and Expansion evaluation.
-- **`polyfish-rs/src/ai/book.rs`**: Opening move library for standardized tribe starts.
-- **`polyfish-rs/src/bin/`**: The CLI tools — `self_play`, `arena`, `train`, `trainer`, plus benchmarks, replay management, and debug probes.
-
-## Inference Backends
-
-Three implementations read the same `model.safetensors`, picked by Cargo feature:
-
-- **`network.rs`** (candle) — the default, and the only backend on non-Apple hardware. `cuda`/`cudnn` opt into the GPU.
-- **`tch_network.rs`** (`tch-eval`) — libtorch/MPS on macOS; needs the env vars documented in `Cargo.toml`.
-- **`metal_network.rs`** (`metal-eval`) — hand-composed MPSGraph, fastest on Apple silicon.
-
-`eval_backend.rs` / `eval_server.rs` are the batching layer that fans leaf evaluations from many actors onto whichever backend is selected.
-
-## GameState Ripper (Steam)
-
-`polyfish-reader/` is a separate C++ tree and is **not checked into this repo**. `scripts/scan.sh` finds the running `Polytopia.exe` and runs the compiled reader against it, dumping live game state as JSON the simulator can load; it needs `g++` and `sudo`.
-
-- **`polyfish-reader.cpp`**: Memory reader that extracts live game state for the simulator.
-- **`inputerv2`**: Interactive tool for manipulating live game memory.
-- **`polyfish-scanner.cpp`**: Utility for finding memory offsets in new game versions.
+[Open an issue](https://github.com/HenBOMB/Polyfish/issues)
