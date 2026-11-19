@@ -223,6 +223,7 @@ mod tests {
     fn game_loads_legacy_wrapped_tiles_and_saves_same_membership() {
         let legacy = json!({
             "settings": crate::GameSettings::default(),
+            "tribes": {},
             "map": {
                 "tiles": [{"idx": 12, "x": 1, "y": 1, "type": 3, "explorers": [63, 64, -7], "effects": [4]}],
                 "structures": [], "resources": []
