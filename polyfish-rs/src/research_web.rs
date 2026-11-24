@@ -9,7 +9,7 @@ use axum::{
 use polyfish::replay::{Replay, ReplayPlayback};
 use polyfish::research::{self, MatchConfig, MatchResult, Opponent};
 use polyfish::states::GameState;
-use polyfish::types::{MapType, MoveType, StructureType, TribeType};
+use polyfish::types::{CityRewardType, MapType, MoveType, StructureType, TribeType};
 use polyfish::{Action, Game};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde::Deserialize;
@@ -271,7 +271,12 @@ async fn play(State(app): State<Arc<AppState>>, Json(req): Json<ActionRequest>) 
                 polyfish::functions::get_structure_type_at(&game.state, idx)
                     == Some(StructureType::Ruin)
             });
-    let verbose = std::mem::replace(&mut game.state.settings._verbose, excavating);
+    let sending_explorer = req.action["moveType"].as_i64() == Some(MoveType::Reward as i64)
+        && req.action["type"].as_i64() == Some(CityRewardType::Explorer as i64);
+    let verbose = std::mem::replace(
+        &mut game.state.settings._verbose,
+        excavating || sending_explorer,
+    );
     let previous_messages = game.state._messages.len();
     let decision = game.decision();
     let index = decision

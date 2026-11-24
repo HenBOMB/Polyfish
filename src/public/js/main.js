@@ -455,7 +455,7 @@ function updateSelectionInfo(clickX = null, clickY = null) {
             const tribeType = city.tribe?.type || GAME_STATE.tribes[city.owner]?.type;
             const tribeName = TRIBE_ID_2_NAME[tribeType];
             title = city.name || (tile.capitalOf > 0 ? "Capital" : "City");
-            subtitle = `${tribeName} Territory`;
+            subtitle = `${tribeName} · Level ${city.level} · ${city.progress}/${city.level + 1} population toward next level`;
             thumbFile = getCityFile(cityArtTribe(tile, tribeType), tile.capitalOf > 0 ? 7 : 1);
         } else {
             title = resourceName ? `${terrainName}, ${resourceName}` : terrainName;
@@ -792,40 +792,48 @@ function getUnitAt(idx) {
     return null;
 }
 
-function getStructureFile(type, climate, fallback = 'misc/missing') {
-    const tribeName = TRIBE_ID_2_NAME[climate];
-    const textureIndex = terrainTextureIndex(climate);
+function getStructureFile(type, climate, fallback = 'misc/missing', level) {
+    const variant = (min, max) => Math.max(min, Math.min(level ?? min, max));
+    const monumentClimate = climate > 1 && TRIBE_ID_2_NAME[climate] ? climate : 7;
+    const monument = id =>
+        `buildings/${TRIBE_ID_2_NAME[monumentClimate]}/Default/Monuments/Monument${id}_${terrainTextureIndex(monumentClimate)}`;
     const map = {
         1: `buildings/common/Tribe`,
         2: `terrain/misc/ResourceGFX_ruin`,
         3: `misc/Road`,
         5: `buildings/common/Farm`,
-        6: 'buildings/common/Windmill_0',
+        6: `buildings/common/Windmill_${variant(0, 6)}`,
         8: `buildings/common/Port`,
         12: `buildings/common/Lumber Hut`,
-        13: 'buildings/common/Sawmill_1',
-        17: 'buildings/common/Temple_1',
-        18: 'buildings/common/Forest Temple_1',
-        19: 'buildings/common/Water Temple_1',
-        20: 'buildings/common/Mountain Temple_1',
+        13: `buildings/common/Sawmill_${variant(1, 8)}`,
+        17: `buildings/common/Temple_${variant(1, 5)}`,
+        18: `buildings/common/Forest Temple_${variant(1, 5)}`,
+        19: `buildings/common/Water Temple_${variant(1, 5)}`,
+        20: `buildings/common/Mountain Temple_${variant(1, 5)}`,
         21: 'buildings/common/Mine',
-        22: 'buildings/common/Forge_1',
-        23: `buildings/${tribeName}/Default/Monuments/Monument1_${textureIndex}`,
-        24: `buildings/${tribeName}/Default/Monuments/Monument2_${textureIndex}`,
-        25: `buildings/${tribeName}/Default/Monuments/Monument3_${textureIndex}`,
-        26: `buildings/${tribeName}/Default/Monuments/Monument4_${textureIndex}`,
-        27: `buildings/${tribeName}/Default/Monuments/Monument5_${textureIndex}`,
-        28: `buildings/${tribeName}/Default/Monuments/Monument6_${textureIndex}`,
-        29: `buildings/${tribeName}/Default/Monuments/Monument7_${textureIndex}`,
-        37: `buildings/Cymanti/Default/Unique/spores_4`,
-        32: 'buildings/∑∫ỹriȱŋ/Default/Unique/sanctuary_1',
-        34: 'buildings/Polaris/Default/Unique/ice_bank_1',
-        35: 'buildings/Polaris/Default/Unique/Ice Temple_1',
-        39: 'buildings/Cymanti/Default/Unique/Mycelium_1',
+        22: `buildings/common/Forge_${variant(1, 8)}`,
+        23: monument(1),
+        24: monument(2),
+        25: monument(3),
+        26: monument(4),
+        27: monument(5),
+        28: monument(6),
+        29: monument(7),
+        32: `buildings/∑∫ỹriȱŋ/Default/Unique/sanctuary_${variant(1, 8)}`,
+        33: 'buildings/Polaris/Default/Unique/iceport',
+        34: `buildings/Polaris/Default/Unique/ice_bank_${variant(1, 11)}`,
+        35: `buildings/Polaris/Default/Unique/Ice Temple_${variant(1, 6)}`,
+        37: `buildings/Cymanti/Default/Unique/spores_${level == null ? 4 : variant(1, 4)}`,
+        38: 'buildings/Cymanti/Default/Unique/swamp',
+        39: `buildings/Cymanti/Default/Unique/Mycelium_${variant(1, 4)}`,
+        41: `buildings/Cymanti/Default/Unique/flora_${variant(0, 8)}`,
         47: 'misc/lighthouse',
         48: 'buildings/common/bridge',
         50: 'buildings/common/Market01',
+        // These two structures have no dedicated sprite in the asset pack.
+        70: 'buildings/Imperius/Default/Houses/House_2_7',
         71: 'misc/Road',
+        123: 'buildings/Cymanti/Default/Monuments/Monument2_16',
     };
     !map[type] && console.log(`MISSING STRUCTURE: ${type}`);
 

@@ -28,6 +28,48 @@ fn fixture(size: MapSize) -> Game {
 }
 
 #[test]
+fn explorer_reports_lighthouse_population_in_the_capital() {
+    let mut game = fixture(MapSize::Tiny);
+    let capital = game.state.tribes[&1].cities[0].idx;
+    let other_city = 12;
+    assert_ne!(capital, other_city);
+    game.state.tribes.get_mut(&1).unwrap().cities.push(CityState {
+        idx: other_city,
+        owner: 1,
+        level: 2,
+        population: 2,
+        ..Default::default()
+    });
+    for (&idx, tile) in game.state.tiles.iter_mut() {
+        if idx == 0 {
+            tile.explorers.remove(&1);
+        } else {
+            tile.explorers.insert(1);
+            if idx <= 24 {
+                tile.terrain_type = TerrainType::Field;
+            }
+        }
+    }
+    game.state.settings._verbose = true;
+    let population = get_city_at(&game.state, capital).unwrap().population;
+
+    let explorer = RewardMove::new(other_city, CityRewardType::Explorer);
+    let _undo = game
+        .play(&polyfish::Action::from_move(&explorer).unwrap())
+        .unwrap();
+
+    assert!(game.state.tiles[&0].explorers.contains(&1));
+    assert_eq!(
+        get_city_at(&game.state, capital).unwrap().population,
+        population + 1
+    );
+    assert_eq!(get_city_at(&game.state, other_city).unwrap().population, 2);
+    assert!(game.state._messages.iter().any(|message| {
+        message == "Lighthouse discovered. +1 population in your capital."
+    }));
+}
+
+#[test]
 fn neutral_roads_require_technology_and_visibility() {
     let mut game = fixture(MapSize::Tiny);
     let idx = *game
