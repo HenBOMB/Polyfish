@@ -4,6 +4,8 @@ Polyfish is an open-source Rust game engine for *The Battle of Polytopia*. Fork 
 
 The repository also includes model-free opponents, MCTS agents, and toolkits for self-play, neural-network training, and head-to-head evaluation.
 
+![Polyfish browser simulator with an Oumaji Rider selected and available moves highlighted](docs/images/polyfish-simulator.png)
+
 ## Use the Rust engine
 
 The `polyfish` crate lives in [`polyfish-rs/`](polyfish-rs/). To use it from another Rust project, clone or fork this repo and add the crate as a Cargo path dependency. For sibling checkouts, add this to your `Cargo.toml`.
