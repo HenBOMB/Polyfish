@@ -12,6 +12,16 @@ const CITY_HOUSE_SPOTS = [
 // World art shares the same depth scale. Offsets only break ties on the same tile.
 const WORLD_DEPTH = 2000;
 
+const STRUCTURE_ART = {
+    1: 'village', 2: 'ruins', 3: 'road', 5: 'farm', 6: 'production', 8: 'port',
+    12: 'lumber-hut', 13: 'production', 17: 'temple', 18: 'temple', 19: 'temple',
+    20: 'temple', 21: 'mine', 22: 'forge', 23: 'monument', 24: 'monument',
+    25: 'monument', 26: 'monument', 27: 'monument', 28: 'monument', 29: 'eye-of-god',
+    32: 'sanctuary', 33: 'outpost', 34: 'ice-bank', 35: 'temple', 37: 'fungi',
+    38: 'algae', 39: 'mycelium', 41: 'clathrus', 47: 'lighthouse', 48: 'bridge',
+    50: 'market', 70: 'embassy', 123: 'monument',
+};
+
 class MapRenderer {
     constructor(container) {
         this.container = container;
@@ -248,24 +258,15 @@ class MapRenderer {
             this.removeLayer(idx, 'resource');
         }
 
-        if (struct && struct.type !== 71) {
+        if (struct && struct.type !== 71 && !(struct.type === 3 && tile.hasRoad)) {
             // Skip rendering village if there's a city here
             if (struct.type === 1 && citiesByIndex[idx]) {
                 this.removeLayer(idx, 'structure');
             } else {
-                const structFile = getStructureFile(struct.type, tile.climate);
-                const classes = ['structure'];
-                if (struct.type === 1) classes.push('village');
-                if (struct.type === 2) classes.push('ruins');
-                if (struct.type >= 23 && struct.type <= 29) classes.push('monument');
-                if (struct.type === 29) classes.push('eye-of-god');
-                if (struct.type === 47) {
-                    classes.push('lighthouse');
-                } else if (struct.type === 12) {
-                    classes.push('lumber-hut');
-                } else if ([5, 6, 8, 13, 21, 22].includes(struct.type)) {
-                    classes.push('improvement');
-                }
+                const structFile = getStructureFile(struct.type, tile.climate, undefined, struct.level);
+                const art = STRUCTURE_ART[struct.type];
+                const classes = ['structure', art === 'road' ? 'road' : 'map-structure', art];
+                if (art === 'forge' && (struct.level ?? 1) <= 1) classes.push('forge-small');
                 this.updateLayer(idx, 'structure', structFile, pos, WORLD_DEPTH + 1, classes);
             }
         } else {
@@ -328,6 +329,7 @@ class MapRenderer {
             const unitEl = this.updateLayer(idx, 'unit', unitFile, pos, WORLD_DEPTH + 4, classes);
             unitEl.innerHTML = `<div class="health">${Math.floor(unit.health)}</div>`;
             const hit = this.updateLayer(idx, 'unit-hit', '', pos, 27000, ['unit-hit']);
+            hit.removeAttribute('title');
             hit.onclick = event => this.handleTileClick(event, idx, true);
         } else {
             this.removeLayer(idx, 'unit');
@@ -550,11 +552,18 @@ class MapRenderer {
             hit.title = isAttack ? 'Attack' : occupiesTarget ? 'Convert' : 'Move';
             hit.onclick = event => {
                 event.stopPropagation();
-                playMove(move);
+                if (overlay.isConnected) playMove(move);
             };
             hit.onmouseenter = () => this.highlightMove(move);
             hit.onmouseleave = () => this.clearMoveHighlight();
             overlay.appendChild(hit);
+
+            const defender = isAttack && this.elements.get(targetIdx)?.layers['unit-hit'];
+            if (defender) {
+                defender.classList.add('attack-target');
+                defender.title = hit.title;
+                defender.onclick = hit.onclick;
+            }
 
             this.container.appendChild(overlay);
         });

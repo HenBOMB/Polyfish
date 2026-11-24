@@ -105,16 +105,21 @@ pub fn discover_tiles(
                 if state.settings.version >= 114 {
                     if let Some(Some(struct_state)) = state.structures.get(&idx) {
                         if struct_state.structure_type == StructureType::Lighthouse {
-                            let city_to_reward =
-                                get_capital_city(state, pov_id).map(|c| c.idx).or_else(|| {
-                                    state
-                                        .tribes
-                                        .get(&pov_id)
-                                        .and_then(|t| t.cities.first().map(|c| c.idx))
+                            let capital = get_capital_city(state, pov_id);
+                            let city = capital.or_else(|| state.tribes.get(&pov_id)?.cities.first());
+                            if let Some(city) = city {
+                                let notice = state.settings._verbose.then(|| {
+                                    let recipient = if capital.is_some() {
+                                        "your capital"
+                                    } else if city.name.is_empty() {
+                                        "your city"
+                                    } else {
+                                        &city.name
+                                    };
+                                    format!("Lighthouse discovered. +1 population in {recipient}.")
                                 });
-
-                            if let Some(city_idx) = city_to_reward {
-                                undos.push(add_population(state, city_idx, 1));
+                                undos.push(add_population(state, city.idx, 1));
+                                state._messages.extend(notice);
                             }
                         }
                     }

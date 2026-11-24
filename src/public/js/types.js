@@ -241,7 +241,7 @@ const StructureTypes = {
     26: "Emperor's Tomb", 27: "Gate of Power", 28: "Park of Fortune", 29: "Eye of God",
     32: "Sanctuary", 33: "Outpost", 34: "Ice Bank", 35: "Ice Temple",
     37: "Fungi", 38: "Algae", 39: "Mycelium", 41: "Clathrus", 47: "Lighthouse",
-    48: "Bridge", 50: "Market", 70: "Embassy"
+    48: "Bridge", 50: "Market", 70: "Embassy", 123: "Cult of Ciru"
 };
 
 const ResourceTypes = {

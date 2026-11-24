@@ -49,71 +49,107 @@
 }
 
 .structure {
+    pointer-events: none !important;
+}
+
+.structure.road {
     width: 100px !important;
     margin-left: 15px !important;
     margin-top: -30px !important;
-    pointer-events: none !important;
 }
 
-.structure.improvement {
-    width: 70px !important;
-    margin-left: 29px !important;
-    margin-top: -17px !important;
-}
-
-.structure.lumber-hut {
-    /* The logs extend farther right and forward than the house. */
-    width: 54px !important;
-    margin-left: 47px !important;
-    margin-top: -26px !important;
-}
-
-.structure.lighthouse {
-    width: 62.5px !important;
-    margin-left: 32.75px !important;
-    margin-top: -48px !important;
-}
-
-.structure.monument {
-    --monument-width: 85px;
-    width: var(--monument-width) !important;
-    height: 108.8px;
-    margin-left: calc(64px - var(--monument-width) / 2) !important;
-    /* Anchor the base around the center of the ground diamond. */
-    margin-top: -60.4px !important;
+.structure.map-structure {
+    width: var(--structure-width, 64px);
+    height: var(--structure-height, 66px);
+    margin-left: calc((128px - var(--structure-width, 64px)) / 2);
+    margin-top: calc(var(--structure-base, 60px) - var(--structure-height, 66px));
     background-position: center bottom;
 }
 
-.structure.monument.eye-of-god {
-    --monument-width: 42.5px;
+.map-structure.farm,
+.map-structure.port,
+.map-structure.production,
+.map-structure.sanctuary {
+    --structure-width: 72px;
 }
 
-.village {
-    width: 70px !important;
-    margin-left: 30px !important;
-    margin-top: -30px !important;
-    pointer-events: none !important;
+.map-structure.mine {
+    --structure-width: 60px;
+    --structure-base: 76px;
 }
 
-.ruins {
-    width: 92px !important;
-    margin-left: 18px !important;
-    margin-top: -23px !important;
-    pointer-events: none !important;
+.map-structure.forge {
+    --structure-width: 70px;
+    --structure-height: 70px;
 }
 
-.temple {
-    width: 60px !important;
-    margin-left: 40px !important;
-    margin-top: -22px !important;
-    pointer-events: none !important;
+.map-structure.forge-small {
+    --structure-width: 45px;
+    --structure-height: 54px;
 }
 
-.village {
-    width: 60px !important;
-    margin-left: 40px !important;
-    margin-top: -22px !important;
-    pointer-events: none !important;
+.structure.map-structure.lumber-hut {
+    --structure-width: 54px;
+    --structure-base: 57px;
+    /* The logs extend farther right and forward than the house. */
+    margin-left: 47px;
+}
+
+.map-structure.lighthouse {
+    --structure-width: 62.5px;
+    --structure-height: 62.5px;
+    --structure-base: 47.25px;
+}
+
+.map-structure.monument {
+    --structure-width: 78px;
+    --structure-height: 92px;
+    --structure-base: 49px;
+}
+
+.map-structure.eye-of-god {
+    --structure-width: 42.5px;
+    --structure-base: 49px;
+}
+
+.map-structure.village {
+    --structure-width: 60px;
+}
+
+.map-structure.embassy {
+    --structure-width: 44px;
+}
+
+.map-structure.ruins {
+    --structure-width: 92px;
+    --structure-base: 75px;
+}
+
+.map-structure.market,
+.map-structure.temple,
+.map-structure.outpost,
+.map-structure.ice-bank {
+    --structure-width: 54px;
+    --structure-height: 72px;
+}
+
+.map-structure.bridge {
+    --structure-width: 110px;
+    --structure-height: 96px;
+    --structure-base: 86px;
+}
+
+.map-structure.algae,
+.map-structure.fungi,
+.map-structure.clathrus {
+    --structure-width: 78px;
+    --structure-base: 64px;
+}
+
+.map-structure.mycelium {
+    --structure-width: 110px;
+    --structure-height: 78px;
+    --structure-base: 64px;
 }
 
 .tile.city {
@@ -329,6 +365,13 @@
     touch-action: manipulation;
 }
 
+.tile.unit-hit.attack-target {
+    width: 70px;
+    height: 76px;
+    margin-left: 35px;
+    margin-top: -18px;
+}
+
 .capture-indicator {
     pointer-events: none;
 }
@@ -417,12 +460,6 @@
     margin-top: -40px;
 }
 
-.lumberhut {
-    width: 60px;
-    margin-left: 45px;
-    margin-top: -25px;
-}
-
 .ground {
     transition-duration: 300ms;
 }
@@ -433,18 +470,6 @@
 
 .ignoremouse {
     pointer-events: none;
-}
-
-.mine {
-    width: 60px;
-    margin-left: 30px;
-    margin-top: -30px;
-}
-
-.forge {
-    width: 45px;
-    margin-left: 40px;
-    margin-top: -30px;
 }
 
 .move-item:hover {
